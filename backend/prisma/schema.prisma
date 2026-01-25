@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Organisation - supports multi-org later, but for now assume one
+model Organisation {
+  id        String    @id @default(uuid())
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  projects  Project[]
+}
+
+// Project - an Erasmus+ youth project
+model Project {
+  id             String               @id @default(uuid())
+  organisationId String
+  organisation   Organisation         @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  country        String
+  startDate      DateTime
+  endDate        DateTime
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  countryLimits  ProjectCountryLimit[]
+  participants   Participant[]
+}
+
+// Maximum reimbursement amounts per sending country for a project
+model ProjectCountryLimit {
+  id                     String  @id @default(uuid())
+  projectId              String
+  project                Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  country                String
+  maxReimbursementAmount Float
+  currency               String  @default("EUR")
+
+  @@unique([projectId, country])
+}
+
+// Participant - a young person who traveled to the project
+model Participant {
+  id                    String                @id @default(uuid())
+  projectId             String
+  project               Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  firstName             String
+  lastName              String
+  email                 String
+  country               String
+  magicLinkToken        String                @unique
+  magicLinkActive       Boolean               @default(true)
+  status                ParticipantStatus     @default(DRAFT)
+  bankAccountIban       String?
+  bankAccountHolderName String?
+  bankAccountBic        String?
+  notesInternal         String?
+  lastMagicLinkSentAt   DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  documents             Document[]
+  travelItems           TravelItem[]
+  reimbursementSummary  ReimbursementSummary?
+  changeLogEntries      ChangeLogEntry[]
+  declarationsOnHonor   DeclarationOnHonor[]
+}
+
+enum ParticipantStatus {
+  DRAFT
+  PARTICIPANT_COMPLETE
+  ADMIN_APPROVED
+  PAID
+}
+
+// Document - uploaded travel document
+model Document {
+  id               String       @id @default(uuid())
+  participantId    String
+  participant      Participant  @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  storedFilePath   String
+  originalFilename String
+  renamedFilename  String
+  mimeType         String
+  fileSize         Int
+  uploadDate       DateTime     @default(now())
+  documentType     DocumentType @default(OTHER)
+  ocrText          String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  travelItems      TravelItem[]
+}
+
+enum DocumentType {
+  FLIGHT_INVOICE
+  FLIGHT_BOARDING_PASS
+  TRAIN_TICKET
+  BUS_TICKET
+  FUEL_RECEIPT
+  GREEN_TRAVEL_DECLARATION
+  OTHER
+}
+
+// TravelItem - a travel segment extracted from documents
+model TravelItem {
+  id                String          @id @default(uuid())
+  participantId     String
+  participant       Participant     @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  documentId        String?
+  document          Document?       @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  modeOfTransport   TransportMode
+  fromLocation      String
+  toLocation        String
+  departureDate     DateTime
+  arrivalDate       DateTime?
+  bookingReference  String?
+  flightNumber      String?
+  amountOriginal    Float
+  currencyOriginal  String          @default("EUR")
+  purchaseDate      DateTime?
+  amountEur         Float
+  comment           String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+enum TransportMode {
+  PLANE
+  TRAIN
+  BUS
+  CAR
+  FERRY
+  OTHER
+}
+
+// ReimbursementSummary - calculated totals for a participant
+model ReimbursementSummary {
+  id                          String      @id @default(uuid())
+  participantId               String      @unique
+  participant                 Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  totalOriginalCurrency       Float?
+  totalEur                    Float       @default(0)
+  maxReimbursementAllowed     Float       @default(0)
+  amountToReimburse           Float       @default(0)
+  adminNotes                  String?
+  aiCheckOk                   Boolean     @default(false)
+  adminApproved               Boolean     @default(false)
+  paid                        Boolean     @default(false)
+  createdAt                   DateTime    @default(now())
+  updatedAt                   DateTime    @updatedAt
+}
+
+// ChangeLogEntry - audit log for changes
+model ChangeLogEntry {
+  id            String      @id @default(uuid())
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  userType      UserType
+  fieldName     String
+  previousValue String?
+  newValue      String?
+  changedAt     DateTime    @default(now())
+}
+
+enum UserType {
+  PARTICIPANT
+  ADMIN
+}
+
+// DeclarationOnHonor - for missing documents
+model DeclarationOnHonor {
+  id                  String      @id @default(uuid())
+  participantId       String
+  participant         Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  missingDocumentType DocumentType
+  description         String
+  reason              String
+  place               String
+  declarationDate     DateTime    @default(now())
+  createdAt           DateTime    @default(now())
+}
