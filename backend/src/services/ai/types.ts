@@ -1,10 +1,30 @@
-import { DocumentType, TransportMode } from '@prisma/client';
-
 /**
  * AI Document Processing Service Interface
  * Abstraction layer for OCR and AI-based document analysis
  * Can be implemented with different providers (Google Vision, AWS Textract, OpenAI, etc.)
  */
+
+// Define enums locally to avoid Prisma generation issues during build
+export const DocumentType = {
+  FLIGHT_INVOICE: 'FLIGHT_INVOICE',
+  FLIGHT_BOARDING_PASS: 'FLIGHT_BOARDING_PASS',
+  TRAIN_TICKET: 'TRAIN_TICKET',
+  BUS_TICKET: 'BUS_TICKET',
+  FUEL_RECEIPT: 'FUEL_RECEIPT',
+  GREEN_TRAVEL_DECLARATION: 'GREEN_TRAVEL_DECLARATION',
+  OTHER: 'OTHER',
+} as const;
+export type DocumentType = typeof DocumentType[keyof typeof DocumentType];
+
+export const TransportMode = {
+  PLANE: 'PLANE',
+  TRAIN: 'TRAIN',
+  BUS: 'BUS',
+  CAR: 'CAR',
+  FERRY: 'FERRY',
+  OTHER: 'OTHER',
+} as const;
+export type TransportMode = typeof TransportMode[keyof typeof TransportMode];
 
 export interface ExtractedTravelItem {
   modeOfTransport: TransportMode;

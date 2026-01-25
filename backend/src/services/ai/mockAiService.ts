@@ -1,10 +1,11 @@
-import { DocumentType, TransportMode } from '@prisma/client';
 import {
   TravelDocumentAiService,
   DocumentAnalysisResult,
   ExtractedTravelItem,
   ReimbursementValidation,
   MissingItem,
+  DocumentType,
+  TransportMode,
 } from './types.js';
 import prisma from '../../utils/prisma.js';
 

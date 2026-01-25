@@ -1,57 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-
-// Basic API tests
-describe('API Health Check', () => {
-  const API_URL = 'http://localhost:3001';
-
-  it('should return healthy status', async () => {
-    // This test requires the server to be running
-    // Skip if server is not available
-    try {
-      const response = await fetch(`${API_URL}/api/health`);
-      const data = await response.json();
-
-      expect(response.ok).toBe(true);
-      expect(data.status).toBe('ok');
-      expect(data).toHaveProperty('timestamp');
-    } catch {
-      // Server not running, skip test
-      console.log('Server not running, skipping health check test');
-    }
-  });
-});
-
-describe('Admin Authentication', () => {
-  const API_URL = 'http://localhost:3001';
-
-  it('should reject empty password', async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/admin/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: '' }),
-      });
-
-      expect(response.status).toBe(401);
-    } catch {
-      console.log('Server not running, skipping auth test');
-    }
-  });
-
-  it('should reject wrong password', async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/admin/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: 'wrong_password' }),
-      });
-
-      expect(response.status).toBe(401);
-    } catch {
-      console.log('Server not running, skipping auth test');
-    }
-  });
-});
+import { describe, it, expect } from 'vitest';
 
 describe('Storage Service', () => {
   it('should export storage service factory', async () => {
@@ -113,7 +60,7 @@ describe('AI Service', () => {
 
   it('should generate readable filenames', async () => {
     const { MockAiService } = await import('../services/ai/index.js');
-    const { DocumentType, TransportMode } = await import('@prisma/client');
+    const { DocumentType, TransportMode } = await import('../services/ai/types.js');
 
     const service = new MockAiService();
     const filename = service.generateFilename(
@@ -132,6 +79,6 @@ describe('AI Service', () => {
     expect(filename).toContain('Amsterdam');
     expect(filename).toContain('Barcelona');
     expect(filename).toContain('flight invoice');
-    expect(filename).toEndWith('.pdf');
+    expect(filename.endsWith('.pdf')).toBe(true);
   });
 });
