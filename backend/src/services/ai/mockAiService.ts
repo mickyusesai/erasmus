@@ -45,7 +45,7 @@ export class MockAiService implements TravelDocumentAiService {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     const filename = originalFilename.toLowerCase();
-    let documentType = DocumentType.OTHER;
+    let documentType: DocumentType = DocumentType.OTHER;
     let confidence = 0.6;
     const extractedItems: ExtractedTravelItem[] = [];
     const warnings: string[] = [];

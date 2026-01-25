@@ -29,7 +29,6 @@ import {
   participantApi,
   ParticipantAuthResponse,
   TravelItem,
-  Document,
   TransportMode,
   DocumentType,
 } from '../../services/api';

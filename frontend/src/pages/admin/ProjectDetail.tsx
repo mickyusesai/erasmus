@@ -28,7 +28,6 @@ export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
-  const queryClient = useQueryClient();
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', id],
