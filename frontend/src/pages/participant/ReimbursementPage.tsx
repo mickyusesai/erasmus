@@ -59,7 +59,6 @@ export default function ReimbursementPage() {
   const navigate = useNavigate();
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
-  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!token) {
@@ -656,8 +655,6 @@ function Step3Confirm({
   });
 
   const validation = data.validation;
-  const missingDocs = validation.missingItems.filter((i) => i.type === 'document');
-  const missingFields = validation.missingItems.filter((i) => i.type === 'field');
 
   const canSubmit =
     validation.isComplete &&
