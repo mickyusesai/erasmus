@@ -448,6 +448,7 @@ export interface Participant {
 }
 
 export interface ParticipantDetail extends Participant {
+  magicLinkToken: string;
   bankAccountIban?: string;
   bankAccountHolderName?: string;
   bankAccountBic?: string;

@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import {
   ArrowLeft,
   Send,
+  Copy,
   CheckCircle,
   Euro,
   FileText,
@@ -137,6 +138,18 @@ export default function ParticipantDetail() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              const baseUrl = import.meta.env.VITE_FRONTEND_URL || window.location.origin;
+              const magicLink = `${baseUrl}/reimbursement?token=${participant.magicLinkToken}`;
+              navigator.clipboard.writeText(magicLink);
+              toast.success('Magic link copied to clipboard');
+            }}
+          >
+            <Copy className="w-4 h-4 mr-2" />
+            Copy Link
+          </Button>
           <Button
             variant="secondary"
             onClick={() => sendMagicLinkMutation.mutate()}
