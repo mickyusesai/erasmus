@@ -61,6 +61,7 @@ model Participant {
   bankAccountBic        String?
   notesInternal         String?
   lastMagicLinkSentAt   DateTime?
+  journeyConsolidatedAt DateTime?             // When the AI last consolidated all documents
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
   documents             Document[]
@@ -79,20 +80,66 @@ enum ParticipantStatus {
 
 // Document - uploaded travel document
 model Document {
-  id               String       @id @default(uuid())
+  id               String              @id @default(uuid())
   participantId    String
-  participant      Participant  @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  participant      Participant         @relation(fields: [participantId], references: [id], onDelete: Cascade)
   storedFilePath   String
   originalFilename String
   renamedFilename  String
   mimeType         String
   fileSize         Int
-  uploadDate       DateTime     @default(now())
-  documentType     DocumentType @default(OTHER)
+  uploadDate       DateTime            @default(now())
+  documentType     DocumentType        @default(OTHER)
   ocrText          String?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
   travelItems      TravelItem[]
+  extraction       DocumentExtraction?
+}
+
+// DocumentExtraction - raw AI-extracted data from a document (before consolidation)
+model DocumentExtraction {
+  id                    String       @id @default(uuid())
+  documentId            String       @unique
+  document              Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  // What the AI thinks this document is
+  detectedDocumentType  DocumentType
+  confidence            Float        @default(0)
+
+  // Extracted fields (all optional - AI extracts what it can find)
+  passengerName         String?
+  fromLocation          String?
+  toLocation            String?
+
+  // Different date types - the AI should identify which is which
+  departureDate         DateTime?    // The actual travel date
+  purchaseDate          DateTime?    // When the ticket was bought
+  documentDate          DateTime?    // Date printed on document (could be either)
+
+  // Flight-specific
+  flightNumber          String?
+  airline               String?
+  bookingReference      String?
+  seatNumber            String?
+
+  // Train/Bus specific
+  trainNumber           String?
+  busCompany            String?
+
+  // Pricing
+  amount                Float?
+  currency              String?
+
+  // Raw AI response for debugging
+  rawAiResponse         String?
+
+  // Processing status
+  consolidated          Boolean      @default(false)
+  consolidatedAt        DateTime?
+
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
 }
 
 enum DocumentType {

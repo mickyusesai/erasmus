@@ -362,7 +362,26 @@ export const participantApi = {
     const res = await fetch(`${API_BASE}/participant/validate?token=${token}`);
     return handleResponse<ValidationResult>(res);
   },
+
+  /**
+   * Consolidate all uploaded documents into a coherent journey
+   * This should be called when moving from Step 1 (Upload) to Step 2 (Review)
+   */
+  consolidateJourney: async (token: string) => {
+    const res = await fetch(`${API_BASE}/participant/consolidate?token=${token}`, {
+      method: 'POST',
+    });
+    return handleResponse<ConsolidationResult>(res);
+  },
 };
+
+export interface ConsolidationResult {
+  success: boolean;
+  message: string;
+  travelItems: TravelItem[];
+  warnings: string[];
+  missingDocuments?: { type: string; description: string }[];
+  documentLinks?: { invoiceDocId: string; boardingPassDocId: string; reason: string }[];
 
 // Types
 export interface DashboardStats {

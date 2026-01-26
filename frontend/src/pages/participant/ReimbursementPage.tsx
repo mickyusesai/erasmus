@@ -274,12 +274,13 @@ function Step1Upload({
 }) {
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => participantApi.uploadDocument(token, file),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
-      toast.success('Document uploaded');
+      toast.success('Document uploaded and analyzed');
     },
     onError: () => {
       toast.error('Failed to upload document');
@@ -293,6 +294,33 @@ function Step1Upload({
       toast.success('Document deleted');
     },
   });
+
+  // Consolidation: AI analyzes all documents together to build the journey
+  const handleContinue = async () => {
+    setConsolidating(true);
+    try {
+      const result = await participantApi.consolidateJourney(token);
+
+      if (result.warnings && result.warnings.length > 0) {
+        // Show warnings but still proceed
+        result.warnings.forEach((warning: string) => {
+          toast(warning, { icon: '⚠️', duration: 5000 });
+        });
+      }
+
+      if (result.success) {
+        toast.success(result.message || 'Journey analyzed successfully');
+      }
+
+      // Refresh data and move to next step
+      await queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      onNext();
+    } catch (error) {
+      console.error('Consolidation error:', error);
+      toast.error('Failed to analyze journey. Please try again.');
+    }
+    setConsolidating(false);
+  };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     setUploading(true);
@@ -404,9 +432,13 @@ function Step1Upload({
 
         {/* Next Button */}
         <div className="mt-8 flex justify-end">
-          <Button onClick={onNext} disabled={data.documents.length === 0}>
-            Continue to Check Data
-            <ChevronRight className="w-4 h-4 ml-2" />
+          <Button
+            onClick={handleContinue}
+            disabled={data.documents.length === 0 || consolidating}
+            loading={consolidating}
+          >
+            {consolidating ? 'Analyzing your journey...' : 'Continue to Check Data'}
+            {!consolidating && <ChevronRight className="w-4 h-4 ml-2" />}
           </Button>
         </div>
       </CardContent>

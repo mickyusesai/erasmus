@@ -8,7 +8,11 @@ import { participantAuth, ensureOwnParticipant } from '../../middleware/auth.js'
 import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
+import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
 import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+
+// Initialize the consolidation service
+const consolidationService = new JourneyConsolidationService();
 
 const router = Router();
 const upload = multer({
@@ -127,7 +131,8 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
 
 /**
  * POST /api/participant/documents
- * Upload a document
+ * Upload a document - extracts data but does NOT create travel items
+ * Travel items are created during consolidation (when moving to Step 2)
  */
 router.post(
   '/documents',
@@ -146,14 +151,6 @@ router.post(
     }
 
     const storage = getStorageService();
-    const aiService = getAiService();
-
-    // Analyze document with AI
-    const analysis = await aiService.analyzeDocument(
-      req.file.buffer,
-      req.file.mimetype,
-      req.file.originalname
-    );
 
     // Generate storage path
     const ext = path.extname(req.file.originalname);
@@ -170,54 +167,83 @@ router.post(
       storagePath
     );
 
-    // Create document record
+    // Create document record (with default type, will be updated by extraction)
     const document = await prisma.document.create({
       data: {
         participantId: participant.id,
         storedFilePath: storagePath,
         originalFilename: req.file.originalname,
-        renamedFilename: analysis.suggestedFilename,
+        renamedFilename: req.file.originalname, // Will be updated after analysis
         mimeType: req.file.mimetype,
         fileSize: req.file.size,
-        documentType: analysis.documentType,
-        ocrText: analysis.ocrText,
+        documentType: 'OTHER', // Will be updated by extraction
       },
     });
 
-    // Create travel items from extraction
-    const createdItems = [];
-    for (const extractedItem of analysis.extractedTravelItems) {
-      // Convert currency to EUR
-      const amountEur = await aiService.convertToEur(
-        extractedItem.amountOriginal,
-        extractedItem.currencyOriginal,
-        extractedItem.purchaseDate
-      );
+    // Extract and store document data using the consolidation service
+    // This stores the extraction but does NOT create travel items
+    await consolidationService.extractAndStoreDocumentData(
+      document.id,
+      req.file.buffer,
+      req.file.mimetype
+    );
 
-      const travelItem = await prisma.travelItem.create({
-        data: {
-          participantId: participant.id,
-          documentId: document.id,
-          ...extractedItem,
-          amountEur,
-        },
-      });
-      createdItems.push(travelItem);
-    }
+    // Fetch the updated document with extraction
+    const updatedDocument = await prisma.document.findUnique({
+      where: { id: document.id },
+      include: { extraction: true },
+    });
 
-    // Recalculate summary
-    await aiService.recalculateParticipantSummary(participant.id);
+    // Clear the consolidation flag since we have new documents
+    await prisma.participant.update({
+      where: { id: participant.id },
+      data: { journeyConsolidatedAt: null },
+    });
 
     res.status(201).json({
-      document,
-      extractedTravelItems: createdItems,
-      analysis: {
-        confidence: analysis.confidence,
-        warnings: analysis.warnings,
-      },
+      document: updatedDocument,
+      extraction: updatedDocument?.extraction,
+      message: 'Document uploaded and analyzed. Travel items will be created when you proceed to review.',
     });
   })
 );
+
+/**
+ * POST /api/participant/consolidate
+ * Consolidate all documents into a coherent journey
+ * This should be called when moving from Step 1 (Upload) to Step 2 (Review)
+ */
+router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot modify data after approval');
+  }
+
+  // Check if there are any documents to consolidate
+  const docCount = await prisma.document.count({
+    where: { participantId: participant.id },
+  });
+
+  if (docCount === 0) {
+    res.json({
+      success: false,
+      message: 'No documents to consolidate',
+      travelItems: [],
+      warnings: ['Please upload at least one travel document'],
+    });
+    return;
+  }
+
+  // Run the consolidation
+  const result = await consolidationService.consolidateParticipantJourney(participant.id);
+
+  // Recalculate summary after consolidation
+  const aiService = getAiService();
+  await aiService.recalculateParticipantSummary(participant.id);
+
+  res.json(result);
+}));
 
 /**
  * GET /api/participant/documents/:id/url
