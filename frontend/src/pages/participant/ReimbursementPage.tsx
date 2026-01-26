@@ -49,6 +49,16 @@ function formatDate(dateInput: string | Date): string {
   return `${day}-${month}-${year}`;
 }
 
+// Helper function to format currency with always 2 decimals
+function formatCurrency(amount: number, currency: string = 'EUR'): string {
+  return new Intl.NumberFormat('de-DE', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
 type Step = 1 | 2 | 3;
 
 const transportIcons: Record<TransportMode, React.ElementType> = {
@@ -400,41 +410,58 @@ function Step1Upload({
           <div className="mt-6">
             <h3 className="font-semibold text-gray-900 mb-4">Uploaded Documents</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {data.documents.map((doc) => (
-                <div key={doc.id} className="p-4 bg-gray-50 rounded-xl">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-white border border-gray-200 flex items-center justify-center flex-shrink-0">
-                      <FileText className="w-5 h-5 text-gray-400" />
+              {data.documents.map((doc) => {
+                const isUnclear = doc.documentType === 'OTHER';
+                return (
+                  <div key={doc.id} className={clsx(
+                    "p-4 rounded-xl",
+                    isUnclear ? "bg-amber-50 border border-amber-200" : "bg-gray-50"
+                  )}>
+                    <div className="flex items-start gap-3">
+                      <div className={clsx(
+                        "w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0",
+                        isUnclear ? "bg-amber-100 border-amber-300" : "bg-white border-gray-200"
+                      )}>
+                        <FileText className={clsx("w-5 h-5", isUnclear ? "text-amber-600" : "text-gray-400")} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 truncate text-sm">
+                          {doc.renamedFilename}
+                        </p>
+                        <p className={clsx("text-xs", isUnclear ? "text-amber-600" : "text-gray-500")}>
+                          {docTypeLabels[doc.documentType]}
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 truncate text-sm">
-                        {doc.renamedFilename}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {docTypeLabels[doc.documentType]}
-                      </p>
+                    {isUnclear && (
+                      <div className="mt-2 p-2 bg-amber-100 rounded-lg">
+                        <p className="text-xs text-amber-800">
+                          <strong>Note:</strong> This document couldn't be fully analyzed (image may be unclear).
+                          You can add the travel details manually in the next step.
+                        </p>
+                      </div>
+                    )}
+                    <div className="flex gap-3 mt-3">
+                      <a
+                        href={`/api/uploads/${doc.storedFilePath}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        View
+                      </a>
+                      <button
+                        onClick={() => deleteMutation.mutate(doc.id)}
+                        className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Remove
+                      </button>
                     </div>
                   </div>
-                  <div className="flex gap-3 mt-3">
-                    <a
-                      href={`/uploads/${doc.storedFilePath}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      View
-                    </a>
-                    <button
-                      onClick={() => deleteMutation.mutate(doc.id)}
-                      className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -471,6 +498,7 @@ function Step2CheckData({
   const [showBoardingPassUpload, setShowBoardingPassUpload] = useState(false);
   const [participantNote, setParticipantNote] = useState(data.participant.participantNote || '');
   const [noteEdited, setNoteEdited] = useState(false);
+  const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
 
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
@@ -551,7 +579,11 @@ function Step2CheckData({
             <h3 className="font-semibold text-gray-900">Your Journey</h3>
           </CardHeader>
           <CardContent>
-            <JourneyVisualization items={data.travelItems} />
+            <JourneyVisualization
+              items={data.travelItems}
+              projectStartDate={data.project.startDate}
+              projectEndDate={data.project.endDate}
+            />
           </CardContent>
         </Card>
       )}
@@ -588,6 +620,7 @@ function Step2CheckData({
                   }
                   onDelete={() => deleteMutation.mutate(item.id)}
                   onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+                  onViewDocument={setViewingDocument}
                 />
               ))}
             </div>
@@ -637,27 +670,46 @@ function Step2CheckData({
             )}
           </div>
 
-          {/* Summary */}
+          {/* Summary with Itemized Breakdown */}
           <div className="mt-8 p-6 bg-gray-50 rounded-2xl">
-            <div className="flex items-center justify-between">
+            <h4 className="font-semibold text-gray-900 mb-4">Cost Breakdown</h4>
+
+            {/* Itemized List */}
+            <div className="space-y-2 mb-4">
+              {data.travelItems.map((item) => (
+                <div key={item.id} className="flex justify-between text-sm">
+                  <span className="text-gray-600">
+                    {item.fromLocation} → {item.toLocation}
+                    <span className="text-gray-400 ml-2">({item.modeOfTransport.toLowerCase()})</span>
+                    {item.comment && <span className="text-gray-400 ml-1">*</span>}
+                  </span>
+                  <span className="text-gray-900 font-medium">{formatCurrency(item.amountEur)}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Divider */}
+            <div className="border-t border-gray-300 my-4" />
+
+            {/* Total */}
+            <div className="flex justify-between items-end">
               <div>
-                <p className="text-sm text-gray-500">Calculated Total</p>
+                <p className="text-sm text-gray-500">Total Travel Costs</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(data.reimbursementSummary?.totalEur || 0)}
+                  {formatCurrency(data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0))}
                 </p>
               </div>
               {data.maxReimbursementForCountry && (
                 <div className="text-right">
                   <p className="text-sm text-gray-500">Maximum for {data.participant.country}</p>
                   <p className="text-lg font-semibold text-gray-700">
-                    {new Intl.NumberFormat('de-DE', {
-                      style: 'currency',
-                      currency: 'EUR',
-                    }).format(data.maxReimbursementForCountry)}
+                    {formatCurrency(data.maxReimbursementForCountry)}
                   </p>
+                  {(data.reimbursementSummary?.totalEur || 0) > data.maxReimbursementForCountry && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      You will receive: {formatCurrency(data.maxReimbursementForCountry)}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -692,101 +744,106 @@ function Step2CheckData({
         onClose={() => setShowBoardingPassUpload(false)}
         token={token}
       />
+
+      {/* Document View Modal */}
+      <DocumentViewModal
+        document={viewingDocument}
+        onClose={() => setViewingDocument(null)}
+      />
     </div>
   );
 }
 
-// Journey Visualization Component
-function JourneyVisualization({ items }: { items: TravelItem[] }) {
+// Journey Visualization Component - Clean transport-focused design
+function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
+  items: TravelItem[];
+  projectStartDate?: string;
+  projectEndDate?: string;
+}) {
   // Sort items by departure date
   const sortedItems = [...items].sort((a, b) =>
     new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
   );
 
-  // Build journey path
-  const journeyStops: { location: string; date: string; isStart?: boolean; isEnd?: boolean }[] = [];
+  if (sortedItems.length === 0) return null;
 
-  sortedItems.forEach((item, index) => {
-    // Add from location if it's the first item or different from previous destination
-    if (index === 0 || sortedItems[index - 1].toLocation !== item.fromLocation) {
-      journeyStops.push({
-        location: item.fromLocation,
-        date: formatDate(item.departureDate),
-        isStart: index === 0,
-      });
-    }
+  // Determine midpoint date to separate outbound vs return
+  // Use project dates if available, otherwise use median of travel dates
+  let midpointDate: Date;
+  if (projectStartDate && projectEndDate) {
+    const start = new Date(projectStartDate);
+    const end = new Date(projectEndDate);
+    midpointDate = new Date((start.getTime() + end.getTime()) / 2);
+  } else {
+    const dates = sortedItems.map(i => new Date(i.departureDate).getTime());
+    midpointDate = new Date(dates[Math.floor(dates.length / 2)]);
+  }
 
-    // Add to location
-    journeyStops.push({
-      location: item.toLocation,
-      date: formatDate(item.departureDate),
-      isEnd: index === sortedItems.length - 1,
-    });
-  });
-
-  // Deduplicate consecutive stops
-  const uniqueStops = journeyStops.filter((stop, index) =>
-    index === 0 || stop.location !== journeyStops[index - 1].location
+  // Split into outbound (before/during midpoint) and return (after midpoint)
+  const outboundItems = sortedItems.filter(item =>
+    new Date(item.departureDate) <= midpointDate
+  );
+  const returnItems = sortedItems.filter(item =>
+    new Date(item.departureDate) > midpointDate
   );
 
-  if (uniqueStops.length === 0) return null;
+  const renderJourneySection = (sectionItems: TravelItem[], label: string, isReturn: boolean) => {
+    if (sectionItems.length === 0) return null;
 
-  return (
-    <div className="relative">
-      {/* Journey Line */}
-      <div className="flex items-center justify-between relative py-4">
-        {/* Background line */}
-        <div className="absolute left-4 right-4 top-1/2 h-1 bg-gradient-to-r from-primary-300 via-primary-500 to-primary-300 rounded-full" />
-
-        {/* Stops */}
-        <div className="flex justify-between w-full relative z-10">
-          {uniqueStops.map((stop, index) => {
-            const correspondingItem = sortedItems.find(
-              (item, i) =>
-                (i === 0 && item.fromLocation === stop.location) ||
-                item.toLocation === stop.location
-            );
-            const Icon = correspondingItem ? transportIcons[correspondingItem.modeOfTransport] : MapPin;
-            const color = correspondingItem ? transportColors[correspondingItem.modeOfTransport] : 'bg-gray-500';
+    return (
+      <div className={clsx("flex-1", isReturn && "border-l-2 border-gray-200 pl-4")}>
+        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">{label}</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          {sectionItems.map((item, index) => {
+            const Icon = transportIcons[item.modeOfTransport];
+            const color = transportColors[item.modeOfTransport];
+            const isLast = index === sectionItems.length - 1;
 
             return (
-              <div key={index} className="flex flex-col items-center">
-                <div className={clsx(
-                  'w-10 h-10 rounded-full flex items-center justify-center text-white shadow-lg',
-                  stop.isStart || stop.isEnd ? 'bg-primary-600 ring-4 ring-primary-100' : color
-                )}>
-                  {stop.isStart ? (
-                    <MapPin className="w-5 h-5" />
-                  ) : stop.isEnd ? (
-                    <CheckCircle className="w-5 h-5" />
-                  ) : (
+              <div key={item.id} className="flex items-center gap-2">
+                <div className="flex flex-col items-center">
+                  <div className={clsx(
+                    'w-10 h-10 rounded-full flex items-center justify-center text-white shadow-md',
+                    color
+                  )}>
                     <Icon className="w-5 h-5" />
-                  )}
-                </div>
-                <div className="mt-2 text-center">
-                  <p className="text-sm font-semibold text-gray-900 max-w-[80px] truncate">
-                    {stop.location}
+                  </div>
+                  <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
+                    {item.fromLocation}
                   </p>
-                  <p className="text-xs text-gray-500">{stop.date}</p>
+                  <p className="text-[10px] text-gray-400">{formatDate(item.departureDate)}</p>
                 </div>
+
+                <div className="flex flex-col items-center px-1">
+                  <div className="w-8 h-0.5 bg-gray-300" />
+                </div>
+
+                {isLast && (
+                  <div className="flex flex-col items-center">
+                    <div className={clsx(
+                      'w-10 h-10 rounded-full flex items-center justify-center shadow-md',
+                      isReturn ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-600'
+                    )}>
+                      {isReturn ? <CheckCircle className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
+                      {item.toLocation}
+                    </p>
+                    <p className="text-[10px] text-gray-400">{formatDate(item.departureDate)}</p>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       </div>
+    );
+  };
 
-      {/* Transport icons between stops */}
-      <div className="flex justify-around mt-2">
-        {sortedItems.map((item, index) => {
-          const Icon = transportIcons[item.modeOfTransport];
-          return (
-            <div key={index} className="flex items-center gap-1 text-xs text-gray-500">
-              <Icon className="w-4 h-4" />
-              <span>{item.modeOfTransport.toLowerCase()}</span>
-            </div>
-          );
-        })}
-      </div>
+  return (
+    <div className="flex gap-6">
+      {renderJourneySection(outboundItems, "Outbound Journey", false)}
+      {renderJourneySection(returnItems, "Return Journey", true)}
     </div>
   );
 }
@@ -798,12 +855,14 @@ function TravelItemCard({
   onUpdate,
   onDelete,
   onUploadBoardingPass,
+  onViewDocument,
 }: {
   item: TravelItem;
   documents: Document[];
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
   onUploadBoardingPass: () => void;
+  onViewDocument: (doc: Document) => void;
 }) {
   const Icon = transportIcons[item.modeOfTransport];
   const isPlane = item.modeOfTransport === 'PLANE';
@@ -851,14 +910,11 @@ function TravelItemCard({
         </div>
         <div className="text-right">
           <p className="font-semibold text-gray-900">
-            {new Intl.NumberFormat('de-DE', {
-              style: 'currency',
-              currency: 'EUR',
-            }).format(item.amountEur)}
+            {formatCurrency(item.amountEur)}
           </p>
           {item.currencyOriginal !== 'EUR' && (
             <p className="text-xs text-gray-500">
-              {item.amountOriginal} {item.currencyOriginal}
+              {formatCurrency(item.amountOriginal, item.currencyOriginal)}
             </p>
           )}
         </div>
@@ -875,14 +931,12 @@ function TravelItemCard({
         <div className="mb-4 p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3">
           <FileText className="w-4 h-4 text-gray-400" />
           <span className="text-sm text-gray-600 flex-1 truncate">{linkedDocument.renamedFilename}</span>
-          <a
-            href={`/uploads/${linkedDocument.storedFilePath}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-primary-600 hover:text-primary-700"
+          <button
+            onClick={() => onViewDocument(linkedDocument)}
+            className="text-xs text-primary-600 hover:text-primary-700 font-medium"
           >
             View
-          </a>
+          </button>
         </div>
       )}
 
@@ -1442,6 +1496,60 @@ function Step3Confirm({
         isLoading={createDeclarationMutation.isPending}
       />
     </>
+  );
+}
+
+// Document View Modal - shows document in a popup
+function DocumentViewModal({
+  document,
+  onClose,
+}: {
+  document: Document | null;
+  onClose: () => void;
+}) {
+  if (!document) return null;
+
+  const isImage = document.mimeType.startsWith('image/');
+  const isPdf = document.mimeType === 'application/pdf';
+  const fileUrl = `/api/uploads/${document.storedFilePath}`;
+
+  return (
+    <Modal isOpen={!!document} onClose={onClose} title={document.renamedFilename}>
+      <div className="max-h-[70vh] overflow-auto">
+        {isImage && (
+          <img
+            src={fileUrl}
+            alt={document.renamedFilename}
+            className="w-full h-auto rounded-lg"
+          />
+        )}
+        {isPdf && (
+          <iframe
+            src={fileUrl}
+            title={document.renamedFilename}
+            className="w-full h-[60vh] rounded-lg border border-gray-200"
+          />
+        )}
+        {!isImage && !isPdf && (
+          <div className="text-center py-8">
+            <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <p className="text-gray-600">This file type cannot be previewed.</p>
+            <a
+              href={fileUrl}
+              download={document.originalFilename}
+              className="text-primary-600 hover:text-primary-700 mt-2 inline-block"
+            >
+              Download File
+            </a>
+          </div>
+        )}
+      </div>
+      <div className="mt-4 flex justify-end">
+        <Button variant="secondary" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
