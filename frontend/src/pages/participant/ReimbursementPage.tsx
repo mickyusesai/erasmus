@@ -22,7 +22,6 @@ import {
   Plus,
   AlertTriangle,
   MapPin,
-  ArrowRight,
   Ticket,
   X,
 } from 'lucide-react';
@@ -415,126 +414,6 @@ function Step1Upload({
   );
 }
 
-// Helper function to check if names match
-function checkNameMatch(participantName: string, extractedName?: string): { matches: boolean; warning?: string } {
-  if (!extractedName) return { matches: true };
-
-  const normalize = (name: string) => name.toLowerCase().trim().replace(/[^a-z\s]/g, '');
-  const pName = normalize(participantName);
-  const eName = normalize(extractedName);
-
-  // Exact match
-  if (pName === eName) return { matches: true };
-
-  // Check if first or last name matches
-  const pParts = pName.split(/\s+/);
-  const eParts = eName.split(/\s+/);
-
-  const hasCommonPart = pParts.some(pp => eParts.some(ep => pp === ep && pp.length > 2));
-  if (hasCommonPart) return { matches: true };
-
-  // Similar names (Levenshtein distance check)
-  const similarity = (a: string, b: string) => {
-    if (a.length === 0) return b.length;
-    if (b.length === 0) return a.length;
-    const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
-    for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
-    for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
-    for (let j = 1; j <= b.length; j++) {
-      for (let i = 1; i <= a.length; i++) {
-        const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
-        matrix[j][i] = Math.min(
-          matrix[j][i - 1] + 1,
-          matrix[j - 1][i] + 1,
-          matrix[j - 1][i - 1] + indicator
-        );
-      }
-    }
-    return matrix[b.length][a.length];
-  };
-
-  const distance = similarity(pName, eName);
-  const maxLen = Math.max(pName.length, eName.length);
-  const similarityRatio = 1 - distance / maxLen;
-
-  if (similarityRatio > 0.7) return { matches: true };
-
-  return {
-    matches: false,
-    warning: `Name mismatch: "${extractedName}" doesn't match your name "${participantName}". Please verify this document belongs to you.`
-  };
-}
-
-// Group travel items by journey (matching outbound and return trips)
-function groupTravelItems(items: TravelItem[], documents: Document[]): GroupedJourney[] {
-  // Sort by departure date
-  const sorted = [...items].sort((a, b) =>
-    new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
-  );
-
-  // Group items that are part of the same booking or have matching routes
-  const journeys: GroupedJourney[] = [];
-  const used = new Set<string>();
-
-  for (const item of sorted) {
-    if (used.has(item.id)) continue;
-
-    const journey: GroupedJourney = {
-      id: item.id,
-      segments: [item],
-      documents: documents.filter(d => d.id === item.documentId),
-      hasBoardingPass: false,
-      missingBoardingPass: false,
-    };
-
-    used.add(item.id);
-
-    // Find related items (same booking reference or matching route in reverse)
-    for (const other of sorted) {
-      if (used.has(other.id)) continue;
-
-      const sameBooking = item.bookingReference &&
-        item.bookingReference === other.bookingReference;
-      const returnTrip = item.fromLocation === other.toLocation &&
-        item.toLocation === other.fromLocation;
-
-      if (sameBooking || returnTrip) {
-        journey.segments.push(other);
-        used.add(other.id);
-
-        const otherDocs = documents.filter(d => d.id === other.documentId);
-        journey.documents.push(...otherDocs);
-      }
-    }
-
-    // Sort segments by date
-    journey.segments.sort((a, b) =>
-      new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
-    );
-
-    // Check for boarding pass if any segment is a flight
-    const hasFlightSegment = journey.segments.some(s => s.modeOfTransport === 'PLANE');
-    if (hasFlightSegment) {
-      journey.hasBoardingPass = documents.some(d =>
-        d.documentType === 'FLIGHT_BOARDING_PASS'
-      );
-      journey.missingBoardingPass = !journey.hasBoardingPass;
-    }
-
-    journeys.push(journey);
-  }
-
-  return journeys;
-}
-
-interface GroupedJourney {
-  id: string;
-  segments: TravelItem[];
-  documents: Document[];
-  hasBoardingPass: boolean;
-  missingBoardingPass: boolean;
-}
-
 function Step2CheckData({
   data,
   token,
@@ -588,12 +467,6 @@ function Step2CheckData({
 
     return w;
   }, [data]);
-
-  // Group travel items
-  const groupedJourneys = useMemo(() =>
-    groupTravelItems(data.travelItems, data.documents),
-    [data.travelItems, data.documents]
-  );
 
   return (
     <div className="space-y-6">
