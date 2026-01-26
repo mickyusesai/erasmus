@@ -16,7 +16,7 @@ import prisma from '../../utils/prisma.js';
  */
 export class ClaudeAiService implements TravelDocumentAiService {
   private client: Anthropic;
-  private model: string = 'claude-3-5-sonnet-latest';
+  private model: string = 'claude-3-haiku-20240307';
 
   // Exchange rates (EUR base) - in production, use a real API
   private exchangeRates: Record<string, number> = {
