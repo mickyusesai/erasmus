@@ -106,59 +106,43 @@ Important notes:
 - Confidence should reflect how certain you are about the document type and extraction quality
 - Add warnings for anything unclear, partially visible, or potentially incorrect`;
 
-      let response;
-
+      // For PDFs, we currently can't use vision - return a message asking for image upload
       if (isPdf) {
-        // For PDFs, use the document type
-        response = await this.client.messages.create({
-          model: this.model,
-          max_tokens: 2000,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'document',
-                  source: {
-                    type: 'base64',
-                    media_type: 'application/pdf',
-                    data: base64Data,
-                  },
-                },
-                {
-                  type: 'text',
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-        });
-      } else {
-        // For images
-        response = await this.client.messages.create({
-          model: this.model,
-          max_tokens: 2000,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'image',
-                  source: {
-                    type: 'base64',
-                    media_type: mediaType,
-                    data: base64Data,
-                  },
-                },
-                {
-                  type: 'text',
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-        });
+        console.log('[Claude AI] PDF detected - vision analysis not supported for PDFs in current SDK version');
+        return {
+          documentType: DocumentType.OTHER,
+          confidence: 0.3,
+          ocrText: 'PDF document uploaded. For best results, please upload an image (JPG, PNG) or a screenshot of your document.',
+          suggestedFilename: this.generateFilename(DocumentType.OTHER, {}, originalFilename),
+          extractedTravelItems: [],
+          warnings: ['PDF files cannot be analyzed automatically. Please upload a JPG, PNG, or screenshot of your travel document for automatic data extraction.'],
+        };
       }
+
+      // For images, use Claude Vision
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 2000,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: mediaType,
+                  data: base64Data,
+                },
+              },
+              {
+                type: 'text',
+                text: prompt,
+              },
+            ],
+          },
+        ],
+      });
 
       // Extract the text response
       const textBlock = response.content.find((block) => block.type === 'text');
