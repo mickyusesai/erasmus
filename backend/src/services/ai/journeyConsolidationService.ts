@@ -28,35 +28,51 @@ export class JourneyConsolidationService {
 
   /**
    * Resize image if it exceeds the maximum size
+   * Uses iterative approach to ensure image is under limit
    */
   private async resizeImageIfNeeded(buffer: Buffer, mimeType: string): Promise<Buffer> {
-    if (buffer.length <= MAX_IMAGE_SIZE) {
+    // Use a slightly lower target to account for base64 encoding overhead
+    const TARGET_SIZE = MAX_IMAGE_SIZE * 0.85; // 85% of max to be safe
+
+    if (buffer.length <= TARGET_SIZE) {
       return buffer;
     }
 
     console.log(`[Consolidation] Resizing image from ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
 
-    // Calculate quality reduction needed
-    const targetSize = MAX_IMAGE_SIZE * 0.9; // Aim for 90% of max to be safe
-    let quality = Math.floor((targetSize / buffer.length) * 100);
-    quality = Math.max(30, Math.min(quality, 80)); // Keep quality between 30-80
+    let resized = buffer;
+    let maxDimension = 1800;
+    let quality = 75;
 
-    let resized: Buffer;
+    // Iteratively reduce size until under limit
+    while (resized.length > TARGET_SIZE && quality >= 20) {
+      console.log(`[Consolidation] Attempting resize: ${maxDimension}px, quality ${quality}`);
 
-    if (mimeType.includes('png')) {
-      // Convert PNG to JPEG for better compression
       resized = await sharp(buffer)
-        .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality })
+        .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality, mozjpeg: true })
         .toBuffer();
-    } else {
-      resized = await sharp(buffer)
-        .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality })
-        .toBuffer();
+
+      console.log(`[Consolidation] Result: ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
+
+      if (resized.length > TARGET_SIZE) {
+        // Reduce quality and dimensions for next iteration
+        quality -= 15;
+        maxDimension -= 200;
+        maxDimension = Math.max(maxDimension, 800); // Don't go below 800px
+      }
     }
 
-    console.log(`[Consolidation] Resized to ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
+    // If still too large, do one final aggressive resize
+    if (resized.length > TARGET_SIZE) {
+      console.log(`[Consolidation] Final aggressive resize`);
+      resized = await sharp(buffer)
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 20, mozjpeg: true })
+        .toBuffer();
+      console.log(`[Consolidation] Final result: ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
+    }
+
     return resized;
   }
 
@@ -76,11 +92,11 @@ export class JourneyConsolidationService {
     let mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
 
     if (!isPdf) {
-      // Resize image if needed
+      // Resize image if needed - resizing always outputs JPEG
       const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, mimeType);
       base64Data = processedBuffer.toString('base64');
-      // After resize, it's always JPEG
-      if (fileBuffer.length > MAX_IMAGE_SIZE) {
+      // If image was resized, it's now JPEG; otherwise keep original type
+      if (processedBuffer !== fileBuffer) {
         mediaType = 'image/jpeg';
       } else {
         if (mimeType.includes('png')) mediaType = 'image/png';
@@ -98,8 +114,10 @@ Documents may show dates in various EUROPEAN formats. You MUST recognize and cor
 - DD/MM/YYYY (e.g., 15/03/2025 = March 15, 2025)
 - DD.MM.YYYY (e.g., 15.03.2025 = March 15, 2025)
 - DD-MM-YYYY (e.g., 15-03-2025 = March 15, 2025)
-- DD MMM YYYY (e.g., 15 Mar 2025)
-- Written months in ANY language:
+- "DD. MMM YYYY" with abbreviated month (e.g., "21. stu 2025" = November 21, 2025)
+- Dates with day names (e.g., "petak, 21. stu 2025." = Friday, November 21, 2025)
+
+MONTH NAMES - Full AND ABBREVIATED forms (tickets often use abbreviations like "stu" for studeni/November!):
   * Croatian: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
   * Polish: styczeń, luty, marzec, kwiecień, maj, czerwiec, lipiec, sierpień, wrzesień, październik, listopad, grudzień
   * Czech: leden, únor, březen, duben, květen, červen, červenec, srpen, září, říjen, listopad, prosinec
@@ -109,6 +127,11 @@ Documents may show dates in various EUROPEAN formats. You MUST recognize and cor
   * Spanish: enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, octubre, noviembre, diciembre
   * French: janvier, février, mars, avril, mai, juin, juillet, août, septembre, octobre, novembre, décembre
   * Italian: gennaio, febbraio, marzo, aprile, maggio, giugno, luglio, agosto, settembre, ottobre, novembre, dicembre
+
+ABBREVIATED MONTHS (CRITICAL for ticket parsing):
+* Croatian: sij=Jan, velj=Feb, ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
+* German: Jan, Feb, Mär, Apr, Mai, Jun, Jul, Aug, Sep, Okt, Nov, Dez
+* Example: "petak, 21. stu 2025." = Friday, November 21, 2025 (stu = studeni = November)
 
 IMPORTANT: In European dates, the DAY comes FIRST, then the month. 15/03/2025 means March 15, NOT October 3!
 
@@ -353,9 +376,10 @@ YOUR TASK:
 
 CRITICAL DATE PARSING:
 - Documents may contain dates in EUROPEAN format (DD/MM/YYYY or DD.MM.YYYY) - day comes FIRST!
-- Example: "15/03/2025" means March 15, NOT October 3
-- Croatian months: siječanj=Jan, veljača=Feb, ožujak=Mar, travanj=Apr, svibanj=May, lipanj=Jun, srpanj=Jul, kolovoz=Aug, rujan=Sep, listopad=Oct, studeni=Nov, prosinac=Dec
-- German months: Januar, Februar, März, April, Mai, Juni, Juli, August, September, Oktober, November, Dezember
+- Dates may include day names and abbreviated months (e.g., "petak, 21. stu 2025." = Friday, November 21, 2025)
+- ABBREVIATED MONTHS (critical for tickets): Croatian: sij=Jan, velj=Feb, ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
+- Full Croatian months: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
+- German months: Jan/Januar, Feb/Februar, Mär/März, Apr/April, Mai, Jun/Juni, Jul/Juli, Aug/August, Sep/September, Okt/Oktober, Nov/November, Dez/Dezember
 - Always output dates in YYYY-MM-DD format
 
 WARNING RULES:
