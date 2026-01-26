@@ -106,43 +106,61 @@ Important notes:
 - Confidence should reflect how certain you are about the document type and extraction quality
 - Add warnings for anything unclear, partially visible, or potentially incorrect`;
 
-      // For PDFs, we currently can't use vision - return a message asking for image upload
-      if (isPdf) {
-        console.log('[Claude AI] PDF detected - vision analysis not supported for PDFs in current SDK version');
-        return {
-          documentType: DocumentType.OTHER,
-          confidence: 0.3,
-          ocrText: 'PDF document uploaded. For best results, please upload an image (JPG, PNG) or a screenshot of your document.',
-          suggestedFilename: this.generateFilename(DocumentType.OTHER, {}, originalFilename),
-          extractedTravelItems: [],
-          warnings: ['PDF files cannot be analyzed automatically. Please upload a JPG, PNG, or screenshot of your travel document for automatic data extraction.'],
-        };
-      }
+      let response;
 
-      // For images, use Claude Vision
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 2000,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: mediaType,
-                  data: base64Data,
+      if (isPdf) {
+        // For PDFs, use the document type with beta header
+        console.log('[Claude AI] Processing PDF document...');
+        response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 2000,
+          betas: ['pdfs-2024-09-25'],
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  source: {
+                    type: 'base64',
+                    media_type: 'application/pdf',
+                    data: base64Data,
+                  },
+                } as unknown as Anthropic.Messages.ImageBlockParam,
+                {
+                  type: 'text',
+                  text: prompt,
                 },
-              },
-              {
-                type: 'text',
-                text: prompt,
-              },
-            ],
-          },
-        ],
-      });
+              ],
+            },
+          ],
+        });
+      } else {
+        // For images, use Claude Vision
+        response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 2000,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: mediaType,
+                    data: base64Data,
+                  },
+                },
+                {
+                  type: 'text',
+                  text: prompt,
+                },
+              ],
+            },
+          ],
+        });
+      }
 
       // Extract the text response
       const textBlock = response.content.find((block) => block.type === 'text');
