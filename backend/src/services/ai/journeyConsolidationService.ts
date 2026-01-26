@@ -14,7 +14,8 @@ import { DocumentType, TransportMode } from './types.js';
  */
 export class JourneyConsolidationService {
   private client: Anthropic;
-  private model: string = 'claude-3-haiku-20240307';
+  private modelHaiku: string = 'claude-3-haiku-20240307';
+  private modelSonnet: string = 'claude-3-5-sonnet-20241022'; // Sonnet supports PDFs
 
   constructor() {
     this.client = new Anthropic({
@@ -76,9 +77,11 @@ Extract real values only - use null if not visible. For cities, prefer full name
       let response;
 
       if (isPdf) {
+        // PDFs require Sonnet model with beta header
+        console.log('[Consolidation] Using Sonnet for PDF document');
         response = await this.client.messages.create(
           {
-            model: this.model,
+            model: this.modelSonnet,
             max_tokens: 1500,
             messages: [
               {
@@ -100,8 +103,9 @@ Extract real values only - use null if not visible. For cities, prefer full name
           { headers: { 'anthropic-beta': 'pdfs-2024-09-25' } }
         );
       } else {
+        // Images can use the cheaper Haiku model
         response = await this.client.messages.create({
-          model: this.model,
+          model: this.modelHaiku,
           max_tokens: 1500,
           messages: [
             {
@@ -321,8 +325,9 @@ Respond with ONLY a JSON object:
 }`;
 
     try {
+      // Text-only consolidation can use cheaper Haiku model
       const response = await this.client.messages.create({
-        model: this.model,
+        model: this.modelHaiku,
         max_tokens: 3000,
         messages: [{ role: 'user', content: prompt }],
       });
