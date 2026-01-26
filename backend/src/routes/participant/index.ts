@@ -126,6 +126,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
     reimbursementSummary: data?.reimbursementSummary,
     declarationsOnHonor: data?.declarationsOnHonor,
     maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
+    greenTravel: countryLimit?.greenTravel || false,
     validation,
   });
 }));

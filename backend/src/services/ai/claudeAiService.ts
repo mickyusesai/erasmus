@@ -74,10 +74,11 @@ Analyze this travel document and extract all relevant information. This could be
 - A bus ticket
 - A fuel receipt
 - A green travel declaration
+- A hotel invoice (for green travel participants who need overnight stays)
 
 Please respond with a JSON object (and ONLY a JSON object, no other text) with the following structure:
 {
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "OTHER",
   "confidence": 0.0-1.0,
   "ocrText": "The key text extracted from the document",
   "travelItems": [
@@ -242,6 +243,7 @@ Important notes:
       BUS_TICKET: DocumentType.BUS_TICKET,
       FUEL_RECEIPT: DocumentType.FUEL_RECEIPT,
       GREEN_TRAVEL_DECLARATION: DocumentType.GREEN_TRAVEL_DECLARATION,
+      HOTEL_INVOICE: DocumentType.HOTEL_INVOICE,
       OTHER: DocumentType.OTHER,
     };
     return mapping[type] || DocumentType.OTHER;
@@ -278,6 +280,7 @@ Important notes:
       BUS_TICKET: 'bus ticket',
       FUEL_RECEIPT: 'fuel receipt',
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
+      HOTEL_INVOICE: 'hotel invoice',
       OTHER: 'document',
     };
 

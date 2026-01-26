@@ -367,16 +367,30 @@ function Step1Upload({
     BUS_TICKET: 'Bus Ticket',
     FUEL_RECEIPT: 'Fuel Receipt',
     GREEN_TRAVEL_DECLARATION: 'Green Travel',
+    HOTEL_INVOICE: 'Hotel Invoice',
     OTHER: 'Other',
   };
+
+  const isGreenTravel = data.greenTravel || false;
 
   return (
     <Card>
       <CardHeader>
         <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
         <p className="text-gray-500 mt-1">
-          Upload all your travel tickets, invoices, and boarding passes. We'll automatically extract the information.
+          {isGreenTravel ? (
+            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). We'll automatically extract the information.</>
+          ) : (
+            'Upload all your travel tickets, invoices, and boarding passes. We\'ll automatically extract the information.'
+          )}
         </p>
+        {isGreenTravel && (
+          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+            <p className="text-sm text-emerald-700">
+              <strong>Green Travel:</strong> Since you're traveling by train/bus (eco-friendly), you can also upload hotel invoices for overnight stays that were needed due to the longer travel time.
+            </p>
+          </div>
+        )}
       </CardHeader>
       <CardContent>
         {/* Dropzone */}
@@ -1585,6 +1599,7 @@ function DeclarationModal({
     BUS_TICKET: 'Bus Ticket',
     FUEL_RECEIPT: 'Fuel Receipt',
     GREEN_TRAVEL_DECLARATION: 'Green Travel Declaration',
+    HOTEL_INVOICE: 'Hotel Invoice',
     OTHER: 'Other Document',
   };
 

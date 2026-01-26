@@ -587,20 +587,33 @@ function SettingsTab({
   isDeleting: boolean;
 }) {
   const [newCountry, setNewCountry] = useState('');
-  const [newAmount, setNewAmount] = useState('');
+  const [newAmount, setNewAmount] = useState('275');
+  const [newGreenTravel, setNewGreenTravel] = useState(false);
   const queryClient = useQueryClient();
 
   const addLimitMutation = useMutation({
-    mutationFn: ({ country, amount }: { country: string; amount: number }) =>
-      adminApi.setCountryLimit(project.id, { country, maxReimbursementAmount: amount }),
+    mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
+      adminApi.setCountryLimit(project.id, { country, maxReimbursementAmount: amount, greenTravel }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['country-limits'] });
       setNewCountry('');
-      setNewAmount('');
+      setNewAmount('275');
+      setNewGreenTravel(false);
       toast.success('Country limit added');
     },
     onError: () => {
       toast.error('Failed to add country limit');
+    },
+  });
+
+  const updateLimitMutation = useMutation({
+    mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
+      adminApi.setCountryLimit(project.id, { country, maxReimbursementAmount: amount, greenTravel }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
+    },
+    onError: () => {
+      toast.error('Failed to update country limit');
     },
   });
 
@@ -612,46 +625,93 @@ function SettingsTab({
     },
   });
 
+  const autoPopulateMutation = useMutation({
+    mutationFn: () => adminApi.autoPopulateCountryLimits(project.id, 275),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
+      if (data.created.length > 0) {
+        toast.success(`Added ${data.created.length} country limits from participants`);
+      } else {
+        toast.success('All participant countries already have limits defined');
+      }
+    },
+    onError: () => {
+      toast.error('Failed to auto-populate country limits');
+    },
+  });
+
+  const toggleGreenTravel = (limit: any) => {
+    updateLimitMutation.mutate({
+      country: limit.country,
+      amount: limit.maxReimbursementAmount,
+      greenTravel: !limit.greenTravel,
+    });
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Country Limits */}
       <Card>
         <CardHeader>
-          <h3 className="font-semibold text-gray-900">Country Reimbursement Limits</h3>
-          <p className="text-sm text-gray-500 mt-1">
-            Maximum reimbursement amounts per sending country
-          </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="font-semibold text-gray-900">Country Reimbursement Limits</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                Maximum reimbursement amounts per sending country
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => autoPopulateMutation.mutate()}
+              loading={autoPopulateMutation.isPending}
+            >
+              Auto-fill from participants
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             {/* Add new limit */}
-            <div className="flex gap-3">
-              <Input
-                placeholder="Country (e.g., Poland)"
-                value={newCountry}
-                onChange={(e) => setNewCountry(e.target.value)}
-                className="flex-1"
-              />
-              <Input
-                type="number"
-                placeholder="Amount"
-                value={newAmount}
-                onChange={(e) => setNewAmount(e.target.value)}
-                className="w-32"
-              />
-              <Button
-                onClick={() => {
-                  if (newCountry && newAmount) {
-                    addLimitMutation.mutate({
-                      country: newCountry,
-                      amount: parseFloat(newAmount),
-                    });
-                  }
-                }}
-                loading={addLimitMutation.isPending}
-              >
-                <Plus className="w-4 h-4" />
-              </Button>
+            <div className="p-3 bg-gray-50 rounded-xl space-y-3">
+              <div className="flex gap-3">
+                <Input
+                  placeholder="Country (e.g., Poland)"
+                  value={newCountry}
+                  onChange={(e) => setNewCountry(e.target.value)}
+                  className="flex-1"
+                />
+                <Input
+                  type="number"
+                  placeholder="Amount"
+                  value={newAmount}
+                  onChange={(e) => setNewAmount(e.target.value)}
+                  className="w-32"
+                />
+                <Button
+                  onClick={() => {
+                    if (newCountry && newAmount) {
+                      addLimitMutation.mutate({
+                        country: newCountry,
+                        amount: parseFloat(newAmount),
+                        greenTravel: newGreenTravel,
+                      });
+                    }
+                  }}
+                  loading={addLimitMutation.isPending}
+                >
+                  <Plus className="w-4 h-4" />
+                </Button>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={newGreenTravel}
+                  onChange={(e) => setNewGreenTravel(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Green travel (allows hotel invoice uploads)
+              </label>
             </div>
 
             {/* Existing limits */}
@@ -661,8 +721,26 @@ function SettingsTab({
                   key={limit.id}
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-xl"
                 >
-                  <span className="font-medium text-gray-900">{limit.country}</span>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900">{limit.country}</span>
+                      {limit.greenTravel && (
+                        <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                          Green travel
+                        </span>
+                      )}
+                    </div>
+                  </div>
                   <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={limit.greenTravel || false}
+                        onChange={() => toggleGreenTravel(limit)}
+                        className="rounded border-gray-300 w-3.5 h-3.5"
+                      />
+                      Green
+                    </label>
                     <span className="text-gray-600">
                       {new Intl.NumberFormat('de-DE', {
                         style: 'currency',
@@ -680,7 +758,7 @@ function SettingsTab({
               ))}
               {countryLimits.length === 0 && (
                 <p className="text-gray-500 text-sm text-center py-4">
-                  No country limits defined yet
+                  No country limits defined yet. Import participants and click "Auto-fill from participants" to add countries automatically.
                 </p>
               )}
             </div>

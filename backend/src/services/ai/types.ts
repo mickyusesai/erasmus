@@ -12,6 +12,7 @@ export const DocumentType = {
   BUS_TICKET: 'BUS_TICKET',
   FUEL_RECEIPT: 'FUEL_RECEIPT',
   GREEN_TRAVEL_DECLARATION: 'GREEN_TRAVEL_DECLARATION',
+  HOTEL_INVOICE: 'HOTEL_INVOICE',
   OTHER: 'OTHER',
 } as const;
 export type DocumentType = typeof DocumentType[keyof typeof DocumentType];

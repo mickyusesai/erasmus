@@ -21,6 +21,7 @@ const countryLimitSchema = z.object({
   country: z.string().min(1, 'Country is required'),
   maxReimbursementAmount: z.number().min(0, 'Amount must be positive'),
   currency: z.string().default('EUR'),
+  greenTravel: z.boolean().optional().default(false),
 });
 
 /**
@@ -208,6 +209,66 @@ router.get('/:id/country-limits', async (req: Request, res: Response) => {
   });
 
   res.json(limits);
+});
+
+/**
+ * GET /api/admin/projects/:id/participant-countries
+ * Get unique countries from participants (for auto-filling country limits)
+ */
+router.get('/:id/participant-countries', async (req: Request, res: Response) => {
+  const participants = await prisma.participant.findMany({
+    where: { projectId: req.params.id },
+    select: { country: true },
+    distinct: ['country'],
+    orderBy: { country: 'asc' },
+  });
+
+  res.json(participants.map(p => p.country));
+});
+
+/**
+ * POST /api/admin/projects/:id/country-limits/auto-populate
+ * Auto-populate country limits from participant countries
+ */
+router.post('/:id/country-limits/auto-populate', async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+  const { defaultAmount = 275 } = req.body;
+
+  // Get unique countries from participants
+  const participants = await prisma.participant.findMany({
+    where: { projectId },
+    select: { country: true },
+    distinct: ['country'],
+  });
+
+  const countries = participants.map(p => p.country);
+
+  // Create country limits for each country that doesn't already exist
+  const created = [];
+  for (const country of countries) {
+    const existing = await prisma.projectCountryLimit.findUnique({
+      where: { projectId_country: { projectId, country } },
+    });
+
+    if (!existing) {
+      const limit = await prisma.projectCountryLimit.create({
+        data: {
+          projectId,
+          country,
+          maxReimbursementAmount: defaultAmount,
+          currency: 'EUR',
+          greenTravel: false,
+        },
+      });
+      created.push(limit);
+    }
+  }
+
+  res.json({
+    message: `Created ${created.length} country limits`,
+    created,
+    totalCountries: countries.length,
+  });
 });
 
 /**

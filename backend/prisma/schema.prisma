@@ -40,6 +40,7 @@ model ProjectCountryLimit {
   country                String
   maxReimbursementAmount Float
   currency               String  @default("EUR")
+  greenTravel            Boolean @default(false) // If true, participants from this country use green travel (allows hotel uploads)
 
   @@unique([projectId, country])
 }
@@ -150,6 +151,7 @@ enum DocumentType {
   BUS_TICKET
   FUEL_RECEIPT
   GREEN_TRAVEL_DECLARATION
+  HOTEL_INVOICE
   OTHER
 }
 

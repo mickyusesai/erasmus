@@ -101,13 +101,29 @@ export const adminApi = {
     return handleResponse<CountryLimit[]>(res);
   },
 
-  setCountryLimit: async (projectId: string, data: { country: string; maxReimbursementAmount: number }) => {
+  setCountryLimit: async (projectId: string, data: { country: string; maxReimbursementAmount: number; greenTravel?: boolean }) => {
     const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(data),
     });
     return handleResponse<CountryLimit>(res);
+  },
+
+  getParticipantCountries: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/admin/projects/${projectId}/participant-countries`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<string[]>(res);
+  },
+
+  autoPopulateCountryLimits: async (projectId: string, defaultAmount: number = 275) => {
+    const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits/auto-populate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ defaultAmount }),
+    });
+    return handleResponse<{ message: string; created: CountryLimit[]; totalCountries: number }>(res);
   },
 
   deleteCountryLimit: async (projectId: string, country: string) => {
@@ -455,6 +471,7 @@ export interface CountryLimit {
   country: string;
   maxReimbursementAmount: number;
   currency: string;
+  greenTravel: boolean;
 }
 
 export interface CreateProjectData {
@@ -541,6 +558,7 @@ export type DocumentType =
   | 'BUS_TICKET'
   | 'FUEL_RECEIPT'
   | 'GREEN_TRAVEL_DECLARATION'
+  | 'HOTEL_INVOICE'
   | 'OTHER';
 
 export interface TravelItem {
@@ -669,6 +687,7 @@ export interface ParticipantAuthResponse {
   reimbursementSummary?: ReimbursementSummary;
   declarationsOnHonor: Declaration[];
   maxReimbursementForCountry?: number;
+  greenTravel?: boolean;
   validation: ValidationResult;
 }
 

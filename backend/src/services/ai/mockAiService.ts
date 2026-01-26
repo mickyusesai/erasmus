@@ -69,6 +69,9 @@ export class MockAiService implements TravelDocumentAiService {
     } else if (filename.includes('green') || filename.includes('declaration')) {
       documentType = DocumentType.GREEN_TRAVEL_DECLARATION;
       confidence = 0.7;
+    } else if (filename.includes('hotel') || filename.includes('accommodation') || filename.includes('lodging')) {
+      documentType = DocumentType.HOTEL_INVOICE;
+      confidence = 0.8;
     }
 
     // Generate mock OCR text
@@ -121,6 +124,7 @@ export class MockAiService implements TravelDocumentAiService {
       BUS_TICKET: 'bus ticket',
       FUEL_RECEIPT: 'fuel receipt',
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
+      HOTEL_INVOICE: 'hotel invoice',
       OTHER: 'document',
     };
 
