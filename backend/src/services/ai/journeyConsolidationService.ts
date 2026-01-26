@@ -229,8 +229,8 @@ Extract real values only - use null if not visible. For cities, prefer full name
     const extractions = participant.documents
       .filter((d) => d.extraction)
       .map((d) => ({
-        documentId: d.id,
         ...d.extraction!,
+        documentId: d.id, // Override with the actual document ID
       }));
 
     if (extractions.length === 0) {

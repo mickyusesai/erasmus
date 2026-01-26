@@ -382,6 +382,7 @@ export interface ConsolidationResult {
   warnings: string[];
   missingDocuments?: { type: string; description: string }[];
   documentLinks?: { invoiceDocId: string; boardingPassDocId: string; reason: string }[];
+}
 
 // Types
 export interface DashboardStats {
