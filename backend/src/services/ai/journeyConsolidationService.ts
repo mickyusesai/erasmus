@@ -15,7 +15,7 @@ import { DocumentType, TransportMode } from './types.js';
 export class JourneyConsolidationService {
   private client: Anthropic;
   private modelHaiku: string = 'claude-3-haiku-20240307';
-  private modelSonnet: string = 'claude-3-5-sonnet-20241022'; // Sonnet supports PDFs
+  private modelSonnet: string = 'claude-sonnet-4-20250514'; // Sonnet 4 supports PDFs
 
   constructor() {
     this.client = new Anthropic({
