@@ -1,43 +1,46 @@
 import { TravelDocumentAiService } from './types.js';
 import { MockAiService } from './mockAiService.js';
+import { ClaudeAiService } from './claudeAiService.js';
 
 export * from './types.js';
 export { MockAiService } from './mockAiService.js';
+export { ClaudeAiService } from './claudeAiService.js';
 
 /**
  * Factory function to create AI service based on environment configuration
  *
- * To add real AI/OCR provider later:
- * 1. Create service implementing TravelDocumentAiService
- * 2. Add case here with appropriate configuration
- *
- * Example providers to consider:
- * - Google Cloud Vision + Vertex AI
- * - AWS Textract + Bedrock
- * - Azure Form Recognizer + OpenAI
- * - Direct OpenAI GPT-4 Vision API
+ * Uses Claude Vision API when ANTHROPIC_API_KEY is set,
+ * otherwise falls back to mock service for development.
  */
 export function createAiService(): TravelDocumentAiService {
-  const aiProvider = process.env.AI_PROVIDER || 'mock';
+  const aiProvider = process.env.AI_PROVIDER || 'auto';
+
+  // Auto-detect: use Claude if API key is available
+  if (aiProvider === 'auto') {
+    if (process.env.ANTHROPIC_API_KEY) {
+      console.log('[AI Service] Using Claude Vision API for document analysis');
+      return new ClaudeAiService();
+    } else {
+      console.log('[AI Service] No ANTHROPIC_API_KEY found, using mock service');
+      return new MockAiService();
+    }
+  }
 
   switch (aiProvider) {
+    case 'claude':
+      if (!process.env.ANTHROPIC_API_KEY) {
+        console.warn('[AI Service] ANTHROPIC_API_KEY not set, falling back to mock');
+        return new MockAiService();
+      }
+      console.log('[AI Service] Using Claude Vision API for document analysis');
+      return new ClaudeAiService();
+
     case 'mock':
+      console.log('[AI Service] Using mock AI service');
       return new MockAiService();
 
-    // Future implementations:
-    // case 'openai':
-    //   return new OpenAiDocumentService({
-    //     apiKey: process.env.OPENAI_API_KEY!,
-    //   });
-    //
-    // case 'google':
-    //   return new GoogleVisionService({
-    //     projectId: process.env.GOOGLE_PROJECT_ID!,
-    //     credentials: process.env.GOOGLE_CREDENTIALS!,
-    //   });
-
     default:
-      console.warn(`Unknown AI provider: ${aiProvider}, falling back to mock`);
+      console.warn(`[AI Service] Unknown provider: ${aiProvider}, falling back to mock`);
       return new MockAiService();
   }
 }
