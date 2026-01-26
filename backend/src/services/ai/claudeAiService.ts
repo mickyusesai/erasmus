@@ -111,30 +111,36 @@ Important notes:
       if (isPdf) {
         // For PDFs, use the document type with beta header
         console.log('[Claude AI] Processing PDF document...');
-        response = await this.client.messages.create({
-          model: this.model,
-          max_tokens: 2000,
-          betas: ['pdfs-2024-09-25'],
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'document',
-                  source: {
-                    type: 'base64',
-                    media_type: 'application/pdf',
-                    data: base64Data,
+        response = await this.client.messages.create(
+          {
+            model: this.model,
+            max_tokens: 2000,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'document',
+                    source: {
+                      type: 'base64',
+                      media_type: 'application/pdf',
+                      data: base64Data,
+                    },
+                  } as unknown as Anthropic.Messages.ContentBlockParam,
+                  {
+                    type: 'text',
+                    text: prompt,
                   },
-                } as unknown as Anthropic.Messages.ImageBlockParam,
-                {
-                  type: 'text',
-                  text: prompt,
-                },
-              ],
+                ],
+              },
+            ],
+          },
+          {
+            headers: {
+              'anthropic-beta': 'pdfs-2024-09-25',
             },
-          ],
-        });
+          }
+        );
       } else {
         // For images, use Claude Vision
         response = await this.client.messages.create({
