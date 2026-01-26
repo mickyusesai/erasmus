@@ -5,6 +5,15 @@ import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { adminApi } from '../../services/api';
 
+// Helper function to format dates as DD-MM-YYYY (European format)
+function formatDate(dateInput: string | Date): string {
+  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+}
+
 export default function Dashboard() {
   const { data: stats, isLoading } = useQuery({
     queryKey: ['dashboard-stats'],
@@ -191,8 +200,8 @@ export default function Dashboard() {
                       </td>
                       <td className="py-3 text-gray-600">{project.country}</td>
                       <td className="py-3 text-gray-600 text-sm">
-                        {new Date(project.startDate).toLocaleDateString()} -{' '}
-                        {new Date(project.endDate).toLocaleDateString()}
+                        {formatDate(project.startDate)} -{' '}
+                        {formatDate(project.endDate)}
                       </td>
                       <td className="py-3 text-gray-600">{project.participantStats.total}</td>
                       <td className="py-3">

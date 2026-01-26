@@ -93,7 +93,26 @@ export class JourneyConsolidationService {
 
     const prompt = `You are analyzing a travel document for Erasmus+ reimbursement.
 
-IMPORTANT DATE CONTEXT:
+CRITICAL DATE PARSING INSTRUCTIONS:
+Documents may show dates in various EUROPEAN formats. You MUST recognize and correctly parse:
+- DD/MM/YYYY (e.g., 15/03/2025 = March 15, 2025)
+- DD.MM.YYYY (e.g., 15.03.2025 = March 15, 2025)
+- DD-MM-YYYY (e.g., 15-03-2025 = March 15, 2025)
+- DD MMM YYYY (e.g., 15 Mar 2025)
+- Written months in ANY language:
+  * Croatian: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
+  * Polish: styczeń, luty, marzec, kwiecień, maj, czerwiec, lipiec, sierpień, wrzesień, październik, listopad, grudzień
+  * Czech: leden, únor, březen, duben, květen, červen, červenec, srpen, září, říjen, listopad, prosinec
+  * Hungarian: január, február, március, április, május, június, július, augusztus, szeptember, október, november, december
+  * German: Januar, Februar, März, April, Mai, Juni, Juli, August, September, Oktober, November, Dezember
+  * Dutch: januari, februari, maart, april, mei, juni, juli, augustus, september, oktober, november, december
+  * Spanish: enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, octubre, noviembre, diciembre
+  * French: janvier, février, mars, avril, mai, juin, juillet, août, septembre, octobre, novembre, décembre
+  * Italian: gennaio, febbraio, marzo, aprile, maggio, giugno, luglio, agosto, settembre, ottobre, novembre, dicembre
+
+IMPORTANT: In European dates, the DAY comes FIRST, then the month. 15/03/2025 means March 15, NOT October 3!
+
+DATE TYPE CONTEXT:
 - If this is a BOARDING PASS: The date shown is the DEPARTURE/FLIGHT date (when the person actually flew)
 - If this is a FLIGHT INVOICE or BOOKING CONFIRMATION: There may be TWO dates:
   * The PURCHASE DATE (when the ticket was bought) - often shown as "booking date", "purchase date", "invoice date"
@@ -107,9 +126,9 @@ Extract ALL information you can find. Respond with ONLY a JSON object:
   "passengerName": "Full name of passenger or null",
   "fromLocation": "Origin city/airport or null",
   "toLocation": "Destination city/airport or null",
-  "departureDate": "YYYY-MM-DD (the actual travel date) or null",
-  "purchaseDate": "YYYY-MM-DD (when ticket was bought, if visible) or null",
-  "documentDate": "YYYY-MM-DD (any other date on document) or null",
+  "departureDate": "YYYY-MM-DD (ALWAYS output in this format, regardless of input format) or null",
+  "purchaseDate": "YYYY-MM-DD (ALWAYS output in this format) or null",
+  "documentDate": "YYYY-MM-DD (ALWAYS output in this format) or null",
   "flightNumber": "e.g., KL1234 or null",
   "airline": "e.g., KLM or null",
   "bookingReference": "PNR/confirmation code or null",
@@ -120,7 +139,8 @@ Extract ALL information you can find. Respond with ONLY a JSON object:
   "currency": "EUR/USD/GBP/PLN etc. or null"
 }
 
-Extract real values only - use null if not visible. For cities, prefer full names over airport codes.`;
+Extract real values only - use null if not visible. For cities, prefer full names over airport codes.
+REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
     try {
       let response;
@@ -319,7 +339,8 @@ PARTICIPANT INFO:
 - Name: ${participant.firstName} ${participant.lastName}
 - Country (traveling from): ${participant.country}
 - Project location: ${participant.project.country}
-- Project dates: ${participant.project.startDate.toISOString().split('T')[0]} to ${participant.project.endDate.toISOString().split('T')[0]}
+- Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
+- Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
 
 EXTRACTED DOCUMENT DATA:
 ${JSON.stringify(extractionSummary, null, 2)}
@@ -329,6 +350,18 @@ YOUR TASK:
 2. Link related documents: Match boarding passes to their flight invoices using booking references, flight numbers, or matching routes.
 3. Create travel items: Each distinct travel segment (e.g., outbound flight, return flight) should be a separate travel item.
 4. Identify issues: Flag any warnings (name mismatches, missing documents, conflicting data).
+
+CRITICAL DATE PARSING:
+- Documents may contain dates in EUROPEAN format (DD/MM/YYYY or DD.MM.YYYY) - day comes FIRST!
+- Example: "15/03/2025" means March 15, NOT October 3
+- Croatian months: siječanj=Jan, veljača=Feb, ožujak=Mar, travanj=Apr, svibanj=May, lipanj=Jun, srpanj=Jul, kolovoz=Aug, rujan=Sep, listopad=Oct, studeni=Nov, prosinac=Dec
+- German months: Januar, Februar, März, April, Mai, Juni, Juli, August, September, Oktober, November, Dezember
+- Always output dates in YYYY-MM-DD format
+
+WARNING RULES:
+- Travel dates are EXPECTED to be close to but outside the project period (participants travel TO the event before it starts and travel BACK after it ends)
+- Only generate a warning if a travel date is MORE THAN 30 DAYS before the project start date OR MORE THAN 30 DAYS after the project end date
+- Do NOT warn about dates that are within 30 days of the project period - this is normal
 
 IMPORTANT RULES:
 - Boarding pass dates are ALWAYS departure dates (when the person flew)

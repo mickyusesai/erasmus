@@ -25,6 +25,15 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { adminApi, Participant, ImportPreview } from '../../services/api';
 import { clsx } from 'clsx';
 
+// Helper function to format dates as DD-MM-YYYY (European format)
+function formatDate(dateInput: string | Date): string {
+  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+}
+
 type TabType = 'overview' | 'participants' | 'settings';
 
 export default function ProjectDetail() {
@@ -101,8 +110,8 @@ export default function ProjectDetail() {
           <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
           <p className="text-gray-500">
             {project.country} &middot;{' '}
-            {new Date(project.startDate).toLocaleDateString()} -{' '}
-            {new Date(project.endDate).toLocaleDateString()}
+            {formatDate(project.startDate)} -{' '}
+            {formatDate(project.endDate)}
           </p>
         </div>
         <Button
@@ -386,7 +395,7 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500">
                         {participant.lastMagicLinkSentAt
-                          ? new Date(participant.lastMagicLinkSentAt).toLocaleDateString()
+                          ? formatDate(participant.lastMagicLinkSentAt)
                           : 'Never'}
                       </td>
                       <td className="px-4 py-3">

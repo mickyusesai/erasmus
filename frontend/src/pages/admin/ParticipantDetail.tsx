@@ -26,6 +26,15 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { adminApi, TravelItem, Document, TransportMode } from '../../services/api';
 import { clsx } from 'clsx';
 
+// Helper function to format dates as DD-MM-YYYY (European format)
+function formatDate(dateInput: string | Date): string {
+  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+}
+
 const transportIcons: Record<TransportMode, React.ElementType> = {
   PLANE: Plane,
   TRAIN: Train,
@@ -464,7 +473,7 @@ function TravelItemCard({ item, onDelete }: { item: TravelItem; onDelete: () => 
             <span className="font-medium text-gray-900">{item.toLocation}</span>
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
-            <span>{new Date(item.departureDate).toLocaleDateString()}</span>
+            <span>{formatDate(item.departureDate)}</span>
             {item.flightNumber && <span>Flight: {item.flightNumber}</span>}
             {item.bookingReference && <span>Ref: {item.bookingReference}</span>}
           </div>

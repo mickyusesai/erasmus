@@ -40,6 +40,15 @@ import {
 } from '../../services/api';
 import { clsx } from 'clsx';
 
+// Helper function to format dates as DD-MM-YYYY (European format)
+function formatDate(dateInput: string | Date): string {
+  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+}
+
 type Step = 1 | 2 | 3;
 
 const transportIcons: Record<TransportMode, React.ElementType> = {
@@ -658,7 +667,7 @@ function JourneyVisualization({ items }: { items: TravelItem[] }) {
     if (index === 0 || sortedItems[index - 1].toLocation !== item.fromLocation) {
       journeyStops.push({
         location: item.fromLocation,
-        date: new Date(item.departureDate).toLocaleDateString(),
+        date: formatDate(item.departureDate),
         isStart: index === 0,
       });
     }
@@ -666,7 +675,7 @@ function JourneyVisualization({ items }: { items: TravelItem[] }) {
     // Add to location
     journeyStops.push({
       location: item.toLocation,
-      date: new Date(item.departureDate).toLocaleDateString(),
+      date: formatDate(item.departureDate),
       isEnd: index === sortedItems.length - 1,
     });
   });
@@ -792,7 +801,7 @@ function TravelItemCard({
             {item.fromLocation} → {item.toLocation}
           </p>
           <p className="text-sm text-gray-500">
-            {new Date(item.departureDate).toLocaleDateString()}
+            {formatDate(item.departureDate)}
             {item.flightNumber && ` • ${item.flightNumber}`}
           </p>
         </div>
@@ -1476,7 +1485,7 @@ function DeclarationModal({
         />
 
         <p className="text-xs text-gray-500">
-          Date: {new Date().toLocaleDateString()}
+          Date: {formatDate(new Date())}
         </p>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">

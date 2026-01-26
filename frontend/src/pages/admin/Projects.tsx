@@ -9,6 +9,15 @@ import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { adminApi, CreateProjectData } from '../../services/api';
 
+// Helper function to format dates as DD-MM-YYYY (European format)
+function formatDate(dateInput: string | Date): string {
+  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+}
+
 export default function Projects() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -89,8 +98,8 @@ export default function Projects() {
                     <div className="flex items-center gap-2 text-sm text-gray-600">
                       <Calendar className="w-4 h-4" />
                       <span>
-                        {new Date(project.startDate).toLocaleDateString()} -{' '}
-                        {new Date(project.endDate).toLocaleDateString()}
+                        {formatDate(project.startDate)} -{' '}
+                        {formatDate(project.endDate)}
                       </span>
                     </div>
 
