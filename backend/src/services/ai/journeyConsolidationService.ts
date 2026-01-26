@@ -1,6 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
+import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
+
+// Maximum image size for Claude API (5MB)
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 /**
  * Journey Consolidation Service
@@ -14,13 +18,46 @@ import { DocumentType, TransportMode } from './types.js';
  */
 export class JourneyConsolidationService {
   private client: Anthropic;
-  private modelHaiku: string = 'claude-3-haiku-20240307';
-  private modelSonnet: string = 'claude-sonnet-4-20250514'; // Sonnet 4 supports PDFs
+  private model: string = 'claude-sonnet-4-20250514'; // Use Sonnet for all - more capable
 
   constructor() {
     this.client = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
+  }
+
+  /**
+   * Resize image if it exceeds the maximum size
+   */
+  private async resizeImageIfNeeded(buffer: Buffer, mimeType: string): Promise<Buffer> {
+    if (buffer.length <= MAX_IMAGE_SIZE) {
+      return buffer;
+    }
+
+    console.log(`[Consolidation] Resizing image from ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+
+    // Calculate quality reduction needed
+    const targetSize = MAX_IMAGE_SIZE * 0.9; // Aim for 90% of max to be safe
+    let quality = Math.floor((targetSize / buffer.length) * 100);
+    quality = Math.max(30, Math.min(quality, 80)); // Keep quality between 30-80
+
+    let resized: Buffer;
+
+    if (mimeType.includes('png')) {
+      // Convert PNG to JPEG for better compression
+      resized = await sharp(buffer)
+        .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality })
+        .toBuffer();
+    } else {
+      resized = await sharp(buffer)
+        .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality })
+        .toBuffer();
+    }
+
+    console.log(`[Consolidation] Resized to ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
+    return resized;
   }
 
   /**
@@ -34,13 +71,25 @@ export class JourneyConsolidationService {
   ): Promise<void> {
     console.log(`[Consolidation] Extracting data from document ${documentId}`);
 
-    const base64Data = fileBuffer.toString('base64');
     const isPdf = mimeType.includes('pdf');
-
+    let base64Data: string;
     let mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
-    if (mimeType.includes('png')) mediaType = 'image/png';
-    else if (mimeType.includes('gif')) mediaType = 'image/gif';
-    else if (mimeType.includes('webp')) mediaType = 'image/webp';
+
+    if (!isPdf) {
+      // Resize image if needed
+      const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, mimeType);
+      base64Data = processedBuffer.toString('base64');
+      // After resize, it's always JPEG
+      if (fileBuffer.length > MAX_IMAGE_SIZE) {
+        mediaType = 'image/jpeg';
+      } else {
+        if (mimeType.includes('png')) mediaType = 'image/png';
+        else if (mimeType.includes('gif')) mediaType = 'image/gif';
+        else if (mimeType.includes('webp')) mediaType = 'image/webp';
+      }
+    } else {
+      base64Data = fileBuffer.toString('base64');
+    }
 
     const prompt = `You are analyzing a travel document for Erasmus+ reimbursement.
 
@@ -77,11 +126,11 @@ Extract real values only - use null if not visible. For cities, prefer full name
       let response;
 
       if (isPdf) {
-        // PDFs require Sonnet model with beta header
+        // PDFs require beta header
         console.log('[Consolidation] Using Sonnet for PDF document');
         response = await this.client.messages.create(
           {
-            model: this.modelSonnet,
+            model: this.model,
             max_tokens: 1500,
             messages: [
               {
@@ -103,9 +152,10 @@ Extract real values only - use null if not visible. For cities, prefer full name
           { headers: { 'anthropic-beta': 'pdfs-2024-09-25' } }
         );
       } else {
-        // Images can use the cheaper Haiku model
+        // Use Sonnet for images too - more accurate extraction
+        console.log('[Consolidation] Using Sonnet for image document');
         response = await this.client.messages.create({
-          model: this.modelHaiku,
+          model: this.model,
           max_tokens: 1500,
           messages: [
             {
@@ -324,10 +374,13 @@ Respond with ONLY a JSON object:
   ]
 }`;
 
+    // Build a set of valid document IDs for this participant
+    const validDocumentIds = new Set(participant.documents.map((d) => d.id));
+
     try {
-      // Text-only consolidation can use cheaper Haiku model
+      // Text-only consolidation uses Sonnet for better reasoning
       const response = await this.client.messages.create({
-        model: this.modelHaiku,
+        model: this.model,
         max_tokens: 3000,
         messages: [{ role: 'user', content: prompt }],
       });
@@ -353,9 +406,25 @@ Respond with ONLY a JSON object:
       // Create new travel items based on consolidation
       const createdItems = [];
       for (const item of result.travel_items || []) {
-        // Find the primary document to link (prefer invoice over boarding pass)
-        const linkedDocs = item.linkedDocumentIds || [];
-        const primaryDocId = linkedDocs[0] || null;
+        // Find a valid document to link - only use IDs that actually exist
+        const linkedDocs = (item.linkedDocumentIds || []) as string[];
+        const validLinkedDoc = linkedDocs.find((docId: string) => validDocumentIds.has(docId));
+
+        // If no valid linked doc found, try to match by document index reference
+        let primaryDocId: string | null = validLinkedDoc || null;
+
+        // If AI returned something like "doc-1" or index numbers, try to match
+        if (!primaryDocId && linkedDocs.length > 0) {
+          const docRef = linkedDocs[0];
+          // Check if it's a numeric reference like "1" or "doc-1"
+          const match = docRef.match(/(\d+)/);
+          if (match) {
+            const index = parseInt(match[1], 10) - 1; // AI uses 1-based indexing
+            if (index >= 0 && index < participant.documents.length) {
+              primaryDocId = participant.documents[index].id;
+            }
+          }
+        }
 
         // Convert currency to EUR
         let amountEur = item.amount || 0;
@@ -366,7 +435,7 @@ Respond with ONLY a JSON object:
         const travelItem = await prisma.travelItem.create({
           data: {
             participantId,
-            documentId: primaryDocId,
+            documentId: primaryDocId, // Will be null if no valid document found
             modeOfTransport: this.mapTransportMode(item.modeOfTransport),
             fromLocation: item.fromLocation || 'Unknown',
             toLocation: item.toLocation || 'Unknown',
