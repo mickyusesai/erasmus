@@ -109,11 +109,21 @@ export class JourneyConsolidationService {
 
     const prompt = `You are analyzing a travel document for Erasmus+ reimbursement.
 
+IMAGE QUALITY NOTE:
+This may be a PHOTO of a physical receipt or ticket (not a digital document). Photos can be blurry, tilted, low contrast, or show crumpled paper. TRY YOUR BEST to extract information even from poor quality images.
+
+COMMON DOCUMENT TYPES:
+- NS train tickets: "Enkele reis" (single trip), stations like "Rotterdam C." or "Eindhoven C.", date DD-MM-YYYY, price in EUR
+- Station receipts: "Customer's receipt", show "PAYMENT Date:" and "Total:" - use payment date as travel date
+- Bus tickets: FlixBus, Flibco, Bravo - look for route, date, and price
+- Omio/Trainline receipts: Online booking - may show booking fee markup over actual ticket price
+
 CRITICAL DATE PARSING INSTRUCTIONS:
 Documents may show dates in various EUROPEAN formats. You MUST recognize and correctly parse:
 - DD/MM/YYYY (e.g., 15/03/2025 = March 15, 2025)
 - DD.MM.YYYY (e.g., 15.03.2025 = March 15, 2025)
 - DD-MM-YYYY (e.g., 15-03-2025 = March 15, 2025)
+- DD.MM.YY (e.g., 22.11.25 = November 22, 2025) - 2-digit year means 20XX
 - "DD. MMM YYYY" with abbreviated month (e.g., "21. stu 2025" = November 21, 2025)
 - Dates with day names (e.g., "petak, 21. stu 2025." = Friday, November 21, 2025)
 
@@ -162,7 +172,9 @@ Extract ALL information you can find. Respond with ONLY a JSON object:
   "currency": "EUR/USD/GBP/PLN etc. or null"
 }
 
-Extract real values only - use null if not visible. For cities, prefer full names over airport codes.
+Extract real values only - use null if not visible.
+For station names like "Rotterdam C." or "Eindhoven C." use just the city name (Rotterdam, Eindhoven).
+For "Instaphalte: Airport" type entries, use the actual location (e.g., Eindhoven Airport).
 REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
     try {
@@ -390,9 +402,11 @@ WARNING RULES:
 IMPORTANT RULES:
 - Boarding pass dates are ALWAYS departure dates (when the person flew)
 - Invoice/booking dates might be purchase dates OR departure dates - use context to determine
-- If a boarding pass and invoice have the same route/flight, they are the SAME trip - use the invoice price
+- If multiple documents exist for the SAME trip (e.g., Omio receipt + FlixBus ticket, or booking confirmation + boarding pass), use the HIGHEST price - that's what they actually paid including booking fees
+- If a boarding pass and invoice have the same route/flight, they are the SAME trip - combine into ONE travel item
 - Verify passenger name matches participant name (flag if different)
 - Each leg of the journey should be ONE travel item (don't duplicate for boarding pass + invoice)
+- Train receipts and tickets for the same journey should be combined - use the receipt amount as it's what was paid
 
 Respond with ONLY a JSON object:
 {

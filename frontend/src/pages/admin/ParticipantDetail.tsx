@@ -393,6 +393,20 @@ export default function ParticipantDetail() {
             </CardContent>
           </Card>
 
+          {/* Participant Note (from the participant) */}
+          {participant.participantNote && (
+            <Card className="border-blue-200 bg-blue-50">
+              <CardHeader>
+                <h3 className="font-semibold text-blue-800">Note from Participant</h3>
+              </CardHeader>
+              <CardContent>
+                <p className="text-blue-700 text-sm whitespace-pre-wrap">
+                  {participant.participantNote}
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Internal Notes */}
           <Card>
             <CardHeader>

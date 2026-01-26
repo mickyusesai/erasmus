@@ -469,6 +469,17 @@ function Step2CheckData({
   const queryClient = useQueryClient();
   const [showAddTravelModal, setShowAddTravelModal] = useState(false);
   const [showBoardingPassUpload, setShowBoardingPassUpload] = useState(false);
+  const [participantNote, setParticipantNote] = useState(data.participant.participantNote || '');
+  const [noteEdited, setNoteEdited] = useState(false);
+
+  const noteMutation = useMutation({
+    mutationFn: (note: string) => participantApi.updateNote(token, note),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      setNoteEdited(false);
+      toast.success('Note saved');
+    },
+  });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, updates }: { id: string; updates: Partial<TravelItem> }) =>
@@ -592,6 +603,39 @@ function Step2CheckData({
               </Button>
             </div>
           )}
+
+          {/* Participant Note */}
+          <div className="mt-8 p-4 border border-blue-200 bg-blue-50 rounded-xl">
+            <h4 className="font-semibold text-blue-800 mb-2 flex items-center gap-2">
+              <FileText className="w-4 h-4" />
+              Add a Note (Optional)
+            </h4>
+            <p className="text-sm text-blue-700 mb-3">
+              If you have any special circumstances to explain (e.g., missed a bus and had to rebook, lost a ticket,
+              had to take an alternative route), please add a note here. The project team will see this.
+            </p>
+            <textarea
+              className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              rows={3}
+              placeholder="Example: I missed the 08:00 bus due to train delay, so I had to book the 09:30 bus. Only submitting the second ticket as that's what I actually used."
+              value={participantNote}
+              onChange={(e) => {
+                setParticipantNote(e.target.value);
+                setNoteEdited(true);
+              }}
+            />
+            {noteEdited && (
+              <div className="mt-2 flex justify-end">
+                <Button
+                  size="sm"
+                  onClick={() => noteMutation.mutate(participantNote)}
+                  loading={noteMutation.isPending}
+                >
+                  Save Note
+                </Button>
+              </div>
+            )}
+          </div>
 
           {/* Summary */}
           <div className="mt-8 p-6 bg-gray-50 rounded-2xl">

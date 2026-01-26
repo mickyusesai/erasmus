@@ -118,6 +118,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       bankAccountIban: data?.bankAccountIban,
       bankAccountHolderName: data?.bankAccountHolderName,
       bankAccountBic: data?.bankAccountBic,
+      participantNote: data?.participantNote,
     },
     project: data?.project,
     documents: data?.documents,
@@ -528,6 +529,42 @@ router.patch('/bank-details', participantAuth, asyncHandler(async (req: Request,
     bankAccountHolderName: updated.bankAccountHolderName,
     bankAccountBic: updated.bankAccountBic,
   });
+}));
+
+/**
+ * PUT /api/participant/note
+ * Update participant's note explaining their travel situation
+ */
+router.put('/note', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot update note after approval');
+  }
+
+  const { note } = req.body;
+
+  if (typeof note !== 'string') {
+    throw new ValidationError('Note must be a string');
+  }
+
+  const updated = await prisma.participant.update({
+    where: { id: participant.id },
+    data: { participantNote: note || null },
+  });
+
+  // Log the change
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId: participant.id,
+      userType: 'PARTICIPANT',
+      fieldName: 'participantNote',
+      previousValue: participant.participantNote || '',
+      newValue: note || '',
+    },
+  });
+
+  res.json({ participantNote: updated.participantNote });
 }));
 
 /**

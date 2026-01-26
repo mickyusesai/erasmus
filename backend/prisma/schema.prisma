@@ -60,6 +60,7 @@ model Participant {
   bankAccountHolderName String?
   bankAccountBic        String?
   notesInternal         String?
+  participantNote       String?               // Note from participant explaining travel situations (e.g., missed bus, lost ticket)
   lastMagicLinkSentAt   DateTime?
   journeyConsolidatedAt DateTime?             // When the AI last consolidated all documents
   createdAt             DateTime              @default(now())

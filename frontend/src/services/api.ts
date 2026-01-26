@@ -335,6 +335,15 @@ export const participantApi = {
     return handleResponse<BankDetails>(res);
   },
 
+  updateNote: async (token: string, note: string) => {
+    const res = await fetch(`${API_BASE}/participant/note?token=${token}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    });
+    return handleResponse<{ participantNote: string }>(res);
+  },
+
   createDeclaration: async (token: string, data: CreateDeclarationData) => {
     const res = await fetch(`${API_BASE}/participant/declarations?token=${token}`, {
       method: 'POST',
@@ -482,6 +491,7 @@ export interface ParticipantDetail extends Participant {
   bankAccountHolderName?: string;
   bankAccountBic?: string;
   notesInternal?: string;
+  participantNote?: string;
   documents: Document[];
   travelItems: TravelItem[];
   declarationsOnHonor: Declaration[];
@@ -644,6 +654,7 @@ export interface ParticipantAuthResponse {
     bankAccountIban?: string;
     bankAccountHolderName?: string;
     bankAccountBic?: string;
+    participantNote?: string;
   };
   project: {
     id: string;
