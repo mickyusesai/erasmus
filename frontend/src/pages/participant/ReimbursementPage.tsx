@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -19,6 +19,12 @@ import {
   HelpCircle,
   Shield,
   Loader2,
+  Plus,
+  AlertTriangle,
+  MapPin,
+  ArrowRight,
+  Ticket,
+  X,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -31,6 +37,7 @@ import {
   TravelItem,
   TransportMode,
   DocumentType,
+  Document,
 } from '../../services/api';
 import { clsx } from 'clsx';
 
@@ -53,6 +60,15 @@ const transportOptions = [
   { value: 'FERRY', label: 'Ferry' },
   { value: 'OTHER', label: 'Other' },
 ];
+
+const transportColors: Record<TransportMode, string> = {
+  PLANE: 'bg-blue-500',
+  TRAIN: 'bg-green-500',
+  BUS: 'bg-orange-500',
+  CAR: 'bg-purple-500',
+  FERRY: 'bg-cyan-500',
+  OTHER: 'bg-gray-500',
+};
 
 export default function ReimbursementPage() {
   const [searchParams] = useSearchParams();
@@ -399,6 +415,126 @@ function Step1Upload({
   );
 }
 
+// Helper function to check if names match
+function checkNameMatch(participantName: string, extractedName?: string): { matches: boolean; warning?: string } {
+  if (!extractedName) return { matches: true };
+
+  const normalize = (name: string) => name.toLowerCase().trim().replace(/[^a-z\s]/g, '');
+  const pName = normalize(participantName);
+  const eName = normalize(extractedName);
+
+  // Exact match
+  if (pName === eName) return { matches: true };
+
+  // Check if first or last name matches
+  const pParts = pName.split(/\s+/);
+  const eParts = eName.split(/\s+/);
+
+  const hasCommonPart = pParts.some(pp => eParts.some(ep => pp === ep && pp.length > 2));
+  if (hasCommonPart) return { matches: true };
+
+  // Similar names (Levenshtein distance check)
+  const similarity = (a: string, b: string) => {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+    for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+    for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+    for (let j = 1; j <= b.length; j++) {
+      for (let i = 1; i <= a.length; i++) {
+        const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+        matrix[j][i] = Math.min(
+          matrix[j][i - 1] + 1,
+          matrix[j - 1][i] + 1,
+          matrix[j - 1][i - 1] + indicator
+        );
+      }
+    }
+    return matrix[b.length][a.length];
+  };
+
+  const distance = similarity(pName, eName);
+  const maxLen = Math.max(pName.length, eName.length);
+  const similarityRatio = 1 - distance / maxLen;
+
+  if (similarityRatio > 0.7) return { matches: true };
+
+  return {
+    matches: false,
+    warning: `Name mismatch: "${extractedName}" doesn't match your name "${participantName}". Please verify this document belongs to you.`
+  };
+}
+
+// Group travel items by journey (matching outbound and return trips)
+function groupTravelItems(items: TravelItem[], documents: Document[]): GroupedJourney[] {
+  // Sort by departure date
+  const sorted = [...items].sort((a, b) =>
+    new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+  );
+
+  // Group items that are part of the same booking or have matching routes
+  const journeys: GroupedJourney[] = [];
+  const used = new Set<string>();
+
+  for (const item of sorted) {
+    if (used.has(item.id)) continue;
+
+    const journey: GroupedJourney = {
+      id: item.id,
+      segments: [item],
+      documents: documents.filter(d => d.id === item.documentId),
+      hasBoardingPass: false,
+      missingBoardingPass: false,
+    };
+
+    used.add(item.id);
+
+    // Find related items (same booking reference or matching route in reverse)
+    for (const other of sorted) {
+      if (used.has(other.id)) continue;
+
+      const sameBooking = item.bookingReference &&
+        item.bookingReference === other.bookingReference;
+      const returnTrip = item.fromLocation === other.toLocation &&
+        item.toLocation === other.fromLocation;
+
+      if (sameBooking || returnTrip) {
+        journey.segments.push(other);
+        used.add(other.id);
+
+        const otherDocs = documents.filter(d => d.id === other.documentId);
+        journey.documents.push(...otherDocs);
+      }
+    }
+
+    // Sort segments by date
+    journey.segments.sort((a, b) =>
+      new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+    );
+
+    // Check for boarding pass if any segment is a flight
+    const hasFlightSegment = journey.segments.some(s => s.modeOfTransport === 'PLANE');
+    if (hasFlightSegment) {
+      journey.hasBoardingPass = documents.some(d =>
+        d.documentType === 'FLIGHT_BOARDING_PASS'
+      );
+      journey.missingBoardingPass = !journey.hasBoardingPass;
+    }
+
+    journeys.push(journey);
+  }
+
+  return journeys;
+}
+
+interface GroupedJourney {
+  id: string;
+  segments: TravelItem[];
+  documents: Document[];
+  hasBoardingPass: boolean;
+  missingBoardingPass: boolean;
+}
+
 function Step2CheckData({
   data,
   token,
@@ -411,6 +547,8 @@ function Step2CheckData({
   onNext: () => void;
 }) {
   const queryClient = useQueryClient();
+  const [showAddTravelModal, setShowAddTravelModal] = useState(false);
+  const [showBoardingPassUpload, setShowBoardingPassUpload] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: ({ id, updates }: { id: string; updates: Partial<TravelItem> }) =>
@@ -428,94 +566,318 @@ function Step2CheckData({
     },
   });
 
-  return (
-    <Card>
-      <CardHeader>
-        <h2 className="text-xl font-bold text-gray-900">Check Your Travel Data</h2>
-        <p className="text-gray-500 mt-1">
-          We've extracted the following information from your documents. Please verify and correct if needed.
-        </p>
-      </CardHeader>
-      <CardContent>
-        {data.travelItems.length > 0 ? (
-          <div className="space-y-6">
-            {data.travelItems.map((item) => (
-              <TravelItemForm
-                key={item.id}
-                item={item}
-                onUpdate={(updates) =>
-                  updateMutation.mutate({ id: item.id, updates })
-                }
-                onDelete={() => deleteMutation.mutate(item.id)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8">
-            <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
-            <p className="text-gray-600">
-              No travel items detected. Please go back and upload your travel documents.
-            </p>
-          </div>
-        )}
+  // Generate warnings based on data analysis
+  const warnings = useMemo(() => {
+    const w: string[] = [];
 
-        {/* Summary */}
-        <div className="mt-8 p-6 bg-gray-50 rounded-2xl">
+    // Check for name mismatches (would need extracted name from OCR)
+    // This is a placeholder - in reality, the backend would extract passenger names
+
+    // Check for missing boarding passes for flights
+    const hasFlights = data.travelItems.some(t => t.modeOfTransport === 'PLANE');
+    const hasBoardingPass = data.documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+    if (hasFlights && !hasBoardingPass) {
+      w.push('You have flight travel items but no boarding pass uploaded. Please upload your boarding pass(es) or add a declaration.');
+    }
+
+    // Check for travel items without documents
+    const itemsWithoutDocs = data.travelItems.filter(t => !t.documentId);
+    if (itemsWithoutDocs.length > 0) {
+      w.push(`${itemsWithoutDocs.length} travel item(s) don't have a corresponding document. Please upload supporting documents.`);
+    }
+
+    return w;
+  }, [data]);
+
+  // Group travel items
+  const groupedJourneys = useMemo(() =>
+    groupTravelItems(data.travelItems, data.documents),
+    [data.travelItems, data.documents]
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Warnings Section */}
+      {warnings.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="py-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-semibold text-amber-800 mb-2">Attention Required</h3>
+                <ul className="space-y-1">
+                  {warnings.map((warning, i) => (
+                    <li key={i} className="text-sm text-amber-700 flex items-start gap-2">
+                      <span className="text-amber-400 mt-1">•</span>
+                      <span>{warning}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Journey Visualization */}
+      {data.travelItems.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h3 className="font-semibold text-gray-900">Your Journey</h3>
+          </CardHeader>
+          <CardContent>
+            <JourneyVisualization items={data.travelItems} />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Main Data Card */}
+      <Card>
+        <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-500">Calculated Total</p>
-              <p className="text-2xl font-bold text-gray-900">
-                {new Intl.NumberFormat('de-DE', {
-                  style: 'currency',
-                  currency: 'EUR',
-                }).format(data.reimbursementSummary?.totalEur || 0)}
+              <h2 className="text-xl font-bold text-gray-900">Check Your Travel Data</h2>
+              <p className="text-gray-500 mt-1">
+                We've extracted the following information from your documents. Please verify and correct if needed.
               </p>
             </div>
-            {data.maxReimbursementForCountry && (
-              <div className="text-right">
-                <p className="text-sm text-gray-500">Maximum for {data.participant.country}</p>
-                <p className="text-lg font-semibold text-gray-700">
+            <Button
+              variant="secondary"
+              onClick={() => setShowAddTravelModal(true)}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Travel
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {data.travelItems.length > 0 ? (
+            <div className="space-y-6">
+              {data.travelItems.map((item) => (
+                <TravelItemCard
+                  key={item.id}
+                  item={item}
+                  documents={data.documents}
+                  onUpdate={(updates) =>
+                    updateMutation.mutate({ id: item.id, updates })
+                  }
+                  onDelete={() => deleteMutation.mutate(item.id)}
+                  onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
+              <p className="text-gray-600 mb-4">
+                No travel items detected. Please upload your travel documents or add them manually.
+              </p>
+              <Button onClick={() => setShowAddTravelModal(true)}>
+                <Plus className="w-4 h-4 mr-2" />
+                Add Travel Manually
+              </Button>
+            </div>
+          )}
+
+          {/* Summary */}
+          <div className="mt-8 p-6 bg-gray-50 rounded-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">Calculated Total</p>
+                <p className="text-2xl font-bold text-gray-900">
                   {new Intl.NumberFormat('de-DE', {
                     style: 'currency',
                     currency: 'EUR',
-                  }).format(data.maxReimbursementForCountry)}
+                  }).format(data.reimbursementSummary?.totalEur || 0)}
                 </p>
               </div>
-            )}
+              {data.maxReimbursementForCountry && (
+                <div className="text-right">
+                  <p className="text-sm text-gray-500">Maximum for {data.participant.country}</p>
+                  <p className="text-lg font-semibold text-gray-700">
+                    {new Intl.NumberFormat('de-DE', {
+                      style: 'currency',
+                      currency: 'EUR',
+                    }).format(data.maxReimbursementForCountry)}
+                  </p>
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 mt-3">
+              Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
+            </p>
           </div>
-          <p className="text-xs text-gray-400 mt-3">
-            Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
-          </p>
-        </div>
 
-        {/* Navigation */}
-        <div className="mt-8 flex justify-between">
-          <Button variant="secondary" onClick={onBack}>
-            Back to Upload
-          </Button>
-          <Button onClick={onNext} disabled={data.travelItems.length === 0}>
-            Continue to Confirm
-            <ChevronRight className="w-4 h-4 ml-2" />
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+          {/* Navigation */}
+          <div className="mt-8 flex justify-between">
+            <Button variant="secondary" onClick={onBack}>
+              Back to Upload
+            </Button>
+            <Button onClick={onNext} disabled={data.travelItems.length === 0}>
+              Continue to Confirm
+              <ChevronRight className="w-4 h-4 ml-2" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Add Travel Modal */}
+      <AddTravelModal
+        isOpen={showAddTravelModal}
+        onClose={() => setShowAddTravelModal(false)}
+        token={token}
+      />
+
+      {/* Boarding Pass Upload Modal */}
+      <BoardingPassUploadModal
+        isOpen={showBoardingPassUpload}
+        onClose={() => setShowBoardingPassUpload(false)}
+        token={token}
+      />
+    </div>
   );
 }
 
-function TravelItemForm({
+// Journey Visualization Component
+function JourneyVisualization({ items }: { items: TravelItem[] }) {
+  // Sort items by departure date
+  const sortedItems = [...items].sort((a, b) =>
+    new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+  );
+
+  // Build journey path
+  const journeyStops: { location: string; date: string; isStart?: boolean; isEnd?: boolean }[] = [];
+
+  sortedItems.forEach((item, index) => {
+    // Add from location if it's the first item or different from previous destination
+    if (index === 0 || sortedItems[index - 1].toLocation !== item.fromLocation) {
+      journeyStops.push({
+        location: item.fromLocation,
+        date: new Date(item.departureDate).toLocaleDateString(),
+        isStart: index === 0,
+      });
+    }
+
+    // Add to location
+    journeyStops.push({
+      location: item.toLocation,
+      date: new Date(item.departureDate).toLocaleDateString(),
+      isEnd: index === sortedItems.length - 1,
+    });
+  });
+
+  // Deduplicate consecutive stops
+  const uniqueStops = journeyStops.filter((stop, index) =>
+    index === 0 || stop.location !== journeyStops[index - 1].location
+  );
+
+  if (uniqueStops.length === 0) return null;
+
+  return (
+    <div className="relative">
+      {/* Journey Line */}
+      <div className="flex items-center justify-between relative py-4">
+        {/* Background line */}
+        <div className="absolute left-4 right-4 top-1/2 h-1 bg-gradient-to-r from-primary-300 via-primary-500 to-primary-300 rounded-full" />
+
+        {/* Stops */}
+        <div className="flex justify-between w-full relative z-10">
+          {uniqueStops.map((stop, index) => {
+            const correspondingItem = sortedItems.find(
+              (item, i) =>
+                (i === 0 && item.fromLocation === stop.location) ||
+                item.toLocation === stop.location
+            );
+            const Icon = correspondingItem ? transportIcons[correspondingItem.modeOfTransport] : MapPin;
+            const color = correspondingItem ? transportColors[correspondingItem.modeOfTransport] : 'bg-gray-500';
+
+            return (
+              <div key={index} className="flex flex-col items-center">
+                <div className={clsx(
+                  'w-10 h-10 rounded-full flex items-center justify-center text-white shadow-lg',
+                  stop.isStart || stop.isEnd ? 'bg-primary-600 ring-4 ring-primary-100' : color
+                )}>
+                  {stop.isStart ? (
+                    <MapPin className="w-5 h-5" />
+                  ) : stop.isEnd ? (
+                    <CheckCircle className="w-5 h-5" />
+                  ) : (
+                    <Icon className="w-5 h-5" />
+                  )}
+                </div>
+                <div className="mt-2 text-center">
+                  <p className="text-sm font-semibold text-gray-900 max-w-[80px] truncate">
+                    {stop.location}
+                  </p>
+                  <p className="text-xs text-gray-500">{stop.date}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Transport icons between stops */}
+      <div className="flex justify-around mt-2">
+        {sortedItems.map((item, index) => {
+          const Icon = transportIcons[item.modeOfTransport];
+          return (
+            <div key={index} className="flex items-center gap-1 text-xs text-gray-500">
+              <Icon className="w-4 h-4" />
+              <span>{item.modeOfTransport.toLowerCase()}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Travel Item Card with boarding pass status
+function TravelItemCard({
   item,
+  documents,
   onUpdate,
   onDelete,
+  onUploadBoardingPass,
 }: {
   item: TravelItem;
+  documents: Document[];
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
+  onUploadBoardingPass: () => void;
 }) {
   const Icon = transportIcons[item.modeOfTransport];
+  const isPlane = item.modeOfTransport === 'PLANE';
+  const hasBoardingPass = documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+  const linkedDocument = documents.find(d => d.id === item.documentId);
 
   return (
     <div className="p-6 bg-gray-50 rounded-2xl">
+      {/* Boarding Pass Status Bar for Flights */}
+      {isPlane && (
+        <div className={clsx(
+          'mb-4 p-3 rounded-xl flex items-center justify-between',
+          hasBoardingPass ? 'bg-emerald-50 border border-emerald-200' : 'bg-amber-50 border border-amber-200'
+        )}>
+          <div className="flex items-center gap-2">
+            <Ticket className={clsx('w-5 h-5', hasBoardingPass ? 'text-emerald-600' : 'text-amber-600')} />
+            <span className={clsx('text-sm font-medium', hasBoardingPass ? 'text-emerald-700' : 'text-amber-700')}>
+              {hasBoardingPass ? 'Boarding Pass Added' : 'Boarding Pass Missing'}
+            </span>
+          </div>
+          {!hasBoardingPass && (
+            <button
+              onClick={onUploadBoardingPass}
+              className="text-sm text-amber-700 hover:text-amber-800 font-medium underline"
+            >
+              Upload now
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Header */}
       <div className="flex items-center gap-4 mb-4">
         <div className="w-12 h-12 rounded-xl bg-white border border-gray-200 flex items-center justify-center">
           <Icon className="w-6 h-6 text-gray-500" />
@@ -526,7 +888,21 @@ function TravelItemForm({
           </p>
           <p className="text-sm text-gray-500">
             {new Date(item.departureDate).toLocaleDateString()}
+            {item.flightNumber && ` • ${item.flightNumber}`}
           </p>
+        </div>
+        <div className="text-right">
+          <p className="font-semibold text-gray-900">
+            {new Intl.NumberFormat('de-DE', {
+              style: 'currency',
+              currency: 'EUR',
+            }).format(item.amountEur)}
+          </p>
+          {item.currencyOriginal !== 'EUR' && (
+            <p className="text-xs text-gray-500">
+              {item.amountOriginal} {item.currencyOriginal}
+            </p>
+          )}
         </div>
         <button
           onClick={onDelete}
@@ -536,6 +912,30 @@ function TravelItemForm({
         </button>
       </div>
 
+      {/* Linked Document */}
+      {linkedDocument && (
+        <div className="mb-4 p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3">
+          <FileText className="w-4 h-4 text-gray-400" />
+          <span className="text-sm text-gray-600 flex-1 truncate">{linkedDocument.renamedFilename}</span>
+          <a
+            href={`/uploads/${linkedDocument.storedFilePath}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-primary-600 hover:text-primary-700"
+          >
+            View
+          </a>
+        </div>
+      )}
+
+      {!linkedDocument && (
+        <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200 flex items-center gap-3">
+          <AlertTriangle className="w-4 h-4 text-amber-500" />
+          <span className="text-sm text-amber-700">No document linked to this travel item</span>
+        </div>
+      )}
+
+      {/* Editable Fields */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <Select
           label="Mode of Transport"
@@ -581,7 +981,7 @@ function TravelItemForm({
           ]}
           onChange={(e) => onUpdate({ currencyOriginal: e.target.value })}
         />
-        {item.modeOfTransport === 'PLANE' && (
+        {isPlane && (
           <>
             <Input
               label="Flight Number"
@@ -597,6 +997,270 @@ function TravelItemForm({
         )}
       </div>
     </div>
+  );
+}
+
+// Add Travel Modal
+function AddTravelModal({
+  isOpen,
+  onClose,
+  token,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  token: string;
+}) {
+  const queryClient = useQueryClient();
+  const [formData, setFormData] = useState({
+    modeOfTransport: 'PLANE' as TransportMode,
+    fromLocation: '',
+    toLocation: '',
+    departureDate: '',
+    amountOriginal: 0,
+    currencyOriginal: 'EUR',
+    flightNumber: '',
+    bookingReference: '',
+  });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  const uploadAndCreateMutation = useMutation({
+    mutationFn: async () => {
+      // First upload document if selected
+      let documentId: string | undefined;
+      if (selectedFile) {
+        const uploadResult = await participantApi.uploadDocument(token, selectedFile);
+        documentId = uploadResult.document.id;
+      }
+
+      // Then create travel item
+      return participantApi.createTravelItem(token, {
+        ...formData,
+        amountEur: formData.amountOriginal, // Will be converted by backend
+        documentId,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      toast.success('Travel item added');
+      onClose();
+      // Reset form
+      setFormData({
+        modeOfTransport: 'PLANE',
+        fromLocation: '',
+        toLocation: '',
+        departureDate: '',
+        amountOriginal: 0,
+        currencyOriginal: 'EUR',
+        flightNumber: '',
+        bookingReference: '',
+      });
+      setSelectedFile(null);
+    },
+    onError: () => {
+      toast.error('Failed to add travel item');
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    uploadAndCreateMutation.mutate();
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Add Travel Manually" size="lg">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="p-4 bg-blue-50 rounded-xl">
+          <p className="text-sm text-blue-800">
+            Please upload a supporting document (ticket, invoice, receipt) for this travel item.
+            If you don't have a document, you'll need to provide a declaration later.
+          </p>
+        </div>
+
+        {/* File Upload */}
+        <div>
+          <label className="label">Supporting Document</label>
+          <div className="border-2 border-dashed border-gray-200 rounded-xl p-4">
+            {selectedFile ? (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-gray-400" />
+                  <span className="text-sm text-gray-700">{selectedFile.name}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedFile(null)}
+                  className="text-red-500 hover:text-red-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <label className="cursor-pointer flex flex-col items-center">
+                <Upload className="w-8 h-8 text-gray-400 mb-2" />
+                <span className="text-sm text-gray-600">Click to upload document</span>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                />
+              </label>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Select
+            label="Mode of Transport"
+            value={formData.modeOfTransport}
+            options={transportOptions}
+            onChange={(e) => setFormData({ ...formData, modeOfTransport: e.target.value as TransportMode })}
+          />
+          <Input
+            label="Departure Date"
+            type="date"
+            value={formData.departureDate}
+            onChange={(e) => setFormData({ ...formData, departureDate: e.target.value })}
+            required
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input
+            label="From"
+            value={formData.fromLocation}
+            onChange={(e) => setFormData({ ...formData, fromLocation: e.target.value })}
+            placeholder="e.g., Amsterdam"
+            required
+          />
+          <Input
+            label="To"
+            value={formData.toLocation}
+            onChange={(e) => setFormData({ ...formData, toLocation: e.target.value })}
+            placeholder="e.g., Barcelona"
+            required
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input
+            label="Amount"
+            type="number"
+            step="0.01"
+            value={formData.amountOriginal || ''}
+            onChange={(e) => setFormData({ ...formData, amountOriginal: parseFloat(e.target.value) || 0 })}
+            required
+          />
+          <Select
+            label="Currency"
+            value={formData.currencyOriginal}
+            options={[
+              { value: 'EUR', label: 'EUR' },
+              { value: 'USD', label: 'USD' },
+              { value: 'GBP', label: 'GBP' },
+              { value: 'PLN', label: 'PLN' },
+              { value: 'CZK', label: 'CZK' },
+              { value: 'HUF', label: 'HUF' },
+              { value: 'RON', label: 'RON' },
+            ]}
+            onChange={(e) => setFormData({ ...formData, currencyOriginal: e.target.value })}
+          />
+        </div>
+
+        {formData.modeOfTransport === 'PLANE' && (
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Flight Number"
+              value={formData.flightNumber}
+              onChange={(e) => setFormData({ ...formData, flightNumber: e.target.value })}
+              placeholder="e.g., KL1234"
+            />
+            <Input
+              label="Booking Reference"
+              value={formData.bookingReference}
+              onChange={(e) => setFormData({ ...formData, bookingReference: e.target.value })}
+              placeholder="e.g., ABC123"
+            />
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" loading={uploadAndCreateMutation.isPending}>
+            Add Travel Item
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Boarding Pass Upload Modal
+function BoardingPassUploadModal({
+  isOpen,
+  onClose,
+  token,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  token: string;
+}) {
+  const queryClient = useQueryClient();
+  const [uploading, setUploading] = useState(false);
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    try {
+      await participantApi.uploadDocument(token, file);
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      toast.success('Boarding pass uploaded');
+      onClose();
+    } catch {
+      toast.error('Failed to upload boarding pass');
+    }
+    setUploading(false);
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Upload Boarding Pass">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          Please upload your boarding pass. This can be a screenshot, photo, or PDF of your boarding pass.
+        </p>
+
+        <div className="border-2 border-dashed border-gray-200 rounded-xl p-8">
+          {uploading ? (
+            <div className="text-center">
+              <Loader2 className="w-8 h-8 text-primary-500 animate-spin mx-auto mb-2" />
+              <p className="text-sm text-gray-600">Uploading...</p>
+            </div>
+          ) : (
+            <label className="cursor-pointer flex flex-col items-center">
+              <Ticket className="w-12 h-12 text-gray-400 mb-3" />
+              <span className="text-gray-700 font-medium">Click to upload boarding pass</span>
+              <span className="text-sm text-gray-500 mt-1">PDF, JPG, PNG up to 10MB</span>
+              <input
+                type="file"
+                className="hidden"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleUpload(file);
+                }}
+              />
+            </label>
+          )}
+        </div>
+
+        <div className="flex justify-end">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -630,8 +1294,8 @@ function Step3Confirm({
   });
 
   const createDeclarationMutation = useMutation({
-    mutationFn: (data: { missingDocumentType: DocumentType; description: string; reason: string; place: string }) =>
-      participantApi.createDeclaration(token, data),
+    mutationFn: (decData: { missingDocumentType: DocumentType; description: string; reason: string; place: string }) =>
+      participantApi.createDeclaration(token, decData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
       toast.success('Declaration submitted');
@@ -816,7 +1480,7 @@ function Step3Confirm({
         documentType={selectedMissingDoc}
         participantName={`${data.participant.firstName} ${data.participant.lastName}`}
         projectName={data.project.name}
-        onSubmit={(data) => createDeclarationMutation.mutate(data)}
+        onSubmit={(decData) => createDeclarationMutation.mutate(decData)}
         isLoading={createDeclarationMutation.isPending}
       />
     </>

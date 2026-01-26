@@ -281,6 +281,87 @@ router.delete('/documents/:id', participantAuth, ensureOwnParticipant, asyncHand
   res.json({ success: true });
 }));
 
+const createTravelItemSchema = z.object({
+  modeOfTransport: z.nativeEnum(TransportMode),
+  fromLocation: z.string().min(1, 'From location is required'),
+  toLocation: z.string().min(1, 'To location is required'),
+  departureDate: z.string().transform((s) => new Date(s)),
+  arrivalDate: z.string().transform((s) => new Date(s)).nullable().optional(),
+  bookingReference: z.string().nullable().optional(),
+  flightNumber: z.string().nullable().optional(),
+  amountOriginal: z.number(),
+  currencyOriginal: z.string().default('EUR'),
+  purchaseDate: z.string().transform((s) => new Date(s)).nullable().optional(),
+  amountEur: z.number().optional(),
+  documentId: z.string().uuid().nullable().optional(),
+});
+
+/**
+ * POST /api/participant/travel-items
+ * Create a travel item manually
+ */
+router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot add travel items after approval');
+  }
+
+  const result = createTravelItemSchema.safeParse(req.body);
+
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const aiService = getAiService();
+
+  // Convert currency to EUR if not already
+  let amountEur = result.data.amountEur;
+  if (!amountEur && result.data.amountOriginal && result.data.currencyOriginal) {
+    amountEur = await aiService.convertToEur(
+      result.data.amountOriginal,
+      result.data.currencyOriginal,
+      result.data.purchaseDate || undefined
+    );
+  }
+
+  // If documentId is provided, verify it belongs to this participant
+  if (result.data.documentId) {
+    const doc = await prisma.document.findFirst({
+      where: {
+        id: result.data.documentId,
+        participantId: participant.id,
+      },
+    });
+    if (!doc) {
+      throw new NotFoundError('Document not found');
+    }
+  }
+
+  const travelItem = await prisma.travelItem.create({
+    data: {
+      participantId: participant.id,
+      documentId: result.data.documentId || null,
+      modeOfTransport: result.data.modeOfTransport,
+      fromLocation: result.data.fromLocation,
+      toLocation: result.data.toLocation,
+      departureDate: result.data.departureDate,
+      arrivalDate: result.data.arrivalDate || null,
+      bookingReference: result.data.bookingReference || null,
+      flightNumber: result.data.flightNumber || null,
+      amountOriginal: result.data.amountOriginal,
+      currencyOriginal: result.data.currencyOriginal,
+      purchaseDate: result.data.purchaseDate || null,
+      amountEur: amountEur || result.data.amountOriginal,
+    },
+  });
+
+  // Recalculate summary
+  await aiService.recalculateParticipantSummary(participant.id);
+
+  res.status(201).json(travelItem);
+}));
+
 /**
  * PATCH /api/participant/travel-items/:id
  * Update a travel item

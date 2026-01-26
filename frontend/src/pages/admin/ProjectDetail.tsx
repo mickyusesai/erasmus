@@ -13,6 +13,9 @@ import {
   FileText,
   Plus,
   X,
+  AlertTriangle,
+  CheckCircle,
+  Clock,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -231,6 +234,28 @@ function OverviewTab({ project, participants }: { project: any; participants: Pa
   );
 }
 
+// Helper to determine participant warning status
+function getParticipantWarnings(participant: Participant): { hasWarning: boolean; message: string } {
+  // Check if AI check failed
+  if (participant.reimbursementSummary && !participant.reimbursementSummary.aiCheckOk) {
+    return { hasWarning: true, message: 'Missing documents or data issues' };
+  }
+
+  // Check if status is still draft and no documents
+  if (participant.status === 'DRAFT') {
+    if (!participant.reimbursementSummary || participant.reimbursementSummary.totalEur === 0) {
+      return { hasWarning: true, message: 'No travel data submitted' };
+    }
+  }
+
+  // Check if participant marked complete but AI check failed
+  if (participant.status === 'PARTICIPANT_COMPLETE' && participant.reimbursementSummary && !participant.reimbursementSummary.aiCheckOk) {
+    return { hasWarning: true, message: 'Review needed - validation issues' };
+  }
+
+  return { hasWarning: false, message: '' };
+}
+
 function ParticipantsTab({ projectId, participants }: { projectId: string; participants: Participant[] }) {
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -300,58 +325,81 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Country</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-center">Check</th>
                   <th className="px-4 py-3">Amount</th>
                   <th className="px-4 py-3">Last Email</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {participants.map((participant) => (
-                  <tr key={participant.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(participant.id)}
-                        onChange={() => toggleSelect(participant.id)}
-                        className="rounded border-gray-300"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        to={`/admin/participants/${participant.id}`}
-                        className="font-medium text-gray-900 hover:text-primary-600"
-                      >
-                        {participant.firstName} {participant.lastName}
-                      </Link>
-                      <p className="text-sm text-gray-500">{participant.email}</p>
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{participant.country}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={participant.status} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {participant.reimbursementSummary
-                        ? new Intl.NumberFormat('de-DE', {
-                            style: 'currency',
-                            currency: 'EUR',
-                          }).format(participant.reimbursementSummary.amountToReimburse)
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">
-                      {participant.lastMagicLinkSentAt
-                        ? new Date(participant.lastMagicLinkSentAt).toLocaleDateString()
-                        : 'Never'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        to={`/admin/participants/${participant.id}`}
-                        className="text-primary-600 hover:text-primary-700 text-sm font-medium"
-                      >
-                        View
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                {participants.map((participant) => {
+                  const warnings = getParticipantWarnings(participant);
+                  return (
+                    <tr key={participant.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(participant.id)}
+                          onChange={() => toggleSelect(participant.id)}
+                          className="rounded border-gray-300"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Link
+                          to={`/admin/participants/${participant.id}`}
+                          className="font-medium text-gray-900 hover:text-primary-600"
+                        >
+                          {participant.firstName} {participant.lastName}
+                        </Link>
+                        <p className="text-sm text-gray-500">{participant.email}</p>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">{participant.country}</td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={participant.status} />
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {participant.status === 'PAID' || participant.status === 'ADMIN_APPROVED' ? (
+                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100">
+                            <CheckCircle className="w-4 h-4 text-emerald-600" />
+                          </div>
+                        ) : participant.status === 'DRAFT' && (!participant.reimbursementSummary || participant.reimbursementSummary.totalEur === 0) ? (
+                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100" title="Waiting for submission">
+                            <Clock className="w-4 h-4 text-gray-400" />
+                          </div>
+                        ) : warnings.hasWarning ? (
+                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100" title={warnings.message}>
+                            <AlertTriangle className="w-4 h-4 text-amber-600" />
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100" title="All checks passed">
+                            <CheckCircle className="w-4 h-4 text-emerald-600" />
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {participant.reimbursementSummary
+                          ? new Intl.NumberFormat('de-DE', {
+                              style: 'currency',
+                              currency: 'EUR',
+                            }).format(participant.reimbursementSummary.amountToReimburse)
+                          : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {participant.lastMagicLinkSentAt
+                          ? new Date(participant.lastMagicLinkSentAt).toLocaleDateString()
+                          : 'Never'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Link
+                          to={`/admin/participants/${participant.id}`}
+                          className="text-primary-600 hover:text-primary-700 text-sm font-medium"
+                        >
+                          View
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

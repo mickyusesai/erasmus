@@ -317,6 +317,15 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  createTravelItem: async (token: string, data: CreateTravelItemData & { documentId?: string }) => {
+    const res = await fetch(`${API_BASE}/participant/travel-items?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
   updateBankDetails: async (token: string, data: BankDetails) => {
     const res = await fetch(`${API_BASE}/participant/bank-details?token=${token}`, {
       method: 'PATCH',
