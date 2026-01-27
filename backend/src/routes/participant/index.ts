@@ -420,10 +420,26 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
     throw new NotFoundError('Travel item not found');
   }
 
+  // Check if amount is being changed (participant manually editing AI value)
+  const isAmountChange = result.data.amountOriginal !== undefined &&
+    result.data.amountOriginal !== current.amountOriginal;
+
+  // Prepare update data
+  const updateData: Record<string, unknown> = { ...result.data };
+
+  // If amount is being changed, mark as manually edited
+  if (isAmountChange) {
+    updateData.manuallyEdited = true;
+    // Store original AI amount if not already set
+    if (!current.originalAmountFromAi) {
+      updateData.originalAmountFromAi = current.amountOriginal;
+    }
+  }
+
   // Update
   const travelItem = await prisma.travelItem.update({
     where: { id: req.params.id },
-    data: result.data,
+    data: updateData,
   });
 
   // Create change log entries
@@ -440,6 +456,20 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
         },
       });
     }
+  }
+
+  // If amount was changed from AI value, add a specific warning log
+  if (isAmountChange) {
+    const originalAmount = current.originalAmountFromAi || current.amountOriginal;
+    await prisma.changeLogEntry.create({
+      data: {
+        participantId: participant.id,
+        userType: 'PARTICIPANT',
+        fieldName: 'travelItem.manualPriceChange',
+        previousValue: `AI detected: ${originalAmount} ${current.currencyOriginal}`,
+        newValue: `Changed to: ${result.data.amountOriginal} ${current.currencyOriginal}`,
+      },
+    });
   }
 
   // Recalculate summary
