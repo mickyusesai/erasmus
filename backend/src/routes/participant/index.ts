@@ -10,6 +10,7 @@ import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
 import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 
 // Initialize the consolidation service
 const consolidationService = new JourneyConsolidationService();
@@ -419,10 +420,26 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
     throw new NotFoundError('Travel item not found');
   }
 
+  // Check if amount is being changed (participant manually editing AI value)
+  const isAmountChange = result.data.amountOriginal !== undefined &&
+    result.data.amountOriginal !== current.amountOriginal;
+
+  // Prepare update data
+  const updateData: Record<string, unknown> = { ...result.data };
+
+  // If amount is being changed, mark as manually edited
+  if (isAmountChange) {
+    updateData.manuallyEdited = true;
+    // Store original AI amount if not already set
+    if (!current.originalAmountFromAi) {
+      updateData.originalAmountFromAi = current.amountOriginal;
+    }
+  }
+
   // Update
   const travelItem = await prisma.travelItem.update({
     where: { id: req.params.id },
-    data: result.data,
+    data: updateData,
   });
 
   // Create change log entries
@@ -439,6 +456,20 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
         },
       });
     }
+  }
+
+  // If amount was changed from AI value, add a specific warning log
+  if (isAmountChange) {
+    const originalAmount = current.originalAmountFromAi || current.amountOriginal;
+    await prisma.changeLogEntry.create({
+      data: {
+        participantId: participant.id,
+        userType: 'PARTICIPANT',
+        fieldName: 'travelItem.manualPriceChange',
+        previousValue: `AI detected: ${originalAmount} ${current.currencyOriginal}`,
+        newValue: `Changed to: ${result.data.amountOriginal} ${current.currencyOriginal}`,
+      },
+    });
   }
 
   // Recalculate summary
@@ -679,6 +710,76 @@ router.get('/validate', participantAuth, asyncHandler(async (req: Request, res: 
   const validation = await aiService.validateReimbursement(participant.id);
 
   res.json(validation);
+}));
+
+/**
+ * GET /api/participant/exchange-rate
+ * Get exchange rate for a specific currency and date
+ * Query params: currency, purchaseDate (ISO string)
+ */
+router.get('/exchange-rate', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { currency, purchaseDate } = req.query;
+
+  if (!currency) {
+    res.status(400).json({ error: 'Currency is required' });
+    return;
+  }
+
+  const currencyCode = (currency as string).toUpperCase();
+
+  if (currencyCode === 'EUR') {
+    res.json({
+      currency: 'EUR',
+      rateToEur: 1,
+      supportedCurrencies: SUPPORTED_CURRENCIES,
+    });
+    return;
+  }
+
+  const date = purchaseDate ? new Date(purchaseDate as string) : new Date();
+
+  if (isNaN(date.getTime())) {
+    res.status(400).json({ error: 'Invalid date format' });
+    return;
+  }
+
+  const rate = await getExchangeRate(currencyCode, date);
+
+  res.json({
+    currency: currencyCode,
+    rateToEur: rate,
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+    supportedCurrencies: SUPPORTED_CURRENCIES,
+  });
+}));
+
+/**
+ * POST /api/participant/convert-currency
+ * Convert amount from a currency to EUR using InforEuro rates
+ * Body: { amount, currency, purchaseDate }
+ */
+router.post('/convert-currency', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { amount, currency, purchaseDate } = req.body;
+
+  if (typeof amount !== 'number' || !currency) {
+    res.status(400).json({ error: 'Amount and currency are required' });
+    return;
+  }
+
+  const date = purchaseDate ? new Date(purchaseDate) : new Date();
+  const eurAmount = await convertToEur(amount, currency, date);
+  const rate = await getExchangeRate(currency, date);
+
+  res.json({
+    originalAmount: amount,
+    originalCurrency: currency.toUpperCase(),
+    eurAmount,
+    rateToEur: rate,
+    purchaseDate: date.toISOString(),
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+  });
 }));
 
 export default router;

@@ -178,6 +178,70 @@ router.patch('/:id', async (req: Request, res: Response) => {
   res.json(participant);
 });
 
+// Validation schema for creating a single participant
+const createParticipantSchema = z.object({
+  projectId: z.string().uuid('Invalid project ID'),
+  firstName: z.string().min(1, 'First name is required'),
+  lastName: z.string().min(1, 'Last name is required'),
+  email: z.string().email('Invalid email'),
+  country: z.string().min(1, 'Country is required'),
+});
+
+/**
+ * POST /api/admin/participants
+ * Create a single participant
+ */
+router.post('/', async (req: Request, res: Response) => {
+  const result = createParticipantSchema.safeParse(req.body);
+
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const { projectId, firstName, lastName, email, country } = result.data;
+
+  // Verify project exists
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+  });
+
+  if (!project) {
+    throw new NotFoundError('Project not found');
+  }
+
+  // Check if participant with same email already exists in this project
+  const existing = await prisma.participant.findFirst({
+    where: {
+      projectId,
+      email,
+    },
+  });
+
+  if (existing) {
+    throw new ValidationError('A participant with this email already exists in this project');
+  }
+
+  // Create participant
+  const participant = await prisma.participant.create({
+    data: {
+      projectId,
+      firstName,
+      lastName,
+      email,
+      country,
+      magicLinkToken: uuidv4(),
+    },
+    include: {
+      project: {
+        select: { name: true, country: true },
+      },
+      reimbursementSummary: true,
+    },
+  });
+
+  res.status(201).json(participant);
+});
+
 /**
  * POST /api/admin/participants/import
  * Import participants from CSV

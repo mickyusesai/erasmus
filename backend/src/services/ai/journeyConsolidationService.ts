@@ -469,14 +469,43 @@ Respond with ONLY a JSON object:
       const result = JSON.parse(jsonMatch[0]);
       console.log(`[Consolidation] Journey: ${result.journey_summary}`);
 
-      // Delete existing travel items (we'll recreate them)
+      // Get existing travel items that have been manually edited
+      const existingItems = participant.travelItems || [];
+      const manuallyEditedItems = existingItems.filter(item => item.manuallyEdited);
+      const manuallyEditedSignatures = manuallyEditedItems.map(item => ({
+        id: item.id,
+        signature: `${item.fromLocation.toLowerCase()}-${item.toLocation.toLowerCase()}-${item.departureDate.toISOString().split('T')[0]}`,
+        item,
+      }));
+
+      console.log(`[Consolidation] Found ${manuallyEditedItems.length} manually edited items to preserve`);
+
+      // Delete only non-manually-edited travel items (preserve manual edits)
       await prisma.travelItem.deleteMany({
-        where: { participantId },
+        where: {
+          participantId,
+          manuallyEdited: false,
+        },
       });
 
       // Create new travel items based on consolidation
       const createdItems = [];
       for (const item of result.travel_items || []) {
+        // Check if this matches a manually edited item (same route and date)
+        const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
+        const existingMatch = manuallyEditedSignatures.find(
+          me => me.signature === itemSignature ||
+            // Fuzzy match: same locations but possibly different date format
+            (me.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
+             me.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
+        );
+
+        if (existingMatch) {
+          // Skip creating this item - we're preserving the manually edited version
+          console.log(`[Consolidation] Preserving manually edited item: ${itemSignature}`);
+          createdItems.push(existingMatch.item);
+          continue;
+        }
         // Find a valid document to link - only use IDs that actually exist
         const linkedDocs = (item.linkedDocumentIds || []) as string[];
         const validLinkedDoc = linkedDocs.find((docId: string) => validDocumentIds.has(docId));
@@ -519,6 +548,8 @@ Respond with ONLY a JSON object:
             purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
             amountEur,
             comment: item.notes || null,
+            manuallyEdited: false,
+            originalAmountFromAi: item.amount || 0, // Store AI-detected amount for comparison
           },
         });
 

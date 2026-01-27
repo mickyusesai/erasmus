@@ -18,18 +18,20 @@ model Organisation {
 
 // Project - an Erasmus+ youth project
 model Project {
-  id             String               @id @default(uuid())
-  organisationId String
-  organisation   Organisation         @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  name           String
-  description    String?
-  country        String
-  startDate      DateTime
-  endDate        DateTime
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
-  countryLimits  ProjectCountryLimit[]
-  participants   Participant[]
+  id                       String                  @id @default(uuid())
+  organisationId           String
+  organisation             Organisation            @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  name                     String
+  description              String?
+  country                  String
+  startDate                DateTime
+  endDate                  DateTime
+  disseminationEnabled     Boolean                 @default(false)  // Whether dissemination page is shown to participants
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+  countryLimits            ProjectCountryLimit[]
+  participants             Participant[]
+  disseminationActivities  DisseminationActivity[]
 }
 
 // Maximum reimbursement amounts per sending country for a project
@@ -47,30 +49,33 @@ model ProjectCountryLimit {
 
 // Participant - a young person who traveled to the project
 model Participant {
-  id                    String                @id @default(uuid())
-  projectId             String
-  project               Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  firstName             String
-  lastName              String
-  email                 String
-  country               String
-  magicLinkToken        String                @unique
-  magicLinkActive       Boolean               @default(true)
-  status                ParticipantStatus     @default(DRAFT)
-  bankAccountIban       String?
-  bankAccountHolderName String?
-  bankAccountBic        String?
-  notesInternal         String?
-  participantNote       String?               // Note from participant explaining travel situations (e.g., missed bus, lost ticket)
-  lastMagicLinkSentAt   DateTime?
-  journeyConsolidatedAt DateTime?             // When the AI last consolidated all documents
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
-  documents             Document[]
-  travelItems           TravelItem[]
-  reimbursementSummary  ReimbursementSummary?
-  changeLogEntries      ChangeLogEntry[]
-  declarationsOnHonor   DeclarationOnHonor[]
+  id                        String                  @id @default(uuid())
+  projectId                 String
+  project                   Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  firstName                 String
+  lastName                  String
+  email                     String
+  country                   String
+  magicLinkToken            String                  @unique
+  magicLinkActive           Boolean                 @default(true)
+  status                    ParticipantStatus       @default(DRAFT)
+  bankAccountIban           String?
+  bankAccountHolderName     String?
+  bankAccountBic            String?
+  notesInternal             String?
+  participantNote           String?                 // Note from participant explaining travel situations (e.g., missed bus, lost ticket)
+  lastMagicLinkSentAt       DateTime?
+  journeyConsolidatedAt     DateTime?               // When the AI last consolidated all documents
+  createdAt                 DateTime                @default(now())
+  updatedAt                 DateTime                @updatedAt
+  documents                 Document[]
+  travelItems               TravelItem[]
+  reimbursementSummary      ReimbursementSummary?
+  changeLogEntries          ChangeLogEntry[]
+  declarationsOnHonor       DeclarationOnHonor[]
+  createdDisseminations     DisseminationActivity[] @relation("CreatedActivities")
+  socialMediaPosts          SocialMediaPost[]
+  declarationsOfTravel      DeclarationOfTravel[]
 }
 
 enum ParticipantStatus {
@@ -157,25 +162,28 @@ enum DocumentType {
 
 // TravelItem - a travel segment extracted from documents
 model TravelItem {
-  id                String          @id @default(uuid())
-  participantId     String
-  participant       Participant     @relation(fields: [participantId], references: [id], onDelete: Cascade)
-  documentId        String?
-  document          Document?       @relation(fields: [documentId], references: [id], onDelete: SetNull)
-  modeOfTransport   TransportMode
-  fromLocation      String
-  toLocation        String
-  departureDate     DateTime
-  arrivalDate       DateTime?
-  bookingReference  String?
-  flightNumber      String?
-  amountOriginal    Float
-  currencyOriginal  String          @default("EUR")
-  purchaseDate      DateTime?
-  amountEur         Float
-  comment           String?
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  id                    String                @id @default(uuid())
+  participantId         String
+  participant           Participant           @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  documentId            String?
+  document              Document?             @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  modeOfTransport       TransportMode
+  fromLocation          String
+  toLocation            String
+  departureDate         DateTime
+  arrivalDate           DateTime?
+  bookingReference      String?
+  flightNumber          String?
+  amountOriginal        Float
+  currencyOriginal      String                @default("EUR")
+  purchaseDate          DateTime?
+  amountEur             Float
+  comment               String?
+  manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
+  originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  declarationsOfTravel  DeclarationOfTravel[]
 }
 
 enum TransportMode {
@@ -232,4 +240,96 @@ model DeclarationOnHonor {
   place               String
   declarationDate     DateTime    @default(now())
   createdAt           DateTime    @default(now())
+}
+
+// ExchangeRate - cached InforEuro exchange rates
+model ExchangeRate {
+  id            String   @id @default(uuid())
+  currencyCode  String   // e.g., "PLN", "CZK", "HUF"
+  year          Int      // Year of the rate
+  month         Int      // Month of the rate (1-12)
+  rateToEur     Float    // Rate: 1 unit of currency = X EUR
+  fetchedAt     DateTime @default(now())
+
+  @@unique([currencyCode, year, month])
+  @@index([currencyCode])
+}
+
+// Dissemination Activity - shared per country
+model DisseminationActivity {
+  id            String   @id @default(uuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  country       String   // Country this activity belongs to
+  title         String
+  description   String
+  activityDate  DateTime?
+  createdById   String   // Participant who created this
+  createdBy     Participant @relation("CreatedActivities", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  photos        DisseminationPhoto[]
+
+  @@index([projectId, country])
+}
+
+// Dissemination Photo
+model DisseminationPhoto {
+  id                      String                @id @default(uuid())
+  disseminationActivityId String
+  disseminationActivity   DisseminationActivity @relation(fields: [disseminationActivityId], references: [id], onDelete: Cascade)
+  storedFilePath          String
+  originalFilename        String
+  mimeType                String
+  fileSize                Int
+  uploadedAt              DateTime              @default(now())
+}
+
+// Social Media Post Screenshot - individual per participant
+model SocialMediaPost {
+  id               String      @id @default(uuid())
+  participantId    String
+  participant      Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  storedFilePath   String
+  originalFilename String
+  mimeType         String
+  fileSize         Int
+  description      String?
+  uploadedAt       DateTime    @default(now())
+}
+
+// Declaration of Travel - for missing boarding passes with signature
+model DeclarationOfTravel {
+  id                      String      @id @default(uuid())
+  participantId           String
+  participant             Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  travelItemId            String?
+  travelItem              TravelItem? @relation(fields: [travelItemId], references: [id], onDelete: SetNull)
+
+  // Travel details
+  name                    String
+  modeOfTransport         TransportMode
+  fromPlace               String
+  toPlace                 String
+  travelDate              DateTime
+  flightNumber            String?
+  bookingReference        String?
+
+  // Personal details
+  dateOfBirth             DateTime
+  idNumber                String
+
+  // Sending organisation
+  sendingOrgName          String
+  sendingOrgOid           String?
+  sendingOrgAddress       String
+
+  // Signature
+  signatureDataUrl        String      // Base64 encoded signature image
+  signedAt                DateTime    @default(now())
+
+  // Generated PDF
+  generatedPdfPath        String?
+
+  createdAt               DateTime    @default(now())
 }

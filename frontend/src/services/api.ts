@@ -117,13 +117,25 @@ export const adminApi = {
     return handleResponse<string[]>(res);
   },
 
-  autoPopulateCountryLimits: async (projectId: string, defaultAmount: number = 275) => {
+  autoPopulateCountryLimits: async (projectId: string, defaultAmount: number = 0) => {
     const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits/auto-populate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ defaultAmount }),
     });
     return handleResponse<{ message: string; created: CountryLimit[]; totalCountries: number }>(res);
+  },
+
+  checkMissingCountryLimits: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits/check-missing`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{
+      hasMissingCountries: boolean;
+      missingCountries: string[];
+      totalParticipantCountries: number;
+      totalExistingLimits: number;
+    }>(res);
   },
 
   deleteCountryLimit: async (projectId: string, country: string) => {
@@ -144,6 +156,21 @@ export const adminApi = {
       headers: getAuthHeaders(),
     });
     return handleResponse<Participant[]>(res);
+  },
+
+  createParticipant: async (data: {
+    projectId: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    country: string;
+  }) => {
+    const res = await fetch(`${API_BASE}/admin/participants`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<Participant>(res);
   },
 
   getParticipant: async (id: string) => {
@@ -397,6 +424,29 @@ export const participantApi = {
       method: 'POST',
     });
     return handleResponse<ConsolidationResult>(res);
+  },
+
+  /**
+   * Get exchange rate for a currency at a specific purchase date
+   */
+  getExchangeRate: async (token: string, currency: string, purchaseDate?: string) => {
+    const params = new URLSearchParams({ currency });
+    if (purchaseDate) params.set('purchaseDate', purchaseDate);
+
+    const res = await fetch(`${API_BASE}/participant/exchange-rate?token=${token}&${params}`);
+    return handleResponse<ExchangeRateResponse>(res);
+  },
+
+  /**
+   * Convert amount from a currency to EUR using InforEuro rates
+   */
+  convertCurrency: async (token: string, amount: number, currency: string, purchaseDate?: string) => {
+    const res = await fetch(`${API_BASE}/participant/convert-currency?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, currency, purchaseDate }),
+    });
+    return handleResponse<CurrencyConversionResponse>(res);
   },
 };
 
@@ -698,4 +748,22 @@ export interface DocumentUploadResponse {
     confidence: number;
     warnings: string[];
   };
+}
+
+export interface ExchangeRateResponse {
+  currency: string;
+  rateToEur: number;
+  year?: number;
+  month?: number;
+  supportedCurrencies: string[];
+}
+
+export interface CurrencyConversionResponse {
+  originalAmount: number;
+  originalCurrency: string;
+  eurAmount: number;
+  rateToEur: number;
+  purchaseDate: string;
+  year: number;
+  month: number;
 }

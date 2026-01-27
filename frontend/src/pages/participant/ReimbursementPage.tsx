@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -79,6 +79,122 @@ const transportOptions = [
   { value: 'OTHER', label: 'Other' },
 ];
 
+// Inspiring quotes from Erasmus of Rotterdam for the loading screen
+const erasmusQuotes = [
+  { quote: "The desire to write grows with writing.", author: "Erasmus of Rotterdam" },
+  { quote: "In the land of the blind, the one-eyed man is king.", author: "Erasmus of Rotterdam" },
+  { quote: "Give light, and the darkness will disappear of itself.", author: "Erasmus of Rotterdam" },
+  { quote: "When I get a little money I buy books; and if any is left I buy food and clothes.", author: "Erasmus of Rotterdam" },
+  { quote: "It is the chiefest point of happiness that a man is willing to be what he is.", author: "Erasmus of Rotterdam" },
+  { quote: "The more ignorant, the more bold.", author: "Erasmus of Rotterdam" },
+  { quote: "Prevention is better than cure.", author: "Erasmus of Rotterdam" },
+  { quote: "Fortune favors the audacious.", author: "Erasmus of Rotterdam" },
+  { quote: "A good portion of speaking will consist in knowing how to lie.", author: "Erasmus of Rotterdam" },
+  { quote: "Man's mind is so formed that it is far more susceptible to falsehood than to truth.", author: "Erasmus of Rotterdam" },
+  { quote: "By a Carpenter mankind was made, and only by that Carpenter can mankind be remade.", author: "Erasmus of Rotterdam" },
+  { quote: "No one is injured save by himself.", author: "Erasmus of Rotterdam" },
+  { quote: "Your library is your paradise.", author: "Erasmus of Rotterdam" },
+  { quote: "Time takes away the grief of men.", author: "Erasmus of Rotterdam" },
+  { quote: "Whether a party can have much success without a woman present I must ask others to decide.", author: "Erasmus of Rotterdam" },
+];
+
+// Loading screen component with rotating Erasmus quotes
+function ConsolidationLoading() {
+  const [quoteIndex, setQuoteIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setQuoteIndex((prev) => (prev + 1) % erasmusQuotes.length);
+    }, 4000); // Change quote every 4 seconds
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const currentQuote = erasmusQuotes[quoteIndex];
+
+  return (
+    <div className="fixed inset-0 bg-white/95 backdrop-blur-sm z-50 flex items-center justify-center">
+      <div className="max-w-lg mx-auto text-center px-6">
+        {/* Loading spinner */}
+        <div className="relative w-20 h-20 mx-auto mb-8">
+          <div className="absolute inset-0 border-4 border-primary-100 rounded-full" />
+          <div className="absolute inset-0 border-4 border-primary-600 rounded-full border-t-transparent animate-spin" />
+          <FileText className="absolute inset-0 m-auto w-8 h-8 text-primary-600" />
+        </div>
+
+        {/* Loading message */}
+        <h3 className="text-xl font-semibold text-gray-900 mb-2">
+          Analyzing your documents...
+        </h3>
+        <p className="text-gray-500 mb-8">
+          We're extracting travel information from your documents. This may take a moment.
+        </p>
+
+        {/* Erasmus quote */}
+        <div className="bg-gradient-to-br from-primary-50 to-blue-50 rounded-2xl p-6 border border-primary-100">
+          <p className="text-lg italic text-gray-700 mb-3">
+            "{currentQuote.quote}"
+          </p>
+          <p className="text-sm text-primary-600 font-medium">
+            — {currentQuote.author}
+          </p>
+        </div>
+
+        {/* Progress hint */}
+        <p className="text-xs text-gray-400 mt-6">
+          Please don't close this page while we process your documents
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Supported currencies from InforEuro
+const currencyOptions = [
+  { value: 'EUR', label: 'EUR - Euro' },
+  { value: 'PLN', label: 'PLN - Polish Zloty' },
+  { value: 'CZK', label: 'CZK - Czech Koruna' },
+  { value: 'HUF', label: 'HUF - Hungarian Forint' },
+  { value: 'RON', label: 'RON - Romanian Leu' },
+  { value: 'BGN', label: 'BGN - Bulgarian Lev' },
+  { value: 'SEK', label: 'SEK - Swedish Krona' },
+  { value: 'DKK', label: 'DKK - Danish Krone' },
+  { value: 'NOK', label: 'NOK - Norwegian Krone' },
+  { value: 'GBP', label: 'GBP - British Pound' },
+  { value: 'USD', label: 'USD - US Dollar' },
+  { value: 'CHF', label: 'CHF - Swiss Franc' },
+  { value: 'TRY', label: 'TRY - Turkish Lira' },
+  { value: 'UAH', label: 'UAH - Ukrainian Hryvnia' },
+  { value: 'RSD', label: 'RSD - Serbian Dinar' },
+  { value: 'MKD', label: 'MKD - Macedonian Denar' },
+  { value: 'ALL', label: 'ALL - Albanian Lek' },
+  { value: 'BAM', label: 'BAM - Bosnian Mark' },
+  { value: 'GEL', label: 'GEL - Georgian Lari' },
+  { value: 'MDL', label: 'MDL - Moldovan Leu' },
+  { value: 'ISK', label: 'ISK - Icelandic Krona' },
+];
+
+// Subtle icon colors (without background circles)
+const transportIconColors: Record<TransportMode, string> = {
+  PLANE: 'text-blue-600',
+  TRAIN: 'text-emerald-600',
+  BUS: 'text-amber-600',
+  CAR: 'text-purple-600',
+  FERRY: 'text-cyan-600',
+  OTHER: 'text-gray-500',
+};
+
+// Background colors for the container (subtle)
+const transportBgColors: Record<TransportMode, string> = {
+  PLANE: 'bg-blue-50 border-blue-200',
+  TRAIN: 'bg-emerald-50 border-emerald-200',
+  BUS: 'bg-amber-50 border-amber-200',
+  CAR: 'bg-purple-50 border-purple-200',
+  FERRY: 'bg-cyan-50 border-cyan-200',
+  OTHER: 'bg-gray-50 border-gray-200',
+};
+
+// Legacy colors for backwards compatibility (can be removed later)
 const transportColors: Record<TransportMode, string> = {
   PLANE: 'bg-blue-500',
   TRAIN: 'bg-green-500',
@@ -374,9 +490,13 @@ function Step1Upload({
   const isGreenTravel = data.greenTravel || false;
 
   return (
-    <Card>
-      <CardHeader>
-        <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
+    <>
+      {/* Show loading screen with Erasmus quotes during consolidation */}
+      {consolidating && <ConsolidationLoading />}
+
+      <Card>
+        <CardHeader>
+          <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
         <p className="text-gray-500 mt-1">
           {isGreenTravel ? (
             <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). We'll automatically extract the information.</>
@@ -493,7 +613,16 @@ function Step1Upload({
         </div>
       </CardContent>
     </Card>
+    </>
   );
+}
+
+// Warning type for the persistent warnings system
+interface PersistentWarning {
+  id: string;
+  type: 'error' | 'warning' | 'info';
+  message: string;
+  dismissible: boolean;
 }
 
 function Step2CheckData({
@@ -513,6 +642,7 @@ function Step2CheckData({
   const [participantNote, setParticipantNote] = useState(data.participant.participantNote || '');
   const [noteEdited, setNoteEdited] = useState(false);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
+  const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
 
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
@@ -539,51 +669,170 @@ function Step2CheckData({
     },
   });
 
-  // Generate warnings based on data analysis
-  const warnings = useMemo(() => {
-    const w: string[] = [];
-
-    // Check for name mismatches (would need extracted name from OCR)
-    // This is a placeholder - in reality, the backend would extract passenger names
+  // Generate persistent warnings based on data analysis
+  const warnings = useMemo((): PersistentWarning[] => {
+    const w: PersistentWarning[] = [];
+    const participantCountry = data.participant.country?.toLowerCase();
 
     // Check for missing boarding passes for flights
     const hasFlights = data.travelItems.some(t => t.modeOfTransport === 'PLANE');
     const hasBoardingPass = data.documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
     if (hasFlights && !hasBoardingPass) {
-      w.push('You have flight travel items but no boarding pass uploaded. Please upload your boarding pass(es) or add a declaration.');
+      w.push({
+        id: 'missing-boarding-pass',
+        type: 'warning',
+        message: 'You have flight travel items but no boarding pass uploaded. Please upload your boarding pass(es) or add a declaration.',
+        dismissible: true,
+      });
     }
 
     // Check for travel items without documents
     const itemsWithoutDocs = data.travelItems.filter(t => !t.documentId);
     if (itemsWithoutDocs.length > 0) {
-      w.push(`${itemsWithoutDocs.length} travel item(s) don't have a corresponding document. Please upload supporting documents.`);
+      w.push({
+        id: 'items-without-docs',
+        type: 'warning',
+        message: `${itemsWithoutDocs.length} travel item(s) don't have a corresponding document. Please upload supporting documents.`,
+        dismissible: true,
+      });
+    }
+
+    // Check if participant traveled from their registered country
+    if (participantCountry && data.travelItems.length > 0) {
+      // Find the first outbound travel item (earliest departure)
+      const sortedItems = [...data.travelItems].sort(
+        (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+      );
+      const firstTravelItem = sortedItems[0];
+
+      if (firstTravelItem) {
+        const originLocation = firstTravelItem.fromLocation?.toLowerCase() || '';
+        // Check if the origin doesn't match the participant's country
+        const countryDoesNotMatch = !originLocation.includes(participantCountry) &&
+          !participantCountry.includes(originLocation.split(',')[0]?.trim() || '');
+
+        // List of common city-to-country mappings for better matching
+        const cityCountryMap: Record<string, string[]> = {
+          'poland': ['warsaw', 'krakow', 'poznan', 'gdansk', 'wroclaw', 'lodz', 'katowice'],
+          'germany': ['berlin', 'munich', 'frankfurt', 'hamburg', 'cologne', 'dusseldorf', 'stuttgart'],
+          'spain': ['madrid', 'barcelona', 'valencia', 'seville', 'malaga', 'bilbao'],
+          'italy': ['rome', 'milan', 'naples', 'turin', 'florence', 'venice', 'bologna'],
+          'france': ['paris', 'lyon', 'marseille', 'toulouse', 'nice', 'bordeaux'],
+          'netherlands': ['amsterdam', 'rotterdam', 'the hague', 'utrecht', 'eindhoven'],
+          'czech republic': ['prague', 'brno', 'ostrava', 'plzen'],
+          'czechia': ['prague', 'brno', 'ostrava', 'plzen'],
+          'hungary': ['budapest', 'debrecen', 'szeged', 'miskolc'],
+          'romania': ['bucharest', 'cluj', 'timisoara', 'iasi', 'brasov'],
+          'bulgaria': ['sofia', 'plovdiv', 'varna', 'burgas'],
+          'greece': ['athens', 'thessaloniki', 'patras', 'heraklion'],
+          'portugal': ['lisbon', 'porto', 'faro', 'braga'],
+          'croatia': ['zagreb', 'split', 'dubrovnik', 'rijeka'],
+          'slovenia': ['ljubljana', 'maribor'],
+          'slovakia': ['bratislava', 'kosice'],
+          'austria': ['vienna', 'salzburg', 'graz', 'linz', 'innsbruck'],
+          'belgium': ['brussels', 'antwerp', 'ghent', 'bruges', 'liege'],
+          'sweden': ['stockholm', 'gothenburg', 'malmo', 'uppsala'],
+          'denmark': ['copenhagen', 'aarhus', 'odense'],
+          'finland': ['helsinki', 'tampere', 'turku', 'oulu'],
+          'norway': ['oslo', 'bergen', 'trondheim', 'stavanger'],
+          'ireland': ['dublin', 'cork', 'galway', 'limerick'],
+          'uk': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
+          'united kingdom': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
+        };
+
+        // Check if origin city matches participant's country
+        const countryKey = Object.keys(cityCountryMap).find(
+          k => participantCountry.includes(k) || k.includes(participantCountry)
+        );
+        const matchingCities = countryKey ? cityCountryMap[countryKey] : [];
+        const originMatchesCountry = matchingCities.some(city => originLocation.includes(city));
+
+        if (countryDoesNotMatch && !originMatchesCountry) {
+          w.push({
+            id: 'country-mismatch',
+            type: 'warning',
+            message: `Your first travel origin (${firstTravelItem.fromLocation}) appears to be different from your registered country (${data.participant.country}). Please verify this is correct.`,
+            dismissible: true,
+          });
+        }
+      }
+    }
+
+    // Check for non-EUR currencies without purchase date
+    const itemsNeedingPurchaseDate = data.travelItems.filter(
+      t => t.currencyOriginal !== 'EUR' && !t.purchaseDate
+    );
+    if (itemsNeedingPurchaseDate.length > 0) {
+      w.push({
+        id: 'missing-purchase-date',
+        type: 'warning',
+        message: `${itemsNeedingPurchaseDate.length} travel item(s) with non-EUR currency need a purchase date for exchange rate conversion.`,
+        dismissible: true,
+      });
     }
 
     return w;
   }, [data]);
 
+  // Filter out dismissed warnings
+  const visibleWarnings = warnings.filter(w => !dismissedWarnings.has(w.id));
+
+  const dismissWarning = (id: string) => {
+    setDismissedWarnings(prev => new Set([...prev, id]));
+  };
+
   return (
     <div className="space-y-6">
-      {/* Warnings Section */}
-      {warnings.length > 0 && (
-        <Card className="border-amber-200 bg-amber-50">
-          <CardContent className="py-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-semibold text-amber-800 mb-2">Attention Required</h3>
-                <ul className="space-y-1">
-                  {warnings.map((warning, i) => (
-                    <li key={i} className="text-sm text-amber-700 flex items-start gap-2">
-                      <span className="text-amber-400 mt-1">•</span>
-                      <span>{warning}</span>
-                    </li>
-                  ))}
-                </ul>
+      {/* Persistent Warnings Section */}
+      {visibleWarnings.length > 0 && (
+        <div className="space-y-3">
+          {visibleWarnings.map((warning) => (
+            <div
+              key={warning.id}
+              className={clsx(
+                'p-4 rounded-xl flex items-start gap-3 border',
+                warning.type === 'error' && 'bg-red-50 border-red-200',
+                warning.type === 'warning' && 'bg-amber-50 border-amber-200',
+                warning.type === 'info' && 'bg-blue-50 border-blue-200'
+              )}
+            >
+              <AlertTriangle
+                className={clsx(
+                  'w-5 h-5 flex-shrink-0 mt-0.5',
+                  warning.type === 'error' && 'text-red-500',
+                  warning.type === 'warning' && 'text-amber-500',
+                  warning.type === 'info' && 'text-blue-500'
+                )}
+              />
+              <div className="flex-1">
+                <p
+                  className={clsx(
+                    'text-sm font-medium',
+                    warning.type === 'error' && 'text-red-800',
+                    warning.type === 'warning' && 'text-amber-800',
+                    warning.type === 'info' && 'text-blue-800'
+                  )}
+                >
+                  {warning.message}
+                </p>
               </div>
+              {warning.dismissible && (
+                <button
+                  onClick={() => dismissWarning(warning.id)}
+                  className={clsx(
+                    'p-1 rounded-full hover:bg-white/50 transition-colors',
+                    warning.type === 'error' && 'text-red-400 hover:text-red-600',
+                    warning.type === 'warning' && 'text-amber-400 hover:text-amber-600',
+                    warning.type === 'info' && 'text-blue-400 hover:text-blue-600'
+                  )}
+                  title="Dismiss"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
-          </CardContent>
-        </Card>
+          ))}
+        </div>
       )}
 
       {/* Journey Visualization */}
@@ -629,6 +878,7 @@ function Step2CheckData({
                   key={item.id}
                   item={item}
                   documents={data.documents}
+                  token={token}
                   onUpdate={(updates) =>
                     updateMutation.mutate({ id: item.id, updates })
                   }
@@ -705,25 +955,29 @@ function Step2CheckData({
             {/* Divider */}
             <div className="border-t border-gray-300 my-4" />
 
-            {/* Total */}
-            <div className="flex justify-between items-end">
-              <div>
-                <p className="text-sm text-gray-500">Total Travel Costs</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0))}
-                </p>
+            {/* Total with max reimbursement inline */}
+            <div className="flex items-baseline justify-between">
+              <div className="flex items-baseline gap-3">
+                <div>
+                  <p className="text-sm text-gray-500">Total Travel Costs</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {formatCurrency(data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0))}
+                  </p>
+                </div>
+                {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
+                  <span className="text-sm text-blue-600 font-medium">
+                    (max: {formatCurrency(data.maxReimbursementForCountry)})
+                  </span>
+                )}
               </div>
-              {data.maxReimbursementForCountry && (
+              {/* Show actual amount to receive if over limit */}
+              {data.maxReimbursementForCountry &&
+               (data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0)) > data.maxReimbursementForCountry && (
                 <div className="text-right">
-                  <p className="text-sm text-gray-500">Maximum for {data.participant.country}</p>
-                  <p className="text-lg font-semibold text-gray-700">
+                  <p className="text-xs text-gray-500">You will receive</p>
+                  <p className="text-lg font-bold text-emerald-600">
                     {formatCurrency(data.maxReimbursementForCountry)}
                   </p>
-                  {(data.reimbursementSummary?.totalEur || 0) > data.maxReimbursementForCountry && (
-                    <p className="text-xs text-amber-600 mt-1">
-                      You will receive: {formatCurrency(data.maxReimbursementForCountry)}
-                    </p>
-                  )}
                 </div>
               )}
             </div>
@@ -810,17 +1064,19 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
         <div className="flex items-center gap-2 flex-wrap">
           {sectionItems.map((item, index) => {
             const Icon = transportIcons[item.modeOfTransport];
-            const color = transportColors[item.modeOfTransport];
+            const iconColor = transportIconColors[item.modeOfTransport];
+            const bgColor = transportBgColors[item.modeOfTransport];
             const isLast = index === sectionItems.length - 1;
 
             return (
               <div key={item.id} className="flex items-center gap-2">
                 <div className="flex flex-col items-center">
+                  {/* Subtle icon container - no heavy colored circle */}
                   <div className={clsx(
-                    'w-10 h-10 rounded-full flex items-center justify-center text-white shadow-md',
-                    color
+                    'w-10 h-10 rounded-xl flex items-center justify-center border transition-all hover:scale-105',
+                    bgColor
                   )}>
-                    <Icon className="w-5 h-5" />
+                    <Icon className={clsx('w-5 h-5', iconColor)} />
                   </div>
                   <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
                     {item.fromLocation}
@@ -828,15 +1084,22 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
                   <p className="text-[10px] text-gray-400">{formatDate(item.departureDate)}</p>
                 </div>
 
+                {/* Connector line with arrow */}
                 <div className="flex flex-col items-center px-1">
-                  <div className="w-8 h-0.5 bg-gray-300" />
+                  <div className="flex items-center">
+                    <div className="w-6 h-0.5 bg-gray-300" />
+                    <div className="w-0 h-0 border-t-[3px] border-t-transparent border-b-[3px] border-b-transparent border-l-[5px] border-l-gray-300" />
+                  </div>
                 </div>
 
                 {isLast && (
                   <div className="flex flex-col items-center">
+                    {/* Destination marker - subtle styling */}
                     <div className={clsx(
-                      'w-10 h-10 rounded-full flex items-center justify-center shadow-md',
-                      isReturn ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-600'
+                      'w-10 h-10 rounded-xl flex items-center justify-center border transition-all',
+                      isReturn
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-600'
+                        : 'bg-gray-50 border-gray-300 text-gray-500'
                     )}>
                       {isReturn ? <CheckCircle className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
                     </div>
@@ -866,6 +1129,7 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
 function TravelItemCard({
   item,
   documents,
+  token,
   onUpdate,
   onDelete,
   onUploadBoardingPass,
@@ -873,6 +1137,7 @@ function TravelItemCard({
 }: {
   item: TravelItem;
   documents: Document[];
+  token: string;
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
   onUploadBoardingPass: () => void;
@@ -882,6 +1147,47 @@ function TravelItemCard({
   const isPlane = item.modeOfTransport === 'PLANE';
   const hasBoardingPass = documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
   const linkedDocument = documents.find(d => d.id === item.documentId);
+  const isNonEurCurrency = item.currencyOriginal !== 'EUR';
+  const [isConverting, setIsConverting] = useState(false);
+  const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
+
+  // Auto-convert when currency, amount, or purchase date changes for non-EUR currencies
+  const handleCurrencyConversion = useCallback(async () => {
+    if (!isNonEurCurrency || !item.amountOriginal) return;
+
+    // Purchase date is required for non-EUR
+    if (!item.purchaseDate) return;
+
+    setIsConverting(true);
+    try {
+      const result = await participantApi.convertCurrency(
+        token,
+        item.amountOriginal,
+        item.currencyOriginal,
+        item.purchaseDate
+      );
+      setConversionInfo({
+        rate: result.rateToEur,
+        month: result.month,
+        year: result.year,
+      });
+      // Update the EUR amount
+      if (result.eurAmount !== item.amountEur) {
+        onUpdate({ amountEur: result.eurAmount });
+      }
+    } catch (error) {
+      console.error('Currency conversion error:', error);
+      toast.error('Failed to convert currency');
+    }
+    setIsConverting(false);
+  }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate, isNonEurCurrency, token, onUpdate, item.amountEur]);
+
+  // Trigger conversion when relevant fields change
+  useEffect(() => {
+    if (isNonEurCurrency && item.purchaseDate && item.amountOriginal) {
+      handleCurrencyConversion();
+    }
+  }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate]);
 
   return (
     <div className="p-6 bg-gray-50 rounded-2xl">
@@ -910,8 +1216,11 @@ function TravelItemCard({
 
       {/* Header */}
       <div className="flex items-center gap-4 mb-4">
-        <div className="w-12 h-12 rounded-xl bg-white border border-gray-200 flex items-center justify-center">
-          <Icon className="w-6 h-6 text-gray-500" />
+        <div className={clsx(
+          'w-12 h-12 rounded-xl border flex items-center justify-center',
+          transportBgColors[item.modeOfTransport]
+        )}>
+          <Icon className={clsx('w-6 h-6', transportIconColors[item.modeOfTransport])} />
         </div>
         <div className="flex-1">
           <p className="font-semibold text-gray-900">
@@ -995,18 +1304,43 @@ function TravelItemCard({
         <Select
           label="Currency"
           value={item.currencyOriginal}
-          options={[
-            { value: 'EUR', label: 'EUR' },
-            { value: 'USD', label: 'USD' },
-            { value: 'GBP', label: 'GBP' },
-            { value: 'PLN', label: 'PLN' },
-            { value: 'CZK', label: 'CZK' },
-            { value: 'HUF', label: 'HUF' },
-            { value: 'RON', label: 'RON' },
-            { value: 'SEK', label: 'SEK' },
-          ]}
+          options={currencyOptions}
           onChange={(e) => onUpdate({ currencyOriginal: e.target.value })}
         />
+        {/* Purchase Date - required for non-EUR currencies */}
+        {isNonEurCurrency && (
+          <div className="col-span-1">
+            <Input
+              label={
+                <span className="flex items-center gap-1">
+                  Purchase Date
+                  <span className="text-red-500">*</span>
+                  <span className="text-xs text-gray-400 ml-1">(for exchange rate)</span>
+                </span>
+              }
+              type="date"
+              value={item.purchaseDate?.split('T')[0] || ''}
+              onChange={(e) => onUpdate({ purchaseDate: e.target.value })}
+              required
+            />
+            {conversionInfo && !isConverting && (
+              <p className="text-xs text-gray-500 mt-1">
+                Rate ({conversionInfo.month}/{conversionInfo.year}): 1 {item.currencyOriginal} = {conversionInfo.rate.toFixed(4)} EUR
+              </p>
+            )}
+            {isConverting && (
+              <p className="text-xs text-blue-500 mt-1 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Converting...
+              </p>
+            )}
+            {isNonEurCurrency && !item.purchaseDate && (
+              <p className="text-xs text-amber-600 mt-1">
+                Purchase date is required for currency conversion
+              </p>
+            )}
+          </div>
+        )}
         {isPlane && (
           <>
             <Input
