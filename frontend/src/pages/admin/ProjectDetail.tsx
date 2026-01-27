@@ -855,45 +855,37 @@ function SettingsTab({
                         />
                         Green
                       </label>
-                      {needsAmount ? (
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type="number"
-                            placeholder="Amount"
-                            className="w-24 text-sm"
-                            onBlur={(e) => {
-                              const amount = parseFloat(e.target.value);
-                              if (amount > 0) {
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          placeholder="Amount"
+                          defaultValue={limit.maxReimbursementAmount > 0 ? limit.maxReimbursementAmount : ''}
+                          className={clsx('w-24 text-sm', needsAmount && 'border-amber-300')}
+                          onBlur={(e) => {
+                            const amount = parseFloat(e.target.value);
+                            if (amount >= 0 && amount !== limit.maxReimbursementAmount) {
+                              updateLimitMutation.mutate({
+                                country: limit.country,
+                                amount,
+                                greenTravel: limit.greenTravel || false,
+                              });
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const amount = parseFloat((e.target as HTMLInputElement).value);
+                              if (amount >= 0 && amount !== limit.maxReimbursementAmount) {
                                 updateLimitMutation.mutate({
                                   country: limit.country,
                                   amount,
                                   greenTravel: limit.greenTravel || false,
                                 });
                               }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const amount = parseFloat((e.target as HTMLInputElement).value);
-                                if (amount > 0) {
-                                  updateLimitMutation.mutate({
-                                    country: limit.country,
-                                    amount,
-                                    greenTravel: limit.greenTravel || false,
-                                  });
-                                }
-                              }
-                            }}
-                          />
-                          <span className="text-xs text-gray-400">EUR</span>
-                        </div>
-                      ) : (
-                        <span className="text-gray-600">
-                          {new Intl.NumberFormat('de-DE', {
-                            style: 'currency',
-                            currency: limit.currency,
-                          }).format(limit.maxReimbursementAmount)}
-                        </span>
-                      )}
+                            }
+                          }}
+                        />
+                        <span className="text-xs text-gray-400">EUR</span>
+                      </div>
                       <button
                         onClick={() => deleteLimitMutation.mutate(limit.country)}
                         className="p-1 text-gray-400 hover:text-red-500 transition-colors"

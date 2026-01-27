@@ -32,9 +32,8 @@ async function fetchRateFromApi(currencyCode: string, year: number, month: numbe
   }
 
   try {
-    // InforEuro API endpoint - fetches rates for a specific currency
-    // The API returns monthly rates, we need to find the one for our month/year
-    const url = `https://ec.europa.eu/budg/inforeuro/api/public/currencies/${currency}`;
+    // InforEuro API endpoint with year/month parameters for precise lookup
+    const url = `https://ec.europa.eu/budg/inforeuro/api/public/currencies/${currency}?year=${year}&month=${month}`;
 
     console.log(`[InforEuro] Fetching rate for ${currency} ${month}/${year} from ${url}`);
 
@@ -51,23 +50,51 @@ async function fetchRateFromApi(currencyCode: string, year: number, month: numbe
 
     const data = await response.json() as InfoEuroRate[];
 
-    // Find the rate for the specific month/year
-    // The API returns all historical rates, we need to filter
-    const targetDate = new Date(year, month - 1, 15); // Middle of the month
+    console.log(`[InforEuro] API returned ${data.length} rates for ${currency}`);
 
-    const matchingRate = data.find(rate => {
-      const start = new Date(rate.dateStart);
-      const end = new Date(rate.dateEnd);
-      return targetDate >= start && targetDate <= end;
-    });
-
-    if (matchingRate) {
+    // With year/month params, we should get exactly the rate we need
+    if (data.length > 0) {
+      const rate = data[0];
       // InforEuro gives: 1 EUR = X foreign currency
       // We need: 1 foreign currency = X EUR
       // So we invert: rate = 1 / amount
-      const rateToEur = 1 / matchingRate.amount;
-      console.log(`[InforEuro] Found rate for ${currency} ${month}/${year}: 1 ${currency} = ${rateToEur.toFixed(6)} EUR`);
+      const rateToEur = 1 / rate.amount;
+      console.log(`[InforEuro] Found rate for ${currency} ${month}/${year}: 1 EUR = ${rate.amount} ${currency}, so 1 ${currency} = ${rateToEur.toFixed(6)} EUR`);
       return rateToEur;
+    }
+
+    // Fallback: try without date params and match manually
+    console.log(`[InforEuro] No rate with params, trying full list...`);
+    const fallbackUrl = `https://ec.europa.eu/budg/inforeuro/api/public/currencies/${currency}`;
+    const fallbackResponse = await fetch(fallbackUrl, {
+      headers: { 'Accept': 'application/json' },
+    });
+
+    if (fallbackResponse.ok) {
+      const allRates = await fallbackResponse.json() as InfoEuroRate[];
+      console.log(`[InforEuro] Full list has ${allRates.length} rates`);
+
+      // Find rate by matching year/month in dateStart
+      const matchingRate = allRates.find(rate => {
+        const startDate = new Date(rate.dateStart);
+        return startDate.getFullYear() === year && (startDate.getMonth() + 1) === month;
+      });
+
+      if (matchingRate) {
+        const rateToEur = 1 / matchingRate.amount;
+        console.log(`[InforEuro] Found rate in full list: 1 ${currency} = ${rateToEur.toFixed(6)} EUR`);
+        return rateToEur;
+      }
+
+      // If still no match, get the most recent rate
+      if (allRates.length > 0) {
+        // Sort by dateStart descending to get most recent
+        allRates.sort((a, b) => new Date(b.dateStart).getTime() - new Date(a.dateStart).getTime());
+        const mostRecent = allRates[0];
+        const rateToEur = 1 / mostRecent.amount;
+        console.log(`[InforEuro] Using most recent rate (${mostRecent.dateStart}): 1 ${currency} = ${rateToEur.toFixed(6)} EUR`);
+        return rateToEur;
+      }
     }
 
     console.warn(`[InforEuro] No rate found for ${currency} ${month}/${year}`);
