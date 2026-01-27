@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   CheckCircle,
   Clock,
+  UserPlus,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -267,8 +268,17 @@ function getParticipantWarnings(participant: Participant): { hasWarning: boolean
 
 function ParticipantsTab({ projectId, participants }: { projectId: string; participants: Participant[] }) {
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const queryClient = useQueryClient();
+
+  // Form state for adding individual participant
+  const [newParticipant, setNewParticipant] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    country: '',
+  });
 
   const sendMagicLinksMutation = useMutation({
     mutationFn: (ids: string[]) => adminApi.sendMagicLinksBulk(ids),
@@ -279,6 +289,21 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
     },
     onError: () => {
       toast.error('Failed to send magic links');
+    },
+  });
+
+  const createParticipantMutation = useMutation({
+    mutationFn: (data: typeof newParticipant) =>
+      adminApi.createParticipant({ ...data, projectId }),
+    onSuccess: () => {
+      toast.success('Participant added successfully');
+      queryClient.invalidateQueries({ queryKey: ['participants'] });
+      queryClient.invalidateQueries({ queryKey: ['country-limits-check'] });
+      setShowAddModal(false);
+      setNewParticipant({ firstName: '', lastName: '', email: '', country: '' });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to add participant');
     },
   });
 
@@ -300,7 +325,11 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
     <div className="space-y-6">
       {/* Actions */}
       <div className="flex flex-wrap gap-3">
-        <Button onClick={() => setShowImportModal(true)}>
+        <Button onClick={() => setShowAddModal(true)}>
+          <UserPlus className="w-4 h-4 mr-2" />
+          Add Participant
+        </Button>
+        <Button variant="secondary" onClick={() => setShowImportModal(true)}>
           <Upload className="w-4 h-4 mr-2" />
           Import CSV
         </Button>
@@ -315,6 +344,65 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
           </Button>
         )}
       </div>
+
+      {/* Add Participant Modal */}
+      <Modal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        title="Add Participant"
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            createParticipantMutation.mutate(newParticipant);
+          }}
+          className="space-y-4"
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="First Name"
+              value={newParticipant.firstName}
+              onChange={(e) => setNewParticipant(prev => ({ ...prev, firstName: e.target.value }))}
+              required
+            />
+            <Input
+              label="Last Name"
+              value={newParticipant.lastName}
+              onChange={(e) => setNewParticipant(prev => ({ ...prev, lastName: e.target.value }))}
+              required
+            />
+          </div>
+          <Input
+            label="Email"
+            type="email"
+            value={newParticipant.email}
+            onChange={(e) => setNewParticipant(prev => ({ ...prev, email: e.target.value }))}
+            required
+          />
+          <Input
+            label="Country"
+            value={newParticipant.country}
+            onChange={(e) => setNewParticipant(prev => ({ ...prev, country: e.target.value }))}
+            placeholder="e.g., Poland, Germany, Spain..."
+            required
+          />
+          <div className="flex justify-end gap-3 pt-4">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setShowAddModal(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              loading={createParticipantMutation.isPending}
+            >
+              Add Participant
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Participants Table */}
       {participants.length > 0 ? (
@@ -587,9 +675,40 @@ function SettingsTab({
   isDeleting: boolean;
 }) {
   const [newCountry, setNewCountry] = useState('');
-  const [newAmount, setNewAmount] = useState('275');
+  const [newAmount, setNewAmount] = useState('');
   const [newGreenTravel, setNewGreenTravel] = useState(false);
+  const [missingCountriesChecked, setMissingCountriesChecked] = useState(false);
   const queryClient = useQueryClient();
+
+  // Check for missing countries on mount
+  const { data: missingCheck } = useQuery({
+    queryKey: ['country-limits-check', project.id],
+    queryFn: () => adminApi.checkMissingCountryLimits(project.id),
+    enabled: !!project.id,
+  });
+
+  // Auto-populate when there are missing countries
+  const autoPopulateMutation = useMutation({
+    mutationFn: () => adminApi.autoPopulateCountryLimits(project.id, 0),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
+      queryClient.invalidateQueries({ queryKey: ['country-limits-check'] });
+      if (data.created.length > 0) {
+        toast.success(`Added ${data.created.length} country limits from participants (please set amounts)`);
+      }
+      setMissingCountriesChecked(true);
+    },
+    onError: () => {
+      toast.error('Failed to auto-populate country limits');
+    },
+  });
+
+  // Auto-populate on mount if there are missing countries
+  useEffect(() => {
+    if (missingCheck?.hasMissingCountries && !missingCountriesChecked && !autoPopulateMutation.isPending) {
+      autoPopulateMutation.mutate();
+    }
+  }, [missingCheck?.hasMissingCountries, missingCountriesChecked]);
 
   const addLimitMutation = useMutation({
     mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
@@ -716,49 +835,93 @@ function SettingsTab({
 
             {/* Existing limits */}
             <div className="space-y-2">
-              {countryLimits.map((limit) => (
-                <div
-                  key={limit.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-xl"
-                >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900">{limit.country}</span>
-                      {limit.greenTravel && (
-                        <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
-                          Green travel
+              {countryLimits.map((limit) => {
+                const needsAmount = limit.maxReimbursementAmount === 0;
+                return (
+                  <div
+                    key={limit.id}
+                    className={clsx(
+                      'flex items-center justify-between p-3 rounded-xl',
+                      needsAmount ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50'
+                    )}
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-gray-900">{limit.country}</span>
+                        {limit.greenTravel && (
+                          <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                            Green travel
+                          </span>
+                        )}
+                        {needsAmount && (
+                          <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                            Set amount
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                        <input
+                          type="checkbox"
+                          checked={limit.greenTravel || false}
+                          onChange={() => toggleGreenTravel(limit)}
+                          className="rounded border-gray-300 w-3.5 h-3.5"
+                        />
+                        Green
+                      </label>
+                      {needsAmount ? (
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            placeholder="Amount"
+                            className="w-24 text-sm"
+                            onBlur={(e) => {
+                              const amount = parseFloat(e.target.value);
+                              if (amount > 0) {
+                                updateLimitMutation.mutate({
+                                  country: limit.country,
+                                  amount,
+                                  greenTravel: limit.greenTravel || false,
+                                });
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const amount = parseFloat((e.target as HTMLInputElement).value);
+                                if (amount > 0) {
+                                  updateLimitMutation.mutate({
+                                    country: limit.country,
+                                    amount,
+                                    greenTravel: limit.greenTravel || false,
+                                  });
+                                }
+                              }
+                            }}
+                          />
+                          <span className="text-xs text-gray-400">EUR</span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-600">
+                          {new Intl.NumberFormat('de-DE', {
+                            style: 'currency',
+                            currency: limit.currency,
+                          }).format(limit.maxReimbursementAmount)}
                         </span>
                       )}
+                      <button
+                        onClick={() => deleteLimitMutation.mutate(limit.country)}
+                        className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 text-xs text-gray-500">
-                      <input
-                        type="checkbox"
-                        checked={limit.greenTravel || false}
-                        onChange={() => toggleGreenTravel(limit)}
-                        className="rounded border-gray-300 w-3.5 h-3.5"
-                      />
-                      Green
-                    </label>
-                    <span className="text-gray-600">
-                      {new Intl.NumberFormat('de-DE', {
-                        style: 'currency',
-                        currency: limit.currency,
-                      }).format(limit.maxReimbursementAmount)}
-                    </span>
-                    <button
-                      onClick={() => deleteLimitMutation.mutate(limit.country)}
-                      className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {countryLimits.length === 0 && (
                 <p className="text-gray-500 text-sm text-center py-4">
-                  No country limits defined yet. Import participants and click "Auto-fill from participants" to add countries automatically.
+                  No country limits defined yet. Import participants first - countries will be added automatically.
                 </p>
               )}
             </div>

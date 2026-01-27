@@ -9,6 +9,7 @@ import {
   TransportMode,
 } from './types.js';
 import prisma from '../../utils/prisma.js';
+import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
 /**
  * Claude Vision AI Service for document analysis
@@ -477,17 +478,22 @@ Important notes:
   async convertToEur(
     amount: number,
     currency: string,
-    _purchaseDate?: Date
+    purchaseDate?: Date
   ): Promise<number> {
-    // TODO: Replace with real exchange rate API for production
-    // The purchase date would be used to get the historical rate
+    // Use InforEuro service for official EC exchange rates
+    try {
+      return await convertWithInforEuro(amount, currency, purchaseDate);
+    } catch (error) {
+      console.error('[Claude AI] Error using InforEuro, falling back to hardcoded rates:', error);
 
-    const rate = this.exchangeRates[currency.toUpperCase()];
-    if (!rate) {
-      console.warn(`[Claude AI] Unknown currency: ${currency}, using 1:1 rate`);
-      return amount;
+      // Fallback to hardcoded rates if InforEuro fails
+      const rate = this.exchangeRates[currency.toUpperCase()];
+      if (!rate) {
+        console.warn(`[Claude AI] Unknown currency: ${currency}, using 1:1 rate`);
+        return amount;
+      }
+
+      return Math.round(amount * rate * 100) / 100;
     }
-
-    return Math.round(amount * rate * 100) / 100;
   }
 }

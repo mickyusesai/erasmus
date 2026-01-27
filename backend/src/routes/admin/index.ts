@@ -4,6 +4,7 @@ import authRoutes from './auth.js';
 import dashboardRoutes from './dashboard.js';
 import projectRoutes from './projects.js';
 import participantRoutes from './participants.js';
+import exchangeRatesRoutes from './exchangeRates.js';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/auth', authRoutes);
 router.use('/dashboard', adminAuth, dashboardRoutes);
 router.use('/projects', adminAuth, projectRoutes);
 router.use('/participants', adminAuth, participantRoutes);
+router.use('/exchange-rates', adminAuth, exchangeRatesRoutes);
 
 export default router;

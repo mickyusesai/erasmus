@@ -229,10 +229,12 @@ router.get('/:id/participant-countries', async (req: Request, res: Response) => 
 /**
  * POST /api/admin/projects/:id/country-limits/auto-populate
  * Auto-populate country limits from participant countries
+ * Default amount is 0 (admin should fill it manually)
  */
 router.post('/:id/country-limits/auto-populate', async (req: Request, res: Response) => {
   const projectId = req.params.id;
-  const { defaultAmount = 275 } = req.body;
+  // Default amount is now 0 - admin must fill it manually
+  const { defaultAmount = 0 } = req.body;
 
   // Get unique countries from participants
   const participants = await prisma.participant.findMany({
@@ -268,6 +270,41 @@ router.post('/:id/country-limits/auto-populate', async (req: Request, res: Respo
     message: `Created ${created.length} country limits`,
     created,
     totalCountries: countries.length,
+  });
+});
+
+/**
+ * GET /api/admin/projects/:id/country-limits/check-missing
+ * Check if there are any participant countries without limits
+ */
+router.get('/:id/country-limits/check-missing', async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  // Get unique countries from participants
+  const participants = await prisma.participant.findMany({
+    where: { projectId },
+    select: { country: true },
+    distinct: ['country'],
+  });
+
+  const participantCountries = participants.map(p => p.country);
+
+  // Get existing country limits
+  const existingLimits = await prisma.projectCountryLimit.findMany({
+    where: { projectId },
+    select: { country: true },
+  });
+
+  const existingCountries = new Set(existingLimits.map(l => l.country));
+
+  // Find missing countries
+  const missingCountries = participantCountries.filter(c => !existingCountries.has(c));
+
+  res.json({
+    hasMissingCountries: missingCountries.length > 0,
+    missingCountries,
+    totalParticipantCountries: participantCountries.length,
+    totalExistingLimits: existingLimits.length,
   });
 });
 
