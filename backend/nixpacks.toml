@@ -1,0 +1,11 @@
+# Nixpacks configuration for Railway
+# Override default Prisma behavior - don't run migrate during build
+
+[phases.build]
+cmds = ["npm run build"]
+
+[phases.install]
+cmds = ["npm install", "npx prisma generate"]
+
+[start]
+cmd = "npm start"
