@@ -49,7 +49,7 @@ async function fetchRateFromApi(currencyCode: string, year: number, month: numbe
       return null;
     }
 
-    const data: InfoEuroRate[] = await response.json();
+    const data = await response.json() as InfoEuroRate[];
 
     // Find the rate for the specific month/year
     // The API returns all historical rates, we need to filter

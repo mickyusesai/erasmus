@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -192,16 +192,6 @@ const transportBgColors: Record<TransportMode, string> = {
   CAR: 'bg-purple-50 border-purple-200',
   FERRY: 'bg-cyan-50 border-cyan-200',
   OTHER: 'bg-gray-50 border-gray-200',
-};
-
-// Legacy colors for backwards compatibility (can be removed later)
-const transportColors: Record<TransportMode, string> = {
-  PLANE: 'bg-blue-500',
-  TRAIN: 'bg-green-500',
-  BUS: 'bg-orange-500',
-  CAR: 'bg-purple-500',
-  FERRY: 'bg-cyan-500',
-  OTHER: 'bg-gray-500',
 };
 
 export default function ReimbursementPage() {
@@ -1311,13 +1301,7 @@ function TravelItemCard({
         {isNonEurCurrency && (
           <div className="col-span-1">
             <Input
-              label={
-                <span className="flex items-center gap-1">
-                  Purchase Date
-                  <span className="text-red-500">*</span>
-                  <span className="text-xs text-gray-400 ml-1">(for exchange rate)</span>
-                </span>
-              }
+              label="Purchase Date (for exchange rate)"
               type="date"
               value={item.purchaseDate?.split('T')[0] || ''}
               onChange={(e) => onUpdate({ purchaseDate: e.target.value })}

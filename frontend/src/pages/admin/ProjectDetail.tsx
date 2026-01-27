@@ -744,21 +744,6 @@ function SettingsTab({
     },
   });
 
-  const autoPopulateMutation = useMutation({
-    mutationFn: () => adminApi.autoPopulateCountryLimits(project.id, 275),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
-      if (data.created.length > 0) {
-        toast.success(`Added ${data.created.length} country limits from participants`);
-      } else {
-        toast.success('All participant countries already have limits defined');
-      }
-    },
-    onError: () => {
-      toast.error('Failed to auto-populate country limits');
-    },
-  });
-
   const toggleGreenTravel = (limit: any) => {
     updateLimitMutation.mutate({
       country: limit.country,
