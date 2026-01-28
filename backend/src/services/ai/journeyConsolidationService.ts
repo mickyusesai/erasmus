@@ -596,9 +596,10 @@ Respond with ONLY a JSON object:
           }
         }
 
-        // Get currency from AI response, or from linked document extraction, or default to EUR
-        let currency = item.currency as string | null | undefined;
-        if (!currency && primaryDocId) {
+        // Get currency - ALWAYS prefer document extraction's currency as source of truth
+        // The AI consolidation may incorrectly default to EUR
+        let currency: string | null = null;
+        if (primaryDocId) {
           // Look up the document's extraction to get the currency
           const docExtraction = await prisma.documentExtraction.findUnique({
             where: { documentId: primaryDocId },
@@ -608,7 +609,10 @@ Respond with ONLY a JSON object:
             console.log(`[Consolidation] Using currency ${currency} from document extraction for ${item.fromLocation} -> ${item.toLocation}`);
           }
         }
-        currency = currency || 'EUR';
+        // Fall back to AI response currency, then EUR
+        if (!currency) {
+          currency = (item.currency as string) || 'EUR';
+        }
 
         // Get the full amount (no price allocation splitting)
         const baseAmount = item.amount || 0;
