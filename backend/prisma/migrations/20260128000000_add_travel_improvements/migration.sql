@@ -9,6 +9,7 @@ ALTER TABLE "DocumentExtraction" ADD COLUMN "outboundFlightNumber" TEXT;
 ALTER TABLE "DocumentExtraction" ADD COLUMN "returnFlightNumber" TEXT;
 
 -- Add round-trip and price allocation fields to TravelItem
+ALTER TABLE "TravelItem" ADD COLUMN "isRoundTrip" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "TravelItem" ADD COLUMN "tripGroupId" TEXT;
 ALTER TABLE "TravelItem" ADD COLUMN "priceAllocation" DOUBLE PRECISION NOT NULL DEFAULT 1.0;
 ALTER TABLE "TravelItem" ADD COLUMN "totalGroupPrice" DOUBLE PRECISION;

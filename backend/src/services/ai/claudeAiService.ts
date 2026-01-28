@@ -106,9 +106,9 @@ Please respond with a JSON object (and ONLY a JSON object, no other text) with t
 
 IMPORTANT - Round-trip detection:
 - If this is a ROUND-TRIP booking (both outbound AND return in one booking), set isRoundTrip to true
-- For round-trips, create TWO items in travelItems: one for outbound, one for return
-- Split the total price 50/50 between the two travel items
-- Set outboundFlightNumber and returnFlightNumber if applicable
+- For round-trips, create ONE item in travelItems with the TOTAL price (do NOT split into two items)
+- Set outboundFlightNumber and returnFlightNumber if both are visible
+- Add a warning like "Round-trip booking - requires 2 boarding passes for confirmation"
 
 IMPORTANT - Multi-passenger detection:
 - Count how many passengers are on this booking

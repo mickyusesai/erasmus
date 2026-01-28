@@ -464,12 +464,11 @@ IMPORTANT RULES:
 
 ROUND-TRIP HANDLING:
 - If a document has isRoundTrip=true, it contains BOTH outbound AND return flights in ONE booking
-- Create TWO separate travel_items: one for outbound, one for return
-- Each item gets 50% of the total price (priceAllocation=0.5)
-- Both items should have the same tripGroupId (generate a UUID or use the booking reference)
-- Set totalGroupPrice to the FULL booking amount on both items
-- The outbound goes FROM participant's country TO project country
-- The return goes FROM project country TO participant's country
+- Create ONE travel item with the TOTAL price (do NOT split into two items)
+- Set isRoundTrip to true on the travel item
+- The fromLocation/toLocation should be the OUTBOUND journey (home country to project country)
+- Add a warning like "Round-trip booking - requires 2 boarding passes for confirmation (outbound and return)"
+- Keep priceAllocation at 1.0 (full price)
 
 MULTI-PASSENGER HANDLING:
 - If numberOfPassengers > 1, this booking covers multiple people
@@ -494,9 +493,7 @@ Respond with ONLY a JSON object:
       "purchaseDate": "YYYY-MM-DD or null",
       "linkedDocumentIds": ["doc-id-1", "doc-id-2"],
       "notes": "Any relevant notes about this leg",
-      "tripGroupId": "UUID or booking reference for linked items (round-trips)",
-      "priceAllocation": 1.0,
-      "totalGroupPrice": null,
+      "isRoundTrip": false,
       "numberOfPassengers": 1
     }
   ],
@@ -613,15 +610,13 @@ Respond with ONLY a JSON object:
         }
         currency = currency || 'EUR';
 
-        // Calculate actual amount based on price allocation (for round-trips)
-        const priceAllocation = item.priceAllocation || 1.0;
+        // Get the full amount (no price allocation splitting)
         const baseAmount = item.amount || 0;
-        const allocatedAmount = baseAmount * priceAllocation;
 
         // Convert currency to EUR
-        let amountEur = allocatedAmount;
+        let amountEur = baseAmount;
         if (currency !== 'EUR') {
-          amountEur = this.convertToEur(allocatedAmount, currency);
+          amountEur = this.convertToEur(baseAmount, currency);
         }
 
         const travelItem = await prisma.travelItem.create({
@@ -635,17 +630,15 @@ Respond with ONLY a JSON object:
             arrivalDate: item.arrivalDate ? new Date(item.arrivalDate) : null,
             bookingReference: item.bookingReference || null,
             flightNumber: item.flightNumber || null,
-            amountOriginal: allocatedAmount, // Amount after price allocation
+            amountOriginal: baseAmount,
             currencyOriginal: currency, // Use currency from AI or document extraction
             purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
             amountEur,
             comment: item.notes || null,
             manuallyEdited: false,
-            originalAmountFromAi: baseAmount, // Store original AI-detected total amount
-            // Round-trip and price allocation
-            tripGroupId: item.tripGroupId || null,
-            priceAllocation: priceAllocation,
-            totalGroupPrice: item.totalGroupPrice || (priceAllocation < 1 ? baseAmount : null),
+            originalAmountFromAi: baseAmount, // Store original AI-detected amount
+            // Round-trip flag
+            isRoundTrip: item.isRoundTrip || false,
             // Multi-passenger bookings
             numberOfPassengers: item.numberOfPassengers || null,
           },

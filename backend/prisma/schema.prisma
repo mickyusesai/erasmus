@@ -190,10 +190,11 @@ model TravelItem {
   manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
 
-  // Round-trip and price allocation
-  tripGroupId           String?               // Groups related travel items (e.g., outbound + return)
-  priceAllocation       Float                 @default(1.0)  // Portion of total price (e.g., 0.5 for half of round-trip)
-  totalGroupPrice       Float?                // Total price before allocation (for reference)
+  // Round-trip bookings
+  isRoundTrip           Boolean               @default(false)  // True if this is a round-trip booking (requires 2 boarding passes)
+  tripGroupId           String?               // Groups related travel items (legacy, kept for compatibility)
+  priceAllocation       Float                 @default(1.0)  // Portion of total price (legacy, kept for compatibility)
+  totalGroupPrice       Float?                // Total price before allocation (legacy, kept for compatibility)
 
   // Multi-passenger bookings
   numberOfPassengers    Int?                  // If this booking was for multiple people

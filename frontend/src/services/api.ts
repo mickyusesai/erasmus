@@ -755,10 +755,11 @@ export interface TravelItem {
   purchaseDate?: string;
   amountEur: number;
   comment?: string;
-  // Round-trip and price allocation
-  tripGroupId?: string;
-  priceAllocation?: number;
-  totalGroupPrice?: number;
+  // Round-trip bookings
+  isRoundTrip?: boolean;
+  tripGroupId?: string;  // Legacy
+  priceAllocation?: number;  // Legacy
+  totalGroupPrice?: number;  // Legacy
   // Multi-passenger bookings
   numberOfPassengers?: number;
   participantPortion?: number;

@@ -1349,16 +1349,14 @@ function TravelItemCard({
       )}
 
       {/* Round-trip indicator */}
-      {item.tripGroupId && item.priceAllocation && item.priceAllocation < 1 && (
+      {item.isRoundTrip && (
         <div className="mb-4 p-2 rounded-lg bg-purple-50 border border-purple-200 flex items-center gap-2">
           <span className="text-xs font-medium text-purple-700">
-            Part of round-trip booking
+            Round-trip booking
           </span>
-          {item.totalGroupPrice && (
-            <span className="text-xs text-purple-600">
-              (Total: {formatCurrency(item.totalGroupPrice, item.currencyOriginal)} × {item.priceAllocation * 100}%)
-            </span>
-          )}
+          <span className="text-xs text-purple-600">
+            (Requires 2 boarding passes: outbound and return)
+          </span>
         </div>
       )}
 
