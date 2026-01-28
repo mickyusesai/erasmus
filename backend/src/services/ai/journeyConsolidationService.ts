@@ -169,8 +169,24 @@ Extract ALL information you can find. Respond with ONLY a JSON object:
   "trainNumber": "Train number or null",
   "busCompany": "Bus company name or null",
   "amount": 123.45 (numeric, total price) or null,
-  "currency": "EUR/USD/GBP/PLN etc. or null"
+  "currency": "EUR/USD/GBP/PLN etc. or null",
+  "isRoundTrip": true/false (true if this booking includes BOTH outbound AND return journey),
+  "numberOfPassengers": 1 (count of passengers on this booking),
+  "allPassengerNames": "Name1, Name2, Name3" or null (comma-separated if multiple passengers),
+  "outboundFlightNumber": "Flight number for outbound journey or null",
+  "returnFlightNumber": "Flight number for return journey or null"
 }
+
+IMPORTANT - Round-trip detection:
+- Look for keywords like "Return", "Round trip", "Hin- und Rückflug", "Retour", two different flight dates
+- If you see TWO flights in the booking (outbound AND return), set isRoundTrip to true
+- For round-trips, fromLocation/toLocation should be the OUTBOUND journey
+- Set both outboundFlightNumber and returnFlightNumber if visible
+
+IMPORTANT - Multi-passenger detection:
+- Count how many passengers are listed on the booking
+- If more than 1 passenger, list all their names in allPassengerNames
+- The amount should be the TOTAL price for ALL passengers
 
 Extract real values only - use null if not visible.
 For station names like "Rotterdam C." or "Eindhoven C." use just the city name (Rotterdam, Eindhoven).
@@ -260,6 +276,12 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           busCompany: parsed.busCompany || null,
           amount: parsed.amount || null,
           currency: parsed.currency || null,
+          // Round-trip and multi-passenger detection
+          isRoundTrip: parsed.isRoundTrip || false,
+          numberOfPassengers: parsed.numberOfPassengers || null,
+          allPassengerNames: parsed.allPassengerNames || null,
+          outboundFlightNumber: parsed.outboundFlightNumber || null,
+          returnFlightNumber: parsed.returnFlightNumber || null,
           rawAiResponse: textBlock.text,
         },
         update: {
@@ -279,6 +301,12 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           busCompany: parsed.busCompany || null,
           amount: parsed.amount || null,
           currency: parsed.currency || null,
+          // Round-trip and multi-passenger detection
+          isRoundTrip: parsed.isRoundTrip || false,
+          numberOfPassengers: parsed.numberOfPassengers || null,
+          allPassengerNames: parsed.allPassengerNames || null,
+          outboundFlightNumber: parsed.outboundFlightNumber || null,
+          returnFlightNumber: parsed.returnFlightNumber || null,
           rawAiResponse: textBlock.text,
           consolidated: false,
         },
@@ -366,6 +394,11 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         bookingReference?: string;
         amount?: number;
         currency?: string;
+        isRoundTrip?: boolean;
+        numberOfPassengers?: number;
+        allPassengerNames?: string;
+        outboundFlightNumber?: string;
+        returnFlightNumber?: string;
       };
       return {
         docIndex: i + 1,
@@ -380,6 +413,12 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         bookingRef: ext.bookingReference,
         amount: ext.amount,
         currency: ext.currency,
+        // Round-trip and multi-passenger info
+        isRoundTrip: ext.isRoundTrip || false,
+        numberOfPassengers: ext.numberOfPassengers || 1,
+        allPassengerNames: ext.allPassengerNames || null,
+        outboundFlightNumber: ext.outboundFlightNumber || null,
+        returnFlightNumber: ext.returnFlightNumber || null,
       };
     });
 
@@ -423,6 +462,21 @@ IMPORTANT RULES:
 - Each leg of the journey should be ONE travel item (don't duplicate for boarding pass + invoice)
 - Train receipts and tickets for the same journey should be combined - use the receipt amount as it's what was paid
 
+ROUND-TRIP HANDLING:
+- If a document has isRoundTrip=true, it contains BOTH outbound AND return flights in ONE booking
+- Create TWO separate travel_items: one for outbound, one for return
+- Each item gets 50% of the total price (priceAllocation=0.5)
+- Both items should have the same tripGroupId (generate a UUID or use the booking reference)
+- Set totalGroupPrice to the FULL booking amount on both items
+- The outbound goes FROM participant's country TO project country
+- The return goes FROM project country TO participant's country
+
+MULTI-PASSENGER HANDLING:
+- If numberOfPassengers > 1, this booking covers multiple people
+- Set numberOfPassengers on the travel item
+- The amount stays as the TOTAL (don't divide) - participant will specify their portion later
+- Add a warning like "Multi-passenger booking (X passengers) - participant needs to specify their portion"
+
 Respond with ONLY a JSON object:
 {
   "journey_summary": "Brief description of the understood journey",
@@ -439,7 +493,11 @@ Respond with ONLY a JSON object:
       "currency": "EUR",
       "purchaseDate": "YYYY-MM-DD or null",
       "linkedDocumentIds": ["doc-id-1", "doc-id-2"],
-      "notes": "Any relevant notes about this leg"
+      "notes": "Any relevant notes about this leg",
+      "tripGroupId": "UUID or booking reference for linked items (round-trips)",
+      "priceAllocation": 1.0,
+      "totalGroupPrice": null,
+      "numberOfPassengers": 1
     }
   ],
   "document_links": [
@@ -555,10 +613,15 @@ Respond with ONLY a JSON object:
         }
         currency = currency || 'EUR';
 
+        // Calculate actual amount based on price allocation (for round-trips)
+        const priceAllocation = item.priceAllocation || 1.0;
+        const baseAmount = item.amount || 0;
+        const allocatedAmount = baseAmount * priceAllocation;
+
         // Convert currency to EUR
-        let amountEur = item.amount || 0;
+        let amountEur = allocatedAmount;
         if (currency !== 'EUR') {
-          amountEur = this.convertToEur(item.amount, currency);
+          amountEur = this.convertToEur(allocatedAmount, currency);
         }
 
         const travelItem = await prisma.travelItem.create({
@@ -572,13 +635,19 @@ Respond with ONLY a JSON object:
             arrivalDate: item.arrivalDate ? new Date(item.arrivalDate) : null,
             bookingReference: item.bookingReference || null,
             flightNumber: item.flightNumber || null,
-            amountOriginal: item.amount || 0,
+            amountOriginal: allocatedAmount, // Amount after price allocation
             currencyOriginal: currency, // Use currency from AI or document extraction
             purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
             amountEur,
             comment: item.notes || null,
             manuallyEdited: false,
-            originalAmountFromAi: item.amount || 0, // Store AI-detected amount for comparison
+            originalAmountFromAi: baseAmount, // Store original AI-detected total amount
+            // Round-trip and price allocation
+            tripGroupId: item.tripGroupId || null,
+            priceAllocation: priceAllocation,
+            totalGroupPrice: item.totalGroupPrice || (priceAllocation < 1 ? baseAmount : null),
+            // Multi-passenger bookings
+            numberOfPassengers: item.numberOfPassengers || null,
           },
         });
 

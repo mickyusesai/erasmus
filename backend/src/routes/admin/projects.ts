@@ -14,6 +14,7 @@ const createProjectSchema = z.object({
   startDate: z.string().transform((s) => new Date(s)),
   endDate: z.string().transform((s) => new Date(s)),
   disseminationEnabled: z.boolean().optional().default(false),
+  carRatePerKm: z.number().min(0).optional().default(0.22), // EUR per km for car travel
 });
 
 const updateProjectSchema = createProjectSchema.partial();
@@ -84,6 +85,8 @@ router.get('/', async (req: Request, res: Response) => {
       startDate: project.startDate,
       endDate: project.endDate,
       createdAt: project.createdAt,
+      disseminationEnabled: project.disseminationEnabled,
+      carRatePerKm: project.carRatePerKm,
       stats: {
         totalParticipants: project._count.participants,
         complete,

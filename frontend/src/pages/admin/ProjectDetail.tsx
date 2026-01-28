@@ -949,9 +949,10 @@ function SettingsTab({
 
 function FeatureSettingsCard({ project }: { project: any }) {
   const queryClient = useQueryClient();
+  const [carRate, setCarRate] = useState<string>(String(project.carRatePerKm || 0.22));
 
   const updateProjectMutation = useMutation({
-    mutationFn: (data: { disseminationEnabled: boolean }) =>
+    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number }) =>
       adminApi.updateProject(project.id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project', project.id] });
@@ -961,6 +962,13 @@ function FeatureSettingsCard({ project }: { project: any }) {
       toast.error('Failed to update project settings');
     },
   });
+
+  const handleCarRateBlur = () => {
+    const rate = parseFloat(carRate);
+    if (!isNaN(rate) && rate >= 0 && rate !== project.carRatePerKm) {
+      updateProjectMutation.mutate({ carRatePerKm: rate });
+    }
+  };
 
   return (
     <Card>
@@ -986,6 +994,33 @@ function FeatureSettingsCard({ project }: { project: any }) {
               className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
             />
           </label>
+
+          <div className="p-3 bg-gray-50 rounded-xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-gray-900">Car Travel Rate</p>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  EUR per kilometer for car travel reimbursement
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={carRate}
+                  onChange={(e) => setCarRate(e.target.value)}
+                  onBlur={handleCarRateBlur}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCarRateBlur();
+                  }}
+                  disabled={updateProjectMutation.isPending}
+                  className="w-24 text-sm"
+                />
+                <span className="text-sm text-gray-500">EUR/km</span>
+              </div>
+            </div>
+          </div>
         </div>
       </CardContent>
     </Card>

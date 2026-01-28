@@ -82,6 +82,11 @@ Please respond with a JSON object (and ONLY a JSON object, no other text) with t
   "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "OTHER",
   "confidence": 0.0-1.0,
   "ocrText": "The key text extracted from the document",
+  "isRoundTrip": true/false,
+  "numberOfPassengers": 1,
+  "allPassengerNames": "Name1, Name2, Name3",
+  "outboundFlightNumber": "Flight number for outbound journey or null",
+  "returnFlightNumber": "Flight number for return journey or null",
   "travelItems": [
     {
       "modeOfTransport": "PLANE" | "TRAIN" | "BUS" | "CAR" | "FERRY" | "OTHER",
@@ -99,7 +104,19 @@ Please respond with a JSON object (and ONLY a JSON object, no other text) with t
   "warnings": ["Any issues or uncertainties about the extraction"]
 }
 
-Important notes:
+IMPORTANT - Round-trip detection:
+- If this is a ROUND-TRIP booking (both outbound AND return in one booking), set isRoundTrip to true
+- For round-trips, create TWO items in travelItems: one for outbound, one for return
+- Split the total price 50/50 between the two travel items
+- Set outboundFlightNumber and returnFlightNumber if applicable
+
+IMPORTANT - Multi-passenger detection:
+- Count how many passengers are on this booking
+- If more than 1 passenger, list all names in allPassengerNames (comma-separated)
+- The amountOriginal in travelItems should be the TOTAL price, NOT per-person
+- Add a warning like "Multi-passenger booking: X passengers for total price Y"
+
+Other important notes:
 - Extract actual values from the document, don't make them up
 - If you can't find a value, use null
 - For airports, try to extract the city name (e.g., "Barcelona" not just "BCN")
@@ -211,7 +228,7 @@ Important notes:
         originalFilename
       );
 
-      console.log(`[Claude AI] Extracted ${extractedItems.length} travel items, type: ${documentType}`);
+      console.log(`[Claude AI] Extracted ${extractedItems.length} travel items, type: ${documentType}, isRoundTrip: ${parsed.isRoundTrip}, passengers: ${parsed.numberOfPassengers}`);
 
       return {
         documentType,
@@ -220,6 +237,12 @@ Important notes:
         suggestedFilename,
         extractedTravelItems: extractedItems,
         warnings: parsed.warnings || [],
+        // Round-trip and multi-passenger detection
+        isRoundTrip: parsed.isRoundTrip || false,
+        numberOfPassengers: parsed.numberOfPassengers || 1,
+        allPassengerNames: parsed.allPassengerNames || undefined,
+        outboundFlightNumber: parsed.outboundFlightNumber || undefined,
+        returnFlightNumber: parsed.returnFlightNumber || undefined,
       };
     } catch (error) {
       console.error('[Claude AI] Error analyzing document:', error);

@@ -27,6 +27,7 @@ model Project {
   startDate                DateTime
   endDate                  DateTime
   disseminationEnabled     Boolean                 @default(false)  // Whether dissemination page is shown to participants
+  carRatePerKm             Float                   @default(0.22)   // Rate per km for car travel reimbursement (EUR)
   createdAt                DateTime                @default(now())
   updatedAt                DateTime                @updatedAt
   countryLimits            ProjectCountryLimit[]
@@ -138,6 +139,13 @@ model DocumentExtraction {
   amount                Float?
   currency              String?
 
+  // Round-trip and multi-passenger detection
+  isRoundTrip           Boolean  @default(false)  // Whether this booking covers both outbound and return
+  numberOfPassengers    Int?                      // Number of passengers on the booking
+  allPassengerNames     String?                   // Comma-separated list of passenger names
+  outboundFlightNumber  String?                   // For round-trips: outbound flight number
+  returnFlightNumber    String?                   // For round-trips: return flight number
+
   // Raw AI response for debugging
   rawAiResponse         String?
 
@@ -181,6 +189,24 @@ model TravelItem {
   comment               String?
   manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
+
+  // Round-trip and price allocation
+  tripGroupId           String?               // Groups related travel items (e.g., outbound + return)
+  priceAllocation       Float                 @default(1.0)  // Portion of total price (e.g., 0.5 for half of round-trip)
+  totalGroupPrice       Float?                // Total price before allocation (for reference)
+
+  // Multi-passenger bookings
+  numberOfPassengers    Int?                  // If this booking was for multiple people
+  participantPortion    Float?                // The portion this participant claims (entered by them)
+
+  // Car travel specific
+  distanceKm            Float?                // Distance traveled in kilometers
+  isDriverCarpool       Boolean               @default(false)  // Whether this participant is the driver
+
+  // Validation flags
+  routeMatchesCountry   Boolean?              // Whether from/to matches participant's country
+  validationWarnings    String?               // JSON array of warning messages
+
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
   declarationsOfTravel  DeclarationOfTravel[]
