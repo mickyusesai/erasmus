@@ -107,7 +107,7 @@ async function fetchRateFromApi(currencyCode: string, year: number, month: numbe
 
 /**
  * Get exchange rate for a currency at a specific month
- * Uses cached rates from database, fetches from API if not cached
+ * Always fetches fresh from InforEuro API to ensure correctness
  */
 export async function getExchangeRate(
   currencyCode: string,
@@ -123,51 +123,16 @@ export async function getExchangeRate(
   const year = purchaseDate.getFullYear();
   const month = purchaseDate.getMonth() + 1; // JS months are 0-indexed
 
-  // Check cache first
-  const cached = await prisma.exchangeRate.findUnique({
-    where: {
-      currencyCode_year_month: {
-        currencyCode: currency,
-        year,
-        month,
-      },
-    },
-  });
-
-  if (cached) {
-    console.log(`[InforEuro] Using cached rate for ${currency} ${month}/${year}: ${cached.rateToEur}`);
-    return cached.rateToEur;
-  }
-
-  // Fetch from API
+  // Always fetch fresh from API to ensure correctness
   const rate = await fetchRateFromApi(currency, year, month);
 
   if (rate !== null) {
-    // Cache the rate
-    await prisma.exchangeRate.create({
-      data: {
-        currencyCode: currency,
-        year,
-        month,
-        rateToEur: rate,
-      },
-    });
+    console.log(`[InforEuro] Got rate for ${currency} ${month}/${year}: ${rate}`);
     return rate;
   }
 
-  // Fallback: try to get the most recent rate for this currency
-  const fallback = await prisma.exchangeRate.findFirst({
-    where: { currencyCode: currency },
-    orderBy: [{ year: 'desc' }, { month: 'desc' }],
-  });
-
-  if (fallback) {
-    console.warn(`[InforEuro] Using fallback rate for ${currency}: ${fallback.rateToEur} from ${fallback.month}/${fallback.year}`);
-    return fallback.rateToEur;
-  }
-
-  // Ultimate fallback: use hardcoded rates
-  console.warn(`[InforEuro] No rate found for ${currency}, using hardcoded fallback`);
+  // Ultimate fallback: use hardcoded rates (only if API fails)
+  console.warn(`[InforEuro] API failed for ${currency} ${month}/${year}, using hardcoded fallback`);
   return getHardcodedRate(currency);
 }
 
