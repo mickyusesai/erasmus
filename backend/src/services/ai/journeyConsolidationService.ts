@@ -336,8 +336,8 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
     }
 
     const extractions = participant.documents
-      .filter((d) => d.extraction)
-      .map((d) => ({
+      .filter((d: { extraction?: unknown }) => d.extraction)
+      .map((d: { id: string; extraction: Record<string, unknown> }) => ({
         ...d.extraction!,
         documentId: d.id, // Override with the actual document ID
       }));
@@ -353,7 +353,20 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
     }
 
     // Build a summary for the AI to analyze
-    const extractionSummary = extractions.map((e, i) => ({
+    interface ExtractedData {
+      documentId: string;
+      detectedDocumentType?: string;
+      passengerName?: string;
+      fromLocation?: string;
+      toLocation?: string;
+      departureDate?: Date;
+      purchaseDate?: Date;
+      flightNumber?: string;
+      bookingReference?: string;
+      amount?: number;
+      currency?: string;
+    }
+    const extractionSummary = (extractions as ExtractedData[]).map((e, i) => ({
       docIndex: i + 1,
       documentId: e.documentId,
       type: e.detectedDocumentType,
@@ -446,7 +459,7 @@ Respond with ONLY a JSON object:
 }`;
 
     // Build a set of valid document IDs for this participant
-    const validDocumentIds = new Set(participant.documents.map((d) => d.id));
+    const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
 
     try {
       // Text-only consolidation uses Sonnet for better reasoning
@@ -471,8 +484,8 @@ Respond with ONLY a JSON object:
 
       // Get existing travel items that have been manually edited
       const existingItems = participant.travelItems || [];
-      const manuallyEditedItems = existingItems.filter(item => item.manuallyEdited);
-      const manuallyEditedSignatures = manuallyEditedItems.map(item => ({
+      const manuallyEditedItems = existingItems.filter((item: { manuallyEdited?: boolean }) => item.manuallyEdited);
+      const manuallyEditedSignatures = manuallyEditedItems.map((item: { id: string; fromLocation: string; toLocation: string; departureDate: Date; manuallyEdited?: boolean }) => ({
         id: item.id,
         signature: `${item.fromLocation.toLowerCase()}-${item.toLocation.toLowerCase()}-${item.departureDate.toISOString().split('T')[0]}`,
         item,
@@ -494,7 +507,7 @@ Respond with ONLY a JSON object:
         // Check if this matches a manually edited item (same route and date)
         const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
         const existingMatch = manuallyEditedSignatures.find(
-          me => me.signature === itemSignature ||
+          (me: { signature: string; item: { fromLocation: string; toLocation: string } }) => me.signature === itemSignature ||
             // Fuzzy match: same locations but possibly different date format
             (me.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
              me.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
@@ -559,7 +572,7 @@ Respond with ONLY a JSON object:
       // Mark extractions as consolidated
       await prisma.documentExtraction.updateMany({
         where: {
-          documentId: { in: participant.documents.map((d) => d.id) },
+          documentId: { in: participant.documents.map((d: { id: string }) => d.id) },
         },
         data: {
           consolidated: true,

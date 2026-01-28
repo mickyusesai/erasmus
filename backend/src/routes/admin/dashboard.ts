@@ -77,7 +77,7 @@ router.get('/stats', async (_req: Request, res: Response) => {
   });
 
   // Process recent projects
-  const projects = recentProjects.map((project) => {
+  const projects = recentProjects.map((project: typeof recentProjects[0]) => {
     const participantStats = {
       total: project._count.participants,
       complete: 0,

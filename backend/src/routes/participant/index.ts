@@ -9,13 +9,18 @@ import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
-import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+import { ParticipantStatus, TransportMode, DocumentType } from '../../types/prisma.js';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
+import { generateDeclarationPdf } from '../../services/pdf/index.js';
+import disseminationRoutes from './dissemination.js';
 
 // Initialize the consolidation service
 const consolidationService = new JourneyConsolidationService();
 
 const router = Router();
+
+// Mount dissemination routes
+router.use('/dissemination', disseminationRoutes);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -60,6 +65,23 @@ const declarationOnHonorSchema = z.object({
   place: z.string().min(1, 'Place is required'),
 });
 
+const declarationOfTravelSchema = z.object({
+  travelItemId: z.string().optional(), // Optional: link to a specific travel item
+  name: z.string().min(1, 'Name is required'),
+  modeOfTransport: z.nativeEnum(TransportMode),
+  fromPlace: z.string().min(1, 'Departure place is required'),
+  toPlace: z.string().min(1, 'Arrival place is required'),
+  travelDate: z.string().transform((s) => new Date(s)),
+  flightNumber: z.string().nullable().optional(),
+  bookingReference: z.string().nullable().optional(),
+  dateOfBirth: z.string().min(1, 'Date of birth is required'),
+  idNumber: z.string().min(1, 'ID number is required'),
+  sendingOrgName: z.string().min(1, 'Sending organisation name is required'),
+  sendingOrgOid: z.string().nullable().optional(),
+  sendingOrgAddress: z.string().min(1, 'Sending organisation address is required'),
+  signatureDataUrl: z.string().min(1, 'Signature is required'),
+});
+
 // Wrap async route handlers
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -86,6 +108,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
           startDate: true,
           endDate: true,
           countryLimits: true,
+          disseminationEnabled: true,
         },
       },
       documents: {
@@ -93,20 +116,46 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       },
       travelItems: {
         orderBy: { departureDate: 'asc' },
+        include: {
+          declarationsOfTravel: true,
+        },
       },
       reimbursementSummary: true,
       declarationsOnHonor: true,
+      declarationsOfTravel: true,
     },
   });
 
   // Get country limit
   const countryLimit = data?.project.countryLimits.find(
-    (limit) => limit.country === participant.country
+    (limit: { country: string }) => limit.country === participant.country
   );
 
   // Calculate completion status
   const aiService = getAiService();
   const validation = await aiService.validateReimbursement(participant.id);
+
+  // Get dissemination status
+  let disseminationStatus = {
+    hasDisseminationActivity: false,
+    hasSocialMediaPost: false,
+  };
+
+  if (data?.project.disseminationEnabled) {
+    const activityCount = await prisma.disseminationActivity.count({
+      where: {
+        projectId: data.project.id,
+        country: participant.country,
+      },
+    });
+    const socialMediaCount = await prisma.socialMediaPost.count({
+      where: { participantId: participant.id },
+    });
+    disseminationStatus = {
+      hasDisseminationActivity: activityCount > 0,
+      hasSocialMediaPost: socialMediaCount > 0,
+    };
+  }
 
   res.json({
     participant: {
@@ -121,14 +170,19 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       bankAccountBic: data?.bankAccountBic,
       participantNote: data?.participantNote,
     },
-    project: data?.project,
+    project: {
+      ...data?.project,
+      disseminationEnabled: data?.project.disseminationEnabled || false,
+    },
     documents: data?.documents,
     travelItems: data?.travelItems,
     reimbursementSummary: data?.reimbursementSummary,
     declarationsOnHonor: data?.declarationsOnHonor,
+    declarationsOfTravel: data?.declarationsOfTravel,
     maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
     greenTravel: countryLimit?.greenTravel || false,
     validation,
+    disseminationStatus,
   });
 }));
 
@@ -514,6 +568,113 @@ router.delete('/travel-items/:id', participantAuth, asyncHandler(async (req: Req
 }));
 
 /**
+ * POST /api/participant/travel-items/:id/link-document
+ * Link an existing document to a travel item (for manually linking unrecognized boarding passes)
+ */
+router.post('/travel-items/:id/link-document', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot modify travel items after approval');
+  }
+
+  const { documentId } = req.body;
+
+  if (!documentId) {
+    throw new ValidationError('Document ID is required');
+  }
+
+  // Verify travel item ownership
+  const travelItem = await prisma.travelItem.findFirst({
+    where: {
+      id: req.params.id,
+      participantId: participant.id,
+    },
+  });
+
+  if (!travelItem) {
+    throw new NotFoundError('Travel item not found');
+  }
+
+  // Verify document ownership
+  const document = await prisma.document.findFirst({
+    where: {
+      id: documentId,
+      participantId: participant.id,
+    },
+  });
+
+  if (!document) {
+    throw new NotFoundError('Document not found');
+  }
+
+  // Update travel item with document link
+  const updated = await prisma.travelItem.update({
+    where: { id: req.params.id },
+    data: { documentId },
+  });
+
+  // Log the change
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId: participant.id,
+      userType: 'PARTICIPANT',
+      fieldName: 'travelItem.documentLink',
+      previousValue: travelItem.documentId || '(none)',
+      newValue: `Linked to: ${document.renamedFilename}`,
+    },
+  });
+
+  res.json(updated);
+}));
+
+/**
+ * DELETE /api/participant/travel-items/:id/link-document
+ * Unlink a document from a travel item
+ */
+router.delete('/travel-items/:id/link-document', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot modify travel items after approval');
+  }
+
+  // Verify travel item ownership
+  const travelItem = await prisma.travelItem.findFirst({
+    where: {
+      id: req.params.id,
+      participantId: participant.id,
+    },
+    include: { document: true },
+  });
+
+  if (!travelItem) {
+    throw new NotFoundError('Travel item not found');
+  }
+
+  // Update travel item to remove document link
+  const updated = await prisma.travelItem.update({
+    where: { id: req.params.id },
+    data: { documentId: null },
+  });
+
+  // Log the change
+  if (travelItem.document) {
+    await prisma.changeLogEntry.create({
+      data: {
+        participantId: participant.id,
+        userType: 'PARTICIPANT',
+        fieldName: 'travelItem.documentLink',
+        previousValue: `Linked to: ${travelItem.document.renamedFilename}`,
+        newValue: '(unlinked)',
+      },
+    });
+  }
+
+  res.json(updated);
+}));
+
+/**
  * PATCH /api/participant/bank-details
  * Update bank details
  */
@@ -653,6 +814,180 @@ router.delete('/declarations/:id', participantAuth, asyncHandler(async (req: Req
   }
 
   await prisma.declarationOnHonor.delete({
+    where: { id: declaration.id },
+  });
+
+  res.json({ success: true });
+}));
+
+/**
+ * GET /api/participant/declarations-of-travel
+ * Get all declarations of travel for this participant
+ */
+router.get('/declarations-of-travel', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  const declarations = await prisma.declarationOfTravel.findMany({
+    where: { participantId: participant.id },
+    include: {
+      travelItem: {
+        select: {
+          id: true,
+          modeOfTransport: true,
+          fromLocation: true,
+          toLocation: true,
+          departureDate: true,
+          flightNumber: true,
+        },
+      },
+    },
+    orderBy: { signedAt: 'desc' },
+  });
+
+  res.json({ declarations });
+}));
+
+/**
+ * POST /api/participant/declarations-of-travel
+ * Create a declaration of travel with signature and generate PDF
+ */
+router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot add declarations after approval');
+  }
+
+  const result = declarationOfTravelSchema.safeParse(req.body);
+
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const data = result.data;
+
+  // If linking to a travel item, verify ownership
+  if (data.travelItemId) {
+    const travelItem = await prisma.travelItem.findFirst({
+      where: {
+        id: data.travelItemId,
+        participantId: participant.id,
+      },
+    });
+
+    if (!travelItem) {
+      throw new NotFoundError('Travel item not found');
+    }
+  }
+
+  // Generate PDF
+  const { filePath, fileName } = await generateDeclarationPdf(participant.id, {
+    name: data.name,
+    modeOfTransport: data.modeOfTransport,
+    fromPlace: data.fromPlace,
+    toPlace: data.toPlace,
+    travelDate: data.travelDate,
+    flightNumber: data.flightNumber,
+    bookingReference: data.bookingReference,
+    dateOfBirth: data.dateOfBirth,
+    idNumber: data.idNumber,
+    sendingOrgName: data.sendingOrgName,
+    sendingOrgOid: data.sendingOrgOid,
+    sendingOrgAddress: data.sendingOrgAddress,
+    signatureDataUrl: data.signatureDataUrl,
+  });
+
+  // Create the declaration record
+  const declaration = await prisma.declarationOfTravel.create({
+    data: {
+      participantId: participant.id,
+      travelItemId: data.travelItemId || null,
+      name: data.name,
+      modeOfTransport: data.modeOfTransport,
+      fromPlace: data.fromPlace,
+      toPlace: data.toPlace,
+      travelDate: data.travelDate,
+      flightNumber: data.flightNumber || null,
+      bookingReference: data.bookingReference || null,
+      dateOfBirth: data.dateOfBirth,
+      idNumber: data.idNumber,
+      sendingOrgName: data.sendingOrgName,
+      sendingOrgOid: data.sendingOrgOid || null,
+      sendingOrgAddress: data.sendingOrgAddress,
+      signatureDataUrl: data.signatureDataUrl,
+      generatedPdfPath: filePath,
+    },
+  });
+
+  // Also create a document record for the PDF so it appears in the participant's documents
+  await prisma.document.create({
+    data: {
+      participantId: participant.id,
+      storedFilePath: filePath,
+      originalFilename: fileName,
+      renamedFilename: fileName,
+      mimeType: 'application/pdf',
+      fileSize: 0, // We don't have the exact size here, it's not critical
+      documentType: DocumentType.OTHER, // Declaration of travel
+    },
+  });
+
+  // Log the change
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId: participant.id,
+      userType: 'PARTICIPANT',
+      fieldName: 'declarationOfTravel',
+      previousValue: '',
+      newValue: `Created declaration for ${data.fromPlace} to ${data.toPlace}`,
+    },
+  });
+
+  res.status(201).json(declaration);
+}));
+
+/**
+ * DELETE /api/participant/declarations-of-travel/:id
+ * Delete a declaration of travel
+ */
+router.delete('/declarations-of-travel/:id', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot delete declarations after approval');
+  }
+
+  const declaration = await prisma.declarationOfTravel.findFirst({
+    where: {
+      id: req.params.id,
+      participantId: participant.id,
+    },
+  });
+
+  if (!declaration) {
+    throw new NotFoundError('Declaration not found');
+  }
+
+  // Delete the PDF from storage if it exists
+  if (declaration.generatedPdfPath) {
+    const storage = getStorageService();
+    try {
+      await storage.delete(declaration.generatedPdfPath);
+    } catch (error) {
+      console.error('[Declaration] Failed to delete PDF from storage:', error);
+    }
+
+    // Also delete the document record
+    await prisma.document.deleteMany({
+      where: {
+        participantId: participant.id,
+        storedFilePath: declaration.generatedPdfPath,
+      },
+    });
+  }
+
+  // Delete the declaration
+  await prisma.declarationOfTravel.delete({
     where: { id: declaration.id },
   });
 

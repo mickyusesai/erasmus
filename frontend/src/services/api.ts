@@ -448,6 +448,123 @@ export const participantApi = {
     });
     return handleResponse<CurrencyConversionResponse>(res);
   },
+
+  // Document linking
+  linkDocumentToTravelItem: async (token: string, travelItemId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/participant/travel-items/${travelItemId}/link-document?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId }),
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
+  unlinkDocumentFromTravelItem: async (token: string, travelItemId: string) => {
+    const res = await fetch(`${API_BASE}/participant/travel-items/${travelItemId}/link-document?token=${token}`, {
+      method: 'DELETE',
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
+  // Declarations of Travel (with signature)
+  getDeclarationsOfTravel: async (token: string) => {
+    const res = await fetch(`${API_BASE}/participant/declarations-of-travel?token=${token}`);
+    return handleResponse<{ declarations: DeclarationOfTravel[] }>(res);
+  },
+
+  createDeclarationOfTravel: async (token: string, data: CreateDeclarationOfTravelData) => {
+    const res = await fetch(`${API_BASE}/participant/declarations-of-travel?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<DeclarationOfTravel>(res);
+  },
+
+  deleteDeclarationOfTravel: async (token: string, declarationId: string) => {
+    const res = await fetch(`${API_BASE}/participant/declarations-of-travel/${declarationId}?token=${token}`, {
+      method: 'DELETE',
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  // Dissemination Activities
+  getDisseminationStatus: async (token: string) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/status?token=${token}`);
+    return handleResponse<DisseminationStatus>(res);
+  },
+
+  getDisseminationActivities: async (token: string) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/activities?token=${token}`);
+    return handleResponse<{ activities: DisseminationActivity[]; disseminationEnabled: boolean }>(res);
+  },
+
+  createDisseminationActivity: async (token: string, data: CreateDisseminationActivityData) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/activities?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<DisseminationActivity>(res);
+  },
+
+  updateDisseminationActivity: async (token: string, activityId: string, data: Partial<CreateDisseminationActivityData>) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/activities/${activityId}?token=${token}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<DisseminationActivity>(res);
+  },
+
+  deleteDisseminationActivity: async (token: string, activityId: string) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/activities/${activityId}?token=${token}`, {
+      method: 'DELETE',
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  uploadDisseminationPhotos: async (token: string, activityId: string, files: File[]) => {
+    const formData = new FormData();
+    files.forEach(file => formData.append('photos', file));
+
+    const res = await fetch(`${API_BASE}/participant/dissemination/activities/${activityId}/photos?token=${token}`, {
+      method: 'POST',
+      body: formData,
+    });
+    return handleResponse<{ photos: DisseminationPhoto[]; message: string }>(res);
+  },
+
+  deleteDisseminationPhoto: async (token: string, activityId: string, photoId: string) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/activities/${activityId}/photos/${photoId}?token=${token}`, {
+      method: 'DELETE',
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  // Social Media Posts
+  getSocialMediaPosts: async (token: string) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/social-media?token=${token}`);
+    return handleResponse<{ posts: SocialMediaPost[] }>(res);
+  },
+
+  uploadSocialMediaPost: async (token: string, file: File) => {
+    const formData = new FormData();
+    formData.append('screenshot', file);
+
+    const res = await fetch(`${API_BASE}/participant/dissemination/social-media?token=${token}`, {
+      method: 'POST',
+      body: formData,
+    });
+    return handleResponse<SocialMediaPost>(res);
+  },
+
+  deleteSocialMediaPost: async (token: string, postId: string) => {
+    const res = await fetch(`${API_BASE}/participant/dissemination/social-media/${postId}?token=${token}`, {
+      method: 'DELETE',
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
 };
 
 export interface ConsolidationResult {
@@ -530,6 +647,7 @@ export interface CreateProjectData {
   country: string;
   startDate: string;
   endDate: string;
+  disseminationEnabled?: boolean;
 }
 
 export interface Participant {
@@ -564,6 +682,10 @@ export interface ParticipantDetail extends Participant {
   declarationsOnHonor: Declaration[];
   changeLogEntries: ChangeLogEntry[];
   maxReimbursementForCountry?: number;
+  disseminationStatus?: {
+    hasActivity: boolean;
+    hasSocialMedia: boolean;
+  };
 }
 
 export type ParticipantStatus = 'DRAFT' | 'PARTICIPANT_COMPLETE' | 'ADMIN_APPROVED' | 'PAID';
@@ -731,14 +853,20 @@ export interface ParticipantAuthResponse {
     country: string;
     startDate: string;
     endDate: string;
+    disseminationEnabled?: boolean;
   };
   documents: Document[];
   travelItems: TravelItem[];
   reimbursementSummary?: ReimbursementSummary;
   declarationsOnHonor: Declaration[];
+  declarationsOfTravel?: DeclarationOfTravel[];
   maxReimbursementForCountry?: number;
   greenTravel?: boolean;
   validation: ValidationResult;
+  disseminationStatus?: {
+    hasDisseminationActivity: boolean;
+    hasSocialMediaPost: boolean;
+  };
 }
 
 export interface DocumentUploadResponse {
@@ -766,4 +894,105 @@ export interface CurrencyConversionResponse {
   purchaseDate: string;
   year: number;
   month: number;
+}
+
+// Declaration of Travel types
+export interface DeclarationOfTravel {
+  id: string;
+  participantId: string;
+  travelItemId?: string;
+  name: string;
+  modeOfTransport: TransportMode;
+  fromPlace: string;
+  toPlace: string;
+  travelDate: string;
+  flightNumber?: string;
+  bookingReference?: string;
+  dateOfBirth: string;
+  idNumber: string;
+  sendingOrgName: string;
+  sendingOrgOid?: string;
+  sendingOrgAddress: string;
+  signatureDataUrl: string;
+  signedAt: string;
+  generatedPdfPath?: string;
+  travelItem?: {
+    id: string;
+    modeOfTransport: TransportMode;
+    fromLocation: string;
+    toLocation: string;
+    departureDate: string;
+    flightNumber?: string;
+  };
+}
+
+export interface CreateDeclarationOfTravelData {
+  travelItemId?: string;
+  name: string;
+  modeOfTransport: TransportMode;
+  fromPlace: string;
+  toPlace: string;
+  travelDate: string;
+  flightNumber?: string;
+  bookingReference?: string;
+  dateOfBirth: string;
+  idNumber: string;
+  sendingOrgName: string;
+  sendingOrgOid?: string;
+  sendingOrgAddress: string;
+  signatureDataUrl: string;
+}
+
+// Dissemination types
+export interface DisseminationStatus {
+  disseminationEnabled: boolean;
+  hasDisseminationActivity: boolean;
+  hasSocialMediaPost: boolean;
+  activityCount: number;
+  socialMediaCount: number;
+}
+
+export interface DisseminationActivity {
+  id: string;
+  projectId: string;
+  country: string;
+  title: string;
+  description: string;
+  activityDate?: string;
+  createdById: string;
+  createdAt: string;
+  photos: DisseminationPhoto[];
+  createdBy: {
+    id: string;
+    firstName: string;
+    lastName: string;
+  };
+  isOwner: boolean;
+}
+
+export interface DisseminationPhoto {
+  id: string;
+  disseminationActivityId: string;
+  storedFilePath: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSize: number;
+  uploadedAt: string;
+}
+
+export interface CreateDisseminationActivityData {
+  title: string;
+  description: string;
+  activityDate?: string;
+}
+
+export interface SocialMediaPost {
+  id: string;
+  participantId: string;
+  storedFilePath: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSize: number;
+  description?: string;
+  uploadedAt: string;
 }

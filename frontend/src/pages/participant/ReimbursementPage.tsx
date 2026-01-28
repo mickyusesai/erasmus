@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -24,12 +24,16 @@ import {
   MapPin,
   Ticket,
   X,
+  Share2,
+  Info,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
+import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
+import DisseminationPage from './DisseminationPage';
 import {
   participantApi,
   ParticipantAuthResponse,
@@ -194,21 +198,14 @@ const transportBgColors: Record<TransportMode, string> = {
   OTHER: 'bg-gray-50 border-gray-200',
 };
 
-// Legacy colors for backwards compatibility (can be removed later)
-const transportColors: Record<TransportMode, string> = {
-  PLANE: 'bg-blue-500',
-  TRAIN: 'bg-green-500',
-  BUS: 'bg-orange-500',
-  CAR: 'bg-purple-500',
-  FERRY: 'bg-cyan-500',
-  OTHER: 'bg-gray-500',
-};
+type ActiveTab = 'reimbursement' | 'dissemination';
 
 export default function ReimbursementPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('reimbursement');
 
   useEffect(() => {
     if (!token) {
@@ -253,6 +250,7 @@ export default function ReimbursementPage() {
   }
 
   const isComplete = data.participant.status !== 'DRAFT';
+  const disseminationEnabled = data.project.disseminationEnabled;
 
   return (
     <div className="min-h-screen pb-12">
@@ -274,8 +272,49 @@ export default function ReimbursementPage() {
             </p>
           </div>
 
-          {/* Progress Steps */}
-          {!isComplete && (
+          {/* Tabs (when dissemination is enabled) */}
+          {disseminationEnabled && (
+            <div className="mt-6 flex gap-2">
+              <button
+                onClick={() => setActiveTab('reimbursement')}
+                className={clsx(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                  activeTab === 'reimbursement'
+                    ? 'bg-white text-primary-600'
+                    : 'bg-white/10 text-white/80 hover:bg-white/20'
+                )}
+              >
+                <Ticket className="w-4 h-4 inline-block mr-2" />
+                Reimbursement
+              </button>
+              <button
+                onClick={() => setActiveTab('dissemination')}
+                className={clsx(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2',
+                  activeTab === 'dissemination'
+                    ? 'bg-white text-primary-600'
+                    : 'bg-white/10 text-white/80 hover:bg-white/20'
+                )}
+              >
+                <Share2 className="w-4 h-4" />
+                Dissemination
+                {data.disseminationStatus && (
+                  <span
+                    className={clsx(
+                      'w-2 h-2 rounded-full',
+                      data.disseminationStatus.hasDisseminationActivity &&
+                        data.disseminationStatus.hasSocialMediaPost
+                        ? 'bg-green-400'
+                        : 'bg-amber-400'
+                    )}
+                  />
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Progress Steps (only for reimbursement tab) */}
+          {!isComplete && activeTab === 'reimbursement' && (
             <div className="mt-8">
               <ProgressSteps currentStep={currentStep} />
             </div>
@@ -285,7 +324,16 @@ export default function ReimbursementPage() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto px-4 -mt-6">
-        {isComplete ? (
+        {activeTab === 'dissemination' ? (
+          <Card className="mt-6">
+            <CardContent className="p-6">
+              <DisseminationPage
+                token={token}
+                participantCountry={data.participant.country}
+              />
+            </CardContent>
+          </Card>
+        ) : isComplete ? (
           <CompletedView data={data} />
         ) : (
           <>
@@ -643,6 +691,7 @@ function Step2CheckData({
   const [noteEdited, setNoteEdited] = useState(false);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
+  const [missingBoardingPassItem, setMissingBoardingPassItem] = useState<TravelItem | null>(null);
 
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
@@ -885,6 +934,7 @@ function Step2CheckData({
                   onDelete={() => deleteMutation.mutate(item.id)}
                   onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
                   onViewDocument={setViewingDocument}
+                  onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
                 />
               ))}
             </div>
@@ -1018,6 +1068,19 @@ function Step2CheckData({
         document={viewingDocument}
         onClose={() => setViewingDocument(null)}
       />
+
+      {/* Missing Boarding Pass Modal */}
+      {missingBoardingPassItem && (
+        <MissingBoardingPassModal
+          isOpen={true}
+          onClose={() => setMissingBoardingPassItem(null)}
+          token={token}
+          travelItem={missingBoardingPassItem}
+          documents={data.documents}
+          participantName={`${data.participant.firstName} ${data.participant.lastName}`}
+          participantCountry={data.participant.country}
+        />
+      )}
     </div>
   );
 }
@@ -1134,6 +1197,7 @@ function TravelItemCard({
   onDelete,
   onUploadBoardingPass,
   onViewDocument,
+  onMissingBoardingPass,
 }: {
   item: TravelItem;
   documents: Document[];
@@ -1142,6 +1206,7 @@ function TravelItemCard({
   onDelete: () => void;
   onUploadBoardingPass: () => void;
   onViewDocument: (doc: Document) => void;
+  onMissingBoardingPass: () => void;
 }) {
   const Icon = transportIcons[item.modeOfTransport];
   const isPlane = item.modeOfTransport === 'PLANE';
@@ -1204,12 +1269,22 @@ function TravelItemCard({
             </span>
           </div>
           {!hasBoardingPass && (
-            <button
-              onClick={onUploadBoardingPass}
-              className="text-sm text-amber-700 hover:text-amber-800 font-medium underline"
-            >
-              Upload now
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onUploadBoardingPass}
+                className="text-sm text-amber-700 hover:text-amber-800 font-medium underline"
+              >
+                Upload now
+              </button>
+              <button
+                onClick={onMissingBoardingPass}
+                className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                title="Can't find your boarding pass?"
+              >
+                <Info className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Missing?</span>
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -1645,6 +1720,24 @@ function Step3Confirm({
   });
   const [showDeclarationModal, setShowDeclarationModal] = useState(false);
   const [selectedMissingDoc, setSelectedMissingDoc] = useState<DocumentType | null>(null);
+  const [declarationTravelItem, setDeclarationTravelItem] = useState<TravelItem | null>(null);
+
+  // Find flights missing boarding passes (no linked boarding pass document and no declaration of travel)
+  const declarationsOfTravel = data.declarationsOfTravel || [];
+  const flightsMissingBoardingPass = data.travelItems.filter((item) => {
+    if (item.modeOfTransport !== 'PLANE') return false;
+
+    // Check if there's a linked boarding pass document
+    const linkedDoc = data.documents.find((d) => d.id === item.documentId);
+    const hasBoardingPass =
+      linkedDoc?.documentType === 'FLIGHT_BOARDING_PASS' ||
+      data.documents.some((d) => d.documentType === 'FLIGHT_BOARDING_PASS');
+
+    // Check if there's a declaration of travel for this item
+    const hasDeclaration = declarationsOfTravel.some((dec) => dec.travelItemId === item.id);
+
+    return !hasBoardingPass && !hasDeclaration;
+  });
 
   const updateBankMutation = useMutation({
     mutationFn: () => participantApi.updateBankDetails(token, bankDetails),
@@ -1719,6 +1812,48 @@ function Step3Confirm({
                             Sign declaration
                           </button>
                         )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Flights Missing Boarding Pass Warning */}
+          {flightsMissingBoardingPass.length > 0 && (
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <Plane className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <h4 className="font-semibold text-blue-800">
+                    Flights Without Boarding Pass
+                  </h4>
+                  <p className="text-sm text-blue-700 mt-1">
+                    The following flights don't have a boarding pass. You can either upload
+                    one or sign a declaration of travel.
+                  </p>
+                  <ul className="mt-3 space-y-2">
+                    {flightsMissingBoardingPass.map((item) => (
+                      <li
+                        key={item.id}
+                        className="flex items-center justify-between bg-white p-3 rounded-lg border border-blue-100"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">
+                            {item.fromLocation} → {item.toLocation}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {new Date(item.departureDate).toLocaleDateString()}
+                            {item.flightNumber && ` • ${item.flightNumber}`}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setDeclarationTravelItem(item)}
+                          className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          Sign Declaration
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -1843,6 +1978,19 @@ function Step3Confirm({
         onSubmit={(decData) => createDeclarationMutation.mutate(decData)}
         isLoading={createDeclarationMutation.isPending}
       />
+
+      {/* Declaration of Travel Modal (for missing boarding pass) */}
+      {declarationTravelItem && (
+        <MissingBoardingPassModal
+          isOpen={true}
+          onClose={() => setDeclarationTravelItem(null)}
+          token={token}
+          travelItem={declarationTravelItem}
+          documents={data.documents}
+          participantName={`${data.participant.firstName} ${data.participant.lastName}`}
+          participantCountry={data.participant.country}
+        />
+      )}
     </>
   );
 }

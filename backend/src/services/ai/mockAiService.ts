@@ -200,10 +200,10 @@ export class MockAiService implements TravelDocumentAiService {
       // Check for boarding pass if flight
       if (item.modeOfTransport === TransportMode.PLANE) {
         const hasBoardingPass = participant.documents.some(
-          (doc) => doc.documentType === DocumentType.FLIGHT_BOARDING_PASS
+          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_BOARDING_PASS
         );
         const hasDeclaration = participant.declarationsOnHonor.some(
-          (dec) => dec.missingDocumentType === DocumentType.FLIGHT_BOARDING_PASS
+          (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_BOARDING_PASS
         );
 
         if (!hasBoardingPass && !hasDeclaration) {
@@ -218,7 +218,7 @@ export class MockAiService implements TravelDocumentAiService {
       // Check for invoice/ticket
       if (item.modeOfTransport === TransportMode.PLANE) {
         const hasInvoice = participant.documents.some(
-          (doc) => doc.documentType === DocumentType.FLIGHT_INVOICE
+          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_INVOICE
         );
         if (!hasInvoice) {
           missingItems.push({
@@ -289,7 +289,7 @@ export class MockAiService implements TravelDocumentAiService {
 
     // Get max reimbursement for participant's country
     const countryLimit = participant.project.countryLimits.find(
-      (limit) => limit.country === participant.country
+      (limit: { country: string; maxReimbursementAmount: number }) => limit.country === participant.country
     );
     const maxReimbursementAllowed = countryLimit?.maxReimbursementAmount || 0;
 

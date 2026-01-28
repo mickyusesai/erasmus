@@ -349,6 +349,45 @@ export default function ParticipantDetail() {
             </CardContent>
           </Card>
 
+          {/* Dissemination Status */}
+          {participant.disseminationStatus && (
+            <Card>
+              <CardHeader>
+                <h3 className="font-semibold text-gray-900">Dissemination</h3>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Activity</span>
+                    <span
+                      className={clsx(
+                        'px-2 py-0.5 rounded text-xs font-medium',
+                        participant.disseminationStatus.hasActivity
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-gray-100 text-gray-500'
+                      )}
+                    >
+                      {participant.disseminationStatus.hasActivity ? 'Yes' : 'No'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">Social Media</span>
+                    <span
+                      className={clsx(
+                        'px-2 py-0.5 rounded text-xs font-medium',
+                        participant.disseminationStatus.hasSocialMedia
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-gray-100 text-gray-500'
+                      )}
+                    >
+                      {participant.disseminationStatus.hasSocialMedia ? 'Yes' : 'No'}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Actions */}
           <Card>
             <CardHeader>

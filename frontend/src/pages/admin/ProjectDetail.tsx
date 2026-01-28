@@ -744,7 +744,7 @@ function SettingsTab({
     },
   });
 
-  const autoPopulateMutation = useMutation({
+  const manualAutoPopulateMutation = useMutation({
     mutationFn: () => adminApi.autoPopulateCountryLimits(project.id, 275),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['country-limits'] });
@@ -782,8 +782,8 @@ function SettingsTab({
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => autoPopulateMutation.mutate()}
-              loading={autoPopulateMutation.isPending}
+              onClick={() => manualAutoPopulateMutation.mutate()}
+              loading={manualAutoPopulateMutation.isPending}
             >
               Auto-fill from participants
             </Button>
@@ -929,6 +929,9 @@ function SettingsTab({
         </CardContent>
       </Card>
 
+      {/* Feature Settings */}
+      <FeatureSettingsCard project={project} />
+
       {/* Danger Zone */}
       <Card>
         <CardHeader>
@@ -946,5 +949,50 @@ function SettingsTab({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function FeatureSettingsCard({ project }: { project: any }) {
+  const queryClient = useQueryClient();
+
+  const updateProjectMutation = useMutation({
+    mutationFn: (data: { disseminationEnabled: boolean }) =>
+      adminApi.updateProject(project.id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      toast.success('Project settings updated');
+    },
+    onError: () => {
+      toast.error('Failed to update project settings');
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <h3 className="font-semibold text-gray-900">Feature Settings</h3>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <div>
+              <p className="font-medium text-gray-900">Dissemination Activities</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Allow participants to upload dissemination activities and social media posts
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={project.disseminationEnabled || false}
+              onChange={(e) =>
+                updateProjectMutation.mutate({ disseminationEnabled: e.target.checked })
+              }
+              disabled={updateProjectMutation.isPending}
+              className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
+            />
+          </label>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

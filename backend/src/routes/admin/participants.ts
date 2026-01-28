@@ -8,7 +8,7 @@ import { NotFoundError, ValidationError } from '../../middleware/errorHandler.js
 import { getEmailService } from '../../services/email/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { getStorageService } from '../../services/storage/index.js';
-import { ParticipantStatus, DocumentType, TransportMode } from '@prisma/client';
+import { ParticipantStatus, DocumentType, TransportMode } from '../../types/prisma.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -108,9 +108,13 @@ router.get('/:id', async (req: Request, res: Response) => {
       },
       travelItems: {
         orderBy: { departureDate: 'asc' },
+        include: {
+          declarationsOfTravel: true,
+        },
       },
       reimbursementSummary: true,
       declarationsOnHonor: true,
+      declarationsOfTravel: true,
       changeLogEntries: {
         orderBy: { changedAt: 'desc' },
         take: 50,
@@ -124,12 +128,35 @@ router.get('/:id', async (req: Request, res: Response) => {
 
   // Get country limit for this participant
   const countryLimit = participant.project.countryLimits.find(
-    (limit) => limit.country === participant.country
+    (limit: { country: string }) => limit.country === participant.country
   );
+
+  // Get dissemination status
+  let disseminationStatus = {
+    hasDisseminationActivity: false,
+    hasSocialMediaPost: false,
+  };
+
+  if (participant.project.disseminationEnabled) {
+    const activityCount = await prisma.disseminationActivity.count({
+      where: {
+        projectId: participant.project.id,
+        country: participant.country,
+      },
+    });
+    const socialMediaCount = await prisma.socialMediaPost.count({
+      where: { participantId: participant.id },
+    });
+    disseminationStatus = {
+      hasDisseminationActivity: activityCount > 0,
+      hasSocialMediaPost: socialMediaCount > 0,
+    };
+  }
 
   res.json({
     ...participant,
     maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
+    disseminationStatus,
   });
 });
 
