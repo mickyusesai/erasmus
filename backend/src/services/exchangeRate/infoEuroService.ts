@@ -201,6 +201,72 @@ export async function getAllCachedRates(): Promise<{
 }
 
 /**
+ * Clear cached exchange rates
+ * @param currencyCode - Optional: clear only rates for this currency
+ * @param year - Optional: clear only rates for this year
+ * @param month - Optional: clear only rates for this month
+ */
+export async function clearCachedRates(
+  currencyCode?: string,
+  year?: number,
+  month?: number
+): Promise<number> {
+  const where: { currencyCode?: string; year?: number; month?: number } = {};
+
+  if (currencyCode) where.currencyCode = currencyCode.toUpperCase();
+  if (year) where.year = year;
+  if (month) where.month = month;
+
+  const result = await prisma.exchangeRate.deleteMany({ where });
+  console.log(`[InforEuro] Cleared ${result.count} cached rates`);
+  return result.count;
+}
+
+/**
+ * Force refresh a rate from the API (bypasses cache)
+ */
+export async function refreshRate(
+  currencyCode: string,
+  purchaseDate: Date
+): Promise<number> {
+  const currency = currencyCode.toUpperCase();
+
+  if (currency === 'EUR') {
+    return 1.0;
+  }
+
+  const year = purchaseDate.getFullYear();
+  const month = purchaseDate.getMonth() + 1;
+
+  // Delete existing cached rate
+  await prisma.exchangeRate.deleteMany({
+    where: { currencyCode: currency, year, month },
+  });
+
+  console.log(`[InforEuro] Refreshing rate for ${currency} ${month}/${year}`);
+
+  // Fetch fresh rate from API
+  const rate = await fetchRateFromApi(currency, year, month);
+
+  if (rate !== null) {
+    // Cache the new rate
+    await prisma.exchangeRate.create({
+      data: {
+        currencyCode: currency,
+        year,
+        month,
+        rateToEur: rate,
+      },
+    });
+    return rate;
+  }
+
+  // Fallback to hardcoded rates
+  console.warn(`[InforEuro] Could not refresh rate for ${currency}, using hardcoded fallback`);
+  return getHardcodedRate(currency);
+}
+
+/**
  * Hardcoded fallback rates (approximate, for when API is unavailable)
  * These are rough approximations and should not be relied upon
  */

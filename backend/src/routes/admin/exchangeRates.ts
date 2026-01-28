@@ -3,6 +3,8 @@ import {
   getExchangeRate,
   convertToEur,
   getAllCachedRates,
+  clearCachedRates,
+  refreshRate,
   SUPPORTED_CURRENCIES,
 } from '../../services/exchangeRate/index.js';
 
@@ -77,6 +79,58 @@ router.post('/convert', asyncHandler(async (req: Request, res: Response) => {
     eurAmount,
     rate: rate,
     purchaseDate: date.toISOString(),
+  });
+}));
+
+/**
+ * DELETE /api/admin/exchange-rates/clear
+ * Clear cached exchange rates
+ * Query params: currency (optional), year (optional), month (optional)
+ */
+router.delete('/clear', asyncHandler(async (req: Request, res: Response) => {
+  const { currency, year, month } = req.query;
+
+  const yearNum = year ? parseInt(year as string, 10) : undefined;
+  const monthNum = month ? parseInt(month as string, 10) : undefined;
+
+  const deletedCount = await clearCachedRates(
+    currency as string | undefined,
+    yearNum,
+    monthNum
+  );
+
+  res.json({
+    success: true,
+    deletedCount,
+    message: `Cleared ${deletedCount} cached exchange rate(s)`,
+  });
+}));
+
+/**
+ * POST /api/admin/exchange-rates/refresh
+ * Force refresh a rate from InforEuro API
+ * Body: { currency, year, month }
+ */
+router.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
+  const { currency, year, month } = req.body;
+
+  if (!currency) {
+    res.status(400).json({ error: 'Currency is required' });
+    return;
+  }
+
+  const yearNum = year || new Date().getFullYear();
+  const monthNum = month || new Date().getMonth() + 1;
+
+  const date = new Date(yearNum, monthNum - 1, 15);
+  const rate = await refreshRate(currency, date);
+
+  res.json({
+    currency: currency.toUpperCase(),
+    year: yearNum,
+    month: monthNum,
+    rateToEur: rate,
+    message: `Refreshed rate for ${currency} ${monthNum}/${yearNum}`,
   });
 }));
 
