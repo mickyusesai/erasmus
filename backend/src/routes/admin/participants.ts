@@ -8,7 +8,7 @@ import { NotFoundError, ValidationError } from '../../middleware/errorHandler.js
 import { getEmailService } from '../../services/email/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { getStorageService } from '../../services/storage/index.js';
-import { ParticipantStatus, DocumentType, TransportMode } from '../../types/prisma.js';
+import { ParticipantStatus, DocumentType, TransportMode } from '@prisma/client';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });

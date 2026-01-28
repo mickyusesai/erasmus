@@ -9,7 +9,7 @@ import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
-import { ParticipantStatus, TransportMode, DocumentType } from '../../types/prisma.js';
+import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
 import disseminationRoutes from './dissemination.js';

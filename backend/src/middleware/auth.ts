@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { UnauthorizedError, ForbiddenError } from './errorHandler.js';
 import prisma from '../utils/prisma.js';
-import { Participant } from '../types/prisma.js';
+import { Participant } from '@prisma/client';
 
 // Extend Express Request type
 declare global {
