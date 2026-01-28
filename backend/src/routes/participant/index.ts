@@ -56,6 +56,11 @@ const updateTravelItemSchema = z.object({
   purchaseDate: z.string().transform((s) => new Date(s)).nullable().optional(),
   amountEur: z.number().optional(),
   comment: z.string().nullable().optional(),
+  // Multi-passenger bookings
+  participantPortion: z.number().nullable().optional(),
+  // Car travel specific
+  distanceKm: z.number().nullable().optional(),
+  isDriverCarpool: z.boolean().optional(),
 });
 
 const declarationOnHonorSchema = z.object({

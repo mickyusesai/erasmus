@@ -755,6 +755,19 @@ export interface TravelItem {
   purchaseDate?: string;
   amountEur: number;
   comment?: string;
+  // Round-trip and price allocation
+  tripGroupId?: string;
+  priceAllocation?: number;
+  totalGroupPrice?: number;
+  // Multi-passenger bookings
+  numberOfPassengers?: number;
+  participantPortion?: number;
+  // Car travel specific
+  distanceKm?: number;
+  isDriverCarpool?: boolean;
+  // Validation
+  routeMatchesCountry?: boolean;
+  validationWarnings?: string;
 }
 
 export type TransportMode = 'PLANE' | 'TRAIN' | 'BUS' | 'CAR' | 'FERRY' | 'OTHER';

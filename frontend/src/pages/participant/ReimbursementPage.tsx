@@ -27,6 +27,7 @@ import {
   Share2,
   Info,
   FileCheck,
+  Users,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -1313,6 +1314,54 @@ function TravelItemCard({
         </div>
       )}
 
+      {/* Multi-passenger booking alert */}
+      {item.numberOfPassengers && item.numberOfPassengers > 1 && (
+        <div className="mb-4 p-3 rounded-xl bg-blue-50 border border-blue-200">
+          <div className="flex items-start gap-3">
+            <Users className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-blue-800">
+                Multi-passenger booking ({item.numberOfPassengers} passengers)
+              </p>
+              <p className="text-xs text-blue-700 mt-1">
+                This booking was for multiple people. Please enter your share of the cost below.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <label className="text-sm text-blue-800">My portion:</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max={item.amountOriginal}
+                  value={item.participantPortion || ''}
+                  onChange={(e) => onUpdate({ participantPortion: parseFloat(e.target.value) || 0 })}
+                  className="w-28"
+                  placeholder={`Max: ${item.amountOriginal}`}
+                />
+                <span className="text-sm text-blue-700">{item.currencyOriginal}</span>
+                <span className="text-xs text-blue-600 ml-2">
+                  (Total: {formatCurrency(item.amountOriginal, item.currencyOriginal)})
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Round-trip indicator */}
+      {item.tripGroupId && item.priceAllocation && item.priceAllocation < 1 && (
+        <div className="mb-4 p-2 rounded-lg bg-purple-50 border border-purple-200 flex items-center gap-2">
+          <span className="text-xs font-medium text-purple-700">
+            Part of round-trip booking
+          </span>
+          {item.totalGroupPrice && (
+            <span className="text-xs text-purple-600">
+              (Total: {formatCurrency(item.totalGroupPrice, item.currencyOriginal)} × {item.priceAllocation * 100}%)
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-4 mb-4">
         <div className={clsx(
@@ -1452,6 +1501,44 @@ function TravelItemCard({
               value={item.bookingReference || ''}
               onChange={(e) => onUpdate({ bookingReference: e.target.value })}
             />
+          </>
+        )}
+        {/* Car travel specific fields */}
+        {item.modeOfTransport === 'CAR' && (
+          <>
+            <div className="col-span-1">
+              <Input
+                label={
+                  <span className="flex items-center gap-1">
+                    Distance (km)
+                    <span className="text-xs text-gray-400 ml-1">(one-way)</span>
+                  </span>
+                }
+                type="number"
+                step="1"
+                min="0"
+                value={item.distanceKm || ''}
+                onChange={(e) => onUpdate({ distanceKm: parseFloat(e.target.value) || 0 })}
+                placeholder="e.g., 350"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Enter the distance driven. Reimbursement = distance × rate per km.
+              </p>
+            </div>
+            <div className="col-span-1">
+              <label className="flex items-center gap-2 p-3 bg-white rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={item.isDriverCarpool || false}
+                  onChange={(e) => onUpdate({ isDriverCarpool: e.target.checked })}
+                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-700">I was the driver</span>
+                  <p className="text-xs text-gray-500">Check if you drove (not a passenger)</p>
+                </div>
+              </label>
+            </div>
           </>
         )}
       </div>
