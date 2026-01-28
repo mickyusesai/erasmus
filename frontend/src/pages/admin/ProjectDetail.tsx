@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -10,10 +10,8 @@ import {
   Trash2,
   Settings,
   FileText,
-  X,
   AlertTriangle,
   CheckCircle,
-  Clock,
   UserPlus,
   ChevronUp,
   ChevronDown,
