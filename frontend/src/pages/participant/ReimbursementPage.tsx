@@ -26,6 +26,7 @@ import {
   X,
   Share2,
   Info,
+  FileCheck,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -41,6 +42,7 @@ import {
   TransportMode,
   DocumentType,
   Document,
+  DeclarationOfTravel,
 } from '../../services/api';
 import { clsx } from 'clsx';
 
@@ -927,6 +929,7 @@ function Step2CheckData({
                   key={item.id}
                   item={item}
                   documents={data.documents}
+                  declarationsOfTravel={data.declarationsOfTravel || []}
                   token={token}
                   onUpdate={(updates) =>
                     updateMutation.mutate({ id: item.id, updates })
@@ -1192,6 +1195,7 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
 function TravelItemCard({
   item,
   documents,
+  declarationsOfTravel,
   token,
   onUpdate,
   onDelete,
@@ -1201,6 +1205,7 @@ function TravelItemCard({
 }: {
   item: TravelItem;
   documents: Document[];
+  declarationsOfTravel: DeclarationOfTravel[];
   token: string;
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
@@ -1211,6 +1216,7 @@ function TravelItemCard({
   const Icon = transportIcons[item.modeOfTransport];
   const isPlane = item.modeOfTransport === 'PLANE';
   const hasBoardingPass = documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+  const hasDeclaration = declarationsOfTravel.some(dec => dec.travelItemId === item.id);
   const linkedDocument = documents.find(d => d.id === item.documentId);
   const isNonEurCurrency = item.currencyOriginal !== 'EUR';
   const [isConverting, setIsConverting] = useState(false);
@@ -1256,19 +1262,37 @@ function TravelItemCard({
 
   return (
     <div className="p-6 bg-gray-50 rounded-2xl">
-      {/* Boarding Pass Status Bar for Flights */}
+      {/* Boarding Pass / Declaration Status Bar for Flights */}
       {isPlane && (
         <div className={clsx(
           'mb-4 p-3 rounded-xl flex items-center justify-between',
-          hasBoardingPass ? 'bg-emerald-50 border border-emerald-200' : 'bg-amber-50 border border-amber-200'
+          (hasBoardingPass || hasDeclaration) ? 'bg-emerald-50 border border-emerald-200' : 'bg-amber-50 border border-amber-200'
         )}>
           <div className="flex items-center gap-2">
-            <Ticket className={clsx('w-5 h-5', hasBoardingPass ? 'text-emerald-600' : 'text-amber-600')} />
-            <span className={clsx('text-sm font-medium', hasBoardingPass ? 'text-emerald-700' : 'text-amber-700')}>
-              {hasBoardingPass ? 'Boarding Pass Added' : 'Boarding Pass Missing'}
-            </span>
+            {hasBoardingPass ? (
+              <>
+                <Ticket className="w-5 h-5 text-emerald-600" />
+                <span className="text-sm font-medium text-emerald-700">
+                  Boarding Pass Added
+                </span>
+              </>
+            ) : hasDeclaration ? (
+              <>
+                <FileCheck className="w-5 h-5 text-emerald-600" />
+                <span className="text-sm font-medium text-emerald-700">
+                  Declaration Created
+                </span>
+              </>
+            ) : (
+              <>
+                <Ticket className="w-5 h-5 text-amber-600" />
+                <span className="text-sm font-medium text-amber-700">
+                  Boarding Pass Missing
+                </span>
+              </>
+            )}
           </div>
-          {!hasBoardingPass && (
+          {!hasBoardingPass && !hasDeclaration && (
             <div className="flex items-center gap-3">
               <button
                 onClick={onUploadBoardingPass}
