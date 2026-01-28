@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
+import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
 // Maximum image size for Claude API (5MB)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -169,8 +170,10 @@ Extract ALL information you can find. Respond with ONLY a JSON object:
   "trainNumber": "Train number or null",
   "busCompany": "Bus company name or null",
   "amount": 123.45 (numeric, total price) or null,
-  "currency": "EUR/USD/GBP/PLN etc. or null"
+  "currency": "EUR/USD/GBP/PLN/HUF/CZK/RON/SEK/DKK etc. - use EXACTLY the currency shown on document, or null"
 }
+
+CURRENCY: Always extract the EXACT currency code shown on the document. Common currencies: EUR, USD, GBP, PLN (Polish Zloty), HUF (Hungarian Forint), CZK (Czech Koruna), RON (Romanian Leu), SEK (Swedish Krona), DKK (Danish Krone), NOK (Norwegian Krone), CHF (Swiss Franc), BGN (Bulgarian Lev), TRY (Turkish Lira).
 
 Extract real values only - use null if not visible.
 For station names like "Rotterdam C." or "Eindhoven C." use just the city name (Rotterdam, Eindhoven).
@@ -408,6 +411,11 @@ IMPORTANT RULES:
 - Each leg of the journey should be ONE travel item (don't duplicate for boarding pass + invoice)
 - Train receipts and tickets for the same journey should be combined - use the receipt amount as it's what was paid
 
+CURRENCY RULES:
+- ALWAYS use the ORIGINAL currency shown on the document (HUF, PLN, CZK, EUR, etc.)
+- DO NOT convert to EUR - we will convert it later using official exchange rates
+- If the document shows HUF, output HUF. If it shows PLN, output PLN. etc.
+
 Respond with ONLY a JSON object:
 {
   "journey_summary": "Brief description of the understood journey",
@@ -421,7 +429,7 @@ Respond with ONLY a JSON object:
       "bookingReference": "Reference or null",
       "flightNumber": "Flight number or null",
       "amount": 123.45,
-      "currency": "EUR",
+      "currency": "HUF/PLN/CZK/EUR/etc - use ORIGINAL currency from document",
       "purchaseDate": "YYYY-MM-DD or null",
       "linkedDocumentIds": ["doc-id-1", "doc-id-2"],
       "notes": "Any relevant notes about this leg"
@@ -526,10 +534,21 @@ Respond with ONLY a JSON object:
           }
         }
 
-        // Convert currency to EUR
+        // Convert currency to EUR using InforEuro rates
         let amountEur = item.amount || 0;
-        if (item.currency && item.currency !== 'EUR') {
-          amountEur = this.convertToEur(item.amount, item.currency);
+        if (item.currency && item.currency !== 'EUR' && item.amount) {
+          // Use purchase date or departure date for exchange rate lookup
+          const rateDate = item.purchaseDate
+            ? new Date(item.purchaseDate)
+            : (item.departureDate ? new Date(item.departureDate) : new Date());
+
+          try {
+            amountEur = await convertWithInforEuro(item.amount, item.currency, rateDate);
+            console.log(`[Consolidation] Converted ${item.amount} ${item.currency} → ${amountEur} EUR (rate date: ${rateDate.toISOString().split('T')[0]})`);
+          } catch (error) {
+            console.error(`[Consolidation] Failed to convert ${item.currency}, using fallback:`, error);
+            amountEur = this.convertToEurFallback(item.amount, item.currency);
+          }
         }
 
         const travelItem = await prisma.travelItem.create({
@@ -617,7 +636,8 @@ Respond with ONLY a JSON object:
     return (mapping[mode] || 'OTHER') as TransportMode;
   }
 
-  private convertToEur(amount: number, currency: string): number {
+  private convertToEurFallback(amount: number, currency: string): number {
+    // Fallback hardcoded rates in case InforEuro API is unavailable
     const rates: Record<string, number> = {
       EUR: 1.0,
       USD: 0.92,
@@ -627,6 +647,11 @@ Respond with ONLY a JSON object:
       HUF: 0.0026,
       RON: 0.20,
       SEK: 0.088,
+      DKK: 0.13,
+      NOK: 0.085,
+      CHF: 1.05,
+      BGN: 0.51,
+      TRY: 0.029,
     };
     const rate = rates[currency.toUpperCase()] || 1;
     return Math.round(amount * rate * 100) / 100;
