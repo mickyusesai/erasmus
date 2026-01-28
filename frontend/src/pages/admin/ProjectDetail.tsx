@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -9,14 +9,19 @@ import {
   Send,
   Trash2,
   Settings,
-  Users,
   FileText,
-  Plus,
   X,
   AlertTriangle,
   CheckCircle,
   Clock,
   UserPlus,
+  ChevronUp,
+  ChevronDown,
+  FileX,
+  ShieldCheck,
+  Banknote,
+  Users,
+  Share2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -35,7 +40,9 @@ function formatDate(dateInput: string | Date): string {
   return `${day}-${month}-${year}`;
 }
 
-type TabType = 'overview' | 'participants' | 'settings';
+type TabType = 'overview' | 'settings';
+type SortField = 'name' | 'country' | 'status' | 'check' | 'amount';
+type SortDirection = 'asc' | 'desc';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -93,7 +100,6 @@ export default function ProjectDetail() {
 
   const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
     { id: 'overview', label: 'Overview', icon: FileText },
-    { id: 'participants', label: 'Participants', icon: Users },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
@@ -146,15 +152,17 @@ export default function ProjectDetail() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <OverviewTab project={project} participants={participants || []} />
-      )}
-      {activeTab === 'participants' && (
-        <ParticipantsTab projectId={id!} participants={participants || []} />
+        <OverviewTab
+          project={project}
+          projectId={id!}
+          participants={participants || []}
+        />
       )}
       {activeTab === 'settings' && (
         <SettingsTab
           project={project}
           countryLimits={countryLimits || []}
+          hasParticipants={(participants?.length || 0) > 0}
           onDelete={() => {
             if (confirm('Are you sure you want to delete this project? This will also delete all participant data and uploaded documents.')) {
               deleteMutation.mutate();
@@ -167,7 +175,77 @@ export default function ProjectDetail() {
   );
 }
 
-function OverviewTab({ project, participants }: { project: any; participants: Participant[] }) {
+// Progress status for participant
+type ProgressStatus = 'no_docs' | 'has_docs' | 'missing_items' | 'complete' | 'approved' | 'paid';
+
+function getProgressStatus(participant: Participant): { status: ProgressStatus; label: string } {
+  const { status, reimbursementSummary, _count } = participant;
+
+  if (status === 'PAID') {
+    return { status: 'paid', label: 'Paid' };
+  }
+  if (status === 'ADMIN_APPROVED') {
+    return { status: 'approved', label: 'Approved' };
+  }
+  if (status === 'PARTICIPANT_COMPLETE') {
+    if (reimbursementSummary && !reimbursementSummary.aiCheckOk) {
+      return { status: 'missing_items', label: 'Needs review' };
+    }
+    return { status: 'complete', label: 'Complete' };
+  }
+  // DRAFT status
+  if (!_count || _count.documents === 0) {
+    return { status: 'no_docs', label: 'No documents' };
+  }
+  if (reimbursementSummary && !reimbursementSummary.aiCheckOk) {
+    return { status: 'missing_items', label: 'Missing items' };
+  }
+  return { status: 'has_docs', label: 'In progress' };
+}
+
+function ProgressIcon({ status }: { status: ProgressStatus }) {
+  const iconMap: Record<ProgressStatus, { icon: React.ElementType; bgColor: string; iconColor: string }> = {
+    no_docs: { icon: FileX, bgColor: 'bg-gray-100', iconColor: 'text-gray-400' },
+    has_docs: { icon: FileText, bgColor: 'bg-blue-100', iconColor: 'text-blue-600' },
+    missing_items: { icon: AlertTriangle, bgColor: 'bg-amber-100', iconColor: 'text-amber-600' },
+    complete: { icon: CheckCircle, bgColor: 'bg-emerald-100', iconColor: 'text-emerald-600' },
+    approved: { icon: ShieldCheck, bgColor: 'bg-purple-100', iconColor: 'text-purple-600' },
+    paid: { icon: Banknote, bgColor: 'bg-emerald-100', iconColor: 'text-emerald-600' },
+  };
+
+  const { icon: Icon, bgColor, iconColor } = iconMap[status];
+
+  return (
+    <div className={clsx('inline-flex items-center justify-center w-7 h-7 rounded-full', bgColor)}>
+      <Icon className={clsx('w-4 h-4', iconColor)} />
+    </div>
+  );
+}
+
+function OverviewTab({
+  project,
+  projectId,
+  participants
+}: {
+  project: any;
+  projectId: string;
+  participants: Participant[];
+}) {
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const queryClient = useQueryClient();
+
+  // Form state for adding individual participant
+  const [newParticipant, setNewParticipant] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    country: '',
+  });
+
   const stats = {
     total: participants.length,
     draft: participants.filter((p) => p.status === 'DRAFT').length,
@@ -180,105 +258,67 @@ function OverviewTab({ project, participants }: { project: any; participants: Pa
     ),
   };
 
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2 space-y-6">
-        {/* Description */}
-        {project.description && (
-          <Card>
-            <CardContent>
-              <h3 className="font-semibold text-gray-900 mb-2">Description</h3>
-              <p className="text-gray-600">{project.description}</p>
-            </CardContent>
-          </Card>
-        )}
+  // Sort participants
+  const sortedParticipants = useMemo(() => {
+    const sorted = [...participants].sort((a, b) => {
+      let aVal: string | number = '';
+      let bVal: string | number = '';
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[
-            { label: 'Total', value: stats.total, color: 'bg-gray-100' },
-            { label: 'Draft', value: stats.draft, color: 'bg-gray-100' },
-            { label: 'Complete', value: stats.complete, color: 'bg-amber-100' },
-            { label: 'Paid', value: stats.paid, color: 'bg-purple-100' },
-          ].map((stat) => (
-            <Card key={stat.label}>
-              <CardContent className="p-4">
-                <p className="text-sm text-gray-500">{stat.label}</p>
-                <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </div>
+      switch (sortField) {
+        case 'name':
+          aVal = `${a.lastName} ${a.firstName}`.toLowerCase();
+          bVal = `${b.lastName} ${b.firstName}`.toLowerCase();
+          break;
+        case 'country':
+          aVal = a.country.toLowerCase();
+          bVal = b.country.toLowerCase();
+          break;
+        case 'status':
+          const statusOrder = { PAID: 0, ADMIN_APPROVED: 1, PARTICIPANT_COMPLETE: 2, DRAFT: 3 };
+          aVal = statusOrder[a.status] ?? 4;
+          bVal = statusOrder[b.status] ?? 4;
+          break;
+        case 'check':
+          const checkOrder = { paid: 0, approved: 1, complete: 2, missing_items: 3, has_docs: 4, no_docs: 5 };
+          aVal = checkOrder[getProgressStatus(a).status];
+          bVal = checkOrder[getProgressStatus(b).status];
+          break;
+        case 'amount':
+          aVal = a.reimbursementSummary?.amountToReimburse || 0;
+          bVal = b.reimbursementSummary?.amountToReimburse || 0;
+          break;
+      }
 
-      <div>
-        <Card>
-          <CardContent>
-            <h3 className="font-semibold text-gray-900 mb-4">Financial Summary</h3>
-            <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Total to Reimburse</span>
-                <span className="font-semibold">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(stats.totalAmount)}
-                </span>
-              </div>
-              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-soft rounded-full"
-                  style={{
-                    width: `${stats.total > 0 ? (stats.paid / stats.total) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-              <p className="text-sm text-gray-500">
-                {stats.paid} of {stats.total} reimbursements paid
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-}
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      }
+      return sortDirection === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+    });
+    return sorted;
+  }, [participants, sortField, sortDirection]);
 
-// Helper to determine participant warning status
-function getParticipantWarnings(participant: Participant): { hasWarning: boolean; message: string } {
-  // Check if AI check failed
-  if (participant.reimbursementSummary && !participant.reimbursementSummary.aiCheckOk) {
-    return { hasWarning: true, message: 'Missing documents or data issues' };
-  }
-
-  // Check if status is still draft and no documents
-  if (participant.status === 'DRAFT') {
-    if (!participant.reimbursementSummary || participant.reimbursementSummary.totalEur === 0) {
-      return { hasWarning: true, message: 'No travel data submitted' };
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
     }
-  }
+  };
 
-  // Check if participant marked complete but AI check failed
-  if (participant.status === 'PARTICIPANT_COMPLETE' && participant.reimbursementSummary && !participant.reimbursementSummary.aiCheckOk) {
-    return { hasWarning: true, message: 'Review needed - validation issues' };
-  }
-
-  return { hasWarning: false, message: '' };
-}
-
-function ParticipantsTab({ projectId, participants }: { projectId: string; participants: Participant[] }) {
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const queryClient = useQueryClient();
-
-  // Form state for adding individual participant
-  const [newParticipant, setNewParticipant] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    country: '',
-  });
+  const SortHeader = ({ field, children }: { field: SortField; children: React.ReactNode }) => (
+    <th
+      className="px-4 py-3 cursor-pointer hover:bg-gray-100 transition-colors select-none"
+      onClick={() => handleSort(field)}
+    >
+      <div className="flex items-center gap-1">
+        {children}
+        {sortField === field && (
+          sortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
+        )}
+      </div>
+    </th>
+  );
 
   const sendMagicLinksMutation = useMutation({
     mutationFn: (ids: string[]) => adminApi.sendMagicLinksBulk(ids),
@@ -298,7 +338,7 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
     onSuccess: () => {
       toast.success('Participant added successfully');
       queryClient.invalidateQueries({ queryKey: ['participants'] });
-      queryClient.invalidateQueries({ queryKey: ['country-limits-check'] });
+      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
       setShowAddModal(false);
       setNewParticipant({ firstName: '', lastName: '', email: '', country: '' });
     },
@@ -321,8 +361,74 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
     }
   };
 
+  const disseminationEnabled = project.disseminationEnabled;
+
   return (
     <div className="space-y-6">
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-4">
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-500">Total</p>
+            <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-500">In Progress</p>
+            <p className="text-2xl font-bold text-gray-900">{stats.draft}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-500">Complete</p>
+            <p className="text-2xl font-bold text-amber-600">{stats.complete}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-500">Approved</p>
+            <p className="text-2xl font-bold text-purple-600">{stats.approved}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-500">Paid</p>
+            <p className="text-2xl font-bold text-emerald-600">{stats.paid}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Financial Summary */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Total to Reimburse</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {new Intl.NumberFormat('de-DE', {
+                  style: 'currency',
+                  currency: 'EUR',
+                }).format(stats.totalAmount)}
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="h-2 w-32 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-soft rounded-full"
+                  style={{
+                    width: `${stats.total > 0 ? (stats.paid / stats.total) * 100 : 0}%`,
+                  }}
+                />
+              </div>
+              <p className="text-sm text-gray-500 mt-1">
+                {stats.paid} of {stats.total} paid
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Actions */}
       <div className="flex flex-wrap gap-3">
         <Button onClick={() => setShowAddModal(true)}>
@@ -414,23 +520,26 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
                   <th className="px-4 py-3">
                     <input
                       type="checkbox"
-                      checked={selectedIds.length === participants.length}
+                      checked={selectedIds.length === participants.length && participants.length > 0}
                       onChange={toggleSelectAll}
                       className="rounded border-gray-300"
                     />
                   </th>
-                  <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">Country</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-center">Check</th>
-                  <th className="px-4 py-3">Amount</th>
+                  <SortHeader field="name">Name</SortHeader>
+                  <SortHeader field="country">Country</SortHeader>
+                  <SortHeader field="status">Status</SortHeader>
+                  <SortHeader field="check">Progress</SortHeader>
+                  {disseminationEnabled && (
+                    <th className="px-4 py-3 text-center">Dissem.</th>
+                  )}
+                  <SortHeader field="amount">Amount</SortHeader>
                   <th className="px-4 py-3">Last Email</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {participants.map((participant) => {
-                  const warnings = getParticipantWarnings(participant);
+                {sortedParticipants.map((participant) => {
+                  const progress = getProgressStatus(participant);
                   return (
                     <tr key={participant.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
@@ -454,32 +563,38 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
                       <td className="px-4 py-3">
                         <StatusBadge status={participant.status} />
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        {participant.status === 'PAID' || participant.status === 'ADMIN_APPROVED' ? (
-                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100">
-                            <CheckCircle className="w-4 h-4 text-emerald-600" />
-                          </div>
-                        ) : participant.status === 'DRAFT' && (!participant.reimbursementSummary || participant.reimbursementSummary.totalEur === 0) ? (
-                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100" title="Waiting for submission">
-                            <Clock className="w-4 h-4 text-gray-400" />
-                          </div>
-                        ) : warnings.hasWarning ? (
-                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100" title={warnings.message}>
-                            <AlertTriangle className="w-4 h-4 text-amber-600" />
-                          </div>
-                        ) : (
-                          <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100" title="All checks passed">
-                            <CheckCircle className="w-4 h-4 text-emerald-600" />
-                          </div>
-                        )}
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <ProgressIcon status={progress.status} />
+                          <span className="text-xs text-gray-500">{progress.label}</span>
+                        </div>
                       </td>
+                      {disseminationEnabled && (
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-center gap-1">
+                            {participant.disseminationStatus?.hasActivity && (
+                              <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center" title="Has dissemination activity">
+                                <Users className="w-3 h-3 text-emerald-600" />
+                              </div>
+                            )}
+                            {participant.disseminationStatus?.hasSocialMedia && (
+                              <div className="w-5 h-5 rounded-full bg-blue-100 flex items-center justify-center" title="Has social media post">
+                                <Share2 className="w-3 h-3 text-blue-600" />
+                              </div>
+                            )}
+                            {!participant.disseminationStatus?.hasActivity && !participant.disseminationStatus?.hasSocialMedia && (
+                              <span className="text-gray-300">—</span>
+                            )}
+                          </div>
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-gray-600">
                         {participant.reimbursementSummary
                           ? new Intl.NumberFormat('de-DE', {
                               style: 'currency',
                               currency: 'EUR',
                             }).format(participant.reimbursementSummary.amountToReimburse)
-                          : '-'}
+                          : '—'}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500">
                         {participant.lastMagicLinkSentAt
@@ -506,11 +621,17 @@ function ParticipantsTab({ projectId, participants }: { projectId: string; parti
           <CardContent className="py-12 text-center">
             <Users className="w-12 h-12 text-gray-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">No participants yet</h3>
-            <p className="text-gray-500 mb-4">Import participants from a CSV file</p>
-            <Button onClick={() => setShowImportModal(true)}>
-              <Upload className="w-4 h-4 mr-2" />
-              Import CSV
-            </Button>
+            <p className="text-gray-500 mb-4">Add participants or import from a CSV file</p>
+            <div className="flex justify-center gap-3">
+              <Button onClick={() => setShowAddModal(true)}>
+                <UserPlus className="w-4 h-4 mr-2" />
+                Add Participant
+              </Button>
+              <Button variant="secondary" onClick={() => setShowImportModal(true)}>
+                <Upload className="w-4 h-4 mr-2" />
+                Import CSV
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -547,6 +668,7 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
     onSuccess: (data) => {
       toast.success(`Imported ${data.created} participants`);
       queryClient.invalidateQueries({ queryKey: ['participants'] });
+      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
       handleClose();
     },
     onError: () => {
@@ -666,64 +788,17 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
 function SettingsTab({
   project,
   countryLimits,
+  hasParticipants,
   onDelete,
   isDeleting,
 }: {
   project: any;
   countryLimits: any[];
+  hasParticipants: boolean;
   onDelete: () => void;
   isDeleting: boolean;
 }) {
-  const [newCountry, setNewCountry] = useState('');
-  const [newAmount, setNewAmount] = useState('');
-  const [newGreenTravel, setNewGreenTravel] = useState(false);
-  const [missingCountriesChecked, setMissingCountriesChecked] = useState(false);
   const queryClient = useQueryClient();
-
-  // Check for missing countries on mount
-  const { data: missingCheck } = useQuery({
-    queryKey: ['country-limits-check', project.id],
-    queryFn: () => adminApi.checkMissingCountryLimits(project.id),
-    enabled: !!project.id,
-  });
-
-  // Auto-populate when there are missing countries
-  const autoPopulateMutation = useMutation({
-    mutationFn: () => adminApi.autoPopulateCountryLimits(project.id, 0),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
-      queryClient.invalidateQueries({ queryKey: ['country-limits-check'] });
-      if (data.created.length > 0) {
-        toast.success(`Added ${data.created.length} country limits from participants (please set amounts)`);
-      }
-      setMissingCountriesChecked(true);
-    },
-    onError: () => {
-      toast.error('Failed to auto-populate country limits');
-    },
-  });
-
-  // Auto-populate on mount if there are missing countries
-  useEffect(() => {
-    if (missingCheck?.hasMissingCountries && !missingCountriesChecked && !autoPopulateMutation.isPending) {
-      autoPopulateMutation.mutate();
-    }
-  }, [missingCheck?.hasMissingCountries, missingCountriesChecked]);
-
-  const addLimitMutation = useMutation({
-    mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
-      adminApi.setCountryLimit(project.id, { country, maxReimbursementAmount: amount, greenTravel }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
-      setNewCountry('');
-      setNewAmount('275');
-      setNewGreenTravel(false);
-      toast.success('Country limit added');
-    },
-    onError: () => {
-      toast.error('Failed to add country limit');
-    },
-  });
 
   const updateLimitMutation = useMutation({
     mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
@@ -733,29 +808,6 @@ function SettingsTab({
     },
     onError: () => {
       toast.error('Failed to update country limit');
-    },
-  });
-
-  const deleteLimitMutation = useMutation({
-    mutationFn: (country: string) => adminApi.deleteCountryLimit(project.id, country),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
-      toast.success('Country limit removed');
-    },
-  });
-
-  const manualAutoPopulateMutation = useMutation({
-    mutationFn: () => adminApi.autoPopulateCountryLimits(project.id, 275),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['country-limits'] });
-      if (data.created.length > 0) {
-        toast.success(`Added ${data.created.length} country limits from participants`);
-      } else {
-        toast.success('All participant countries already have limits defined');
-      }
-    },
-    onError: () => {
-      toast.error('Failed to auto-populate country limits');
     },
   });
 
@@ -769,71 +821,18 @@ function SettingsTab({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Country Limits */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-start justify-between">
+      {/* Country Limits - only show if there are participants */}
+      {hasParticipants && countryLimits.length > 0 && (
+        <Card>
+          <CardHeader>
             <div>
               <h3 className="font-semibold text-gray-900">Country Reimbursement Limits</h3>
               <p className="text-sm text-gray-500 mt-1">
                 Maximum reimbursement amounts per sending country
               </p>
             </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => manualAutoPopulateMutation.mutate()}
-              loading={manualAutoPopulateMutation.isPending}
-            >
-              Auto-fill from participants
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {/* Add new limit */}
-            <div className="p-3 bg-gray-50 rounded-xl space-y-3">
-              <div className="flex gap-3">
-                <Input
-                  placeholder="Country (e.g., Poland)"
-                  value={newCountry}
-                  onChange={(e) => setNewCountry(e.target.value)}
-                  className="flex-1"
-                />
-                <Input
-                  type="number"
-                  placeholder="Amount"
-                  value={newAmount}
-                  onChange={(e) => setNewAmount(e.target.value)}
-                  className="w-32"
-                />
-                <Button
-                  onClick={() => {
-                    if (newCountry && newAmount) {
-                      addLimitMutation.mutate({
-                        country: newCountry,
-                        amount: parseFloat(newAmount),
-                        greenTravel: newGreenTravel,
-                      });
-                    }
-                  }}
-                  loading={addLimitMutation.isPending}
-                >
-                  <Plus className="w-4 h-4" />
-                </Button>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={newGreenTravel}
-                  onChange={(e) => setNewGreenTravel(e.target.checked)}
-                  className="rounded border-gray-300"
-                />
-                Green travel (allows hotel invoice uploads)
-              </label>
-            </div>
-
-            {/* Existing limits */}
+          </CardHeader>
+          <CardContent>
             <div className="space-y-2">
               {countryLimits.map((limit) => {
                 const needsAmount = limit.maxReimbursementAmount === 0;
@@ -902,32 +901,30 @@ function SettingsTab({
                           <span className="text-xs text-gray-400">EUR</span>
                         </div>
                       ) : (
-                        <span className="text-gray-600">
-                          {new Intl.NumberFormat('de-DE', {
-                            style: 'currency',
-                            currency: limit.currency,
-                          }).format(limit.maxReimbursementAmount)}
-                        </span>
+                        <Input
+                          type="number"
+                          value={limit.maxReimbursementAmount}
+                          className="w-24 text-sm"
+                          onChange={(e) => {
+                            const amount = parseFloat(e.target.value);
+                            if (amount >= 0) {
+                              updateLimitMutation.mutate({
+                                country: limit.country,
+                                amount,
+                                greenTravel: limit.greenTravel || false,
+                              });
+                            }
+                          }}
+                        />
                       )}
-                      <button
-                        onClick={() => deleteLimitMutation.mutate(limit.country)}
-                        className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
                     </div>
                   </div>
                 );
               })}
-              {countryLimits.length === 0 && (
-                <p className="text-gray-500 text-sm text-center py-4">
-                  No country limits defined yet. Import participants first - countries will be added automatically.
-                </p>
-              )}
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Feature Settings */}
       <FeatureSettingsCard project={project} />

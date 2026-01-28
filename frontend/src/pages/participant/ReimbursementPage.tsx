@@ -1802,7 +1802,8 @@ function Step3Confirm({
     confirmations.dataCorrect &&
     confirmations.erasmusRules &&
     bankDetails.bankAccountIban &&
-    bankDetails.bankAccountHolderName;
+    bankDetails.bankAccountHolderName &&
+    bankDetails.bankAccountBic;
 
   return (
     <>
@@ -1908,15 +1909,29 @@ function Step3Confirm({
                 onBlur={() => updateBankMutation.mutate()}
                 placeholder="John Doe"
               />
-              <Input
-                label="BIC (Optional)"
-                value={bankDetails.bankAccountBic}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
-                }
-                onBlur={() => updateBankMutation.mutate()}
-                placeholder="COBADEFFXXX"
-              />
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <label className="block text-sm font-medium text-gray-700">
+                    BIC/SWIFT Code
+                  </label>
+                  <div className="relative group">
+                    <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
+                      The BIC (Bank Identifier Code) is an 8-11 character code. You can find it on your bank statement, in your banking app, or by searching &quot;[your bank name] BIC code&quot;.
+                      <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+                    </div>
+                  </div>
+                </div>
+                <Input
+                  value={bankDetails.bankAccountBic}
+                  onChange={(e) =>
+                    setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
+                  }
+                  onBlur={() => updateBankMutation.mutate()}
+                  placeholder="COBADEFFXXX"
+                  required
+                />
+              </div>
             </div>
           </div>
 

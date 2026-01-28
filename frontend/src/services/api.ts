@@ -662,11 +662,17 @@ export interface Participant {
   project?: {
     name: string;
     country: string;
+    disseminationEnabled?: boolean;
   };
   reimbursementSummary?: ReimbursementSummary;
   _count?: {
     documents: number;
     travelItems: number;
+    socialMediaPosts?: number;
+  };
+  disseminationStatus?: {
+    hasActivity: boolean;
+    hasSocialMedia: boolean;
   };
 }
 
