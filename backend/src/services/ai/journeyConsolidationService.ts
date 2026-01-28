@@ -541,10 +541,24 @@ Respond with ONLY a JSON object:
           }
         }
 
+        // Get currency from AI response, or from linked document extraction, or default to EUR
+        let currency = item.currency as string | null | undefined;
+        if (!currency && primaryDocId) {
+          // Look up the document's extraction to get the currency
+          const docExtraction = await prisma.documentExtraction.findUnique({
+            where: { documentId: primaryDocId },
+          });
+          if (docExtraction?.currency) {
+            currency = docExtraction.currency;
+            console.log(`[Consolidation] Using currency ${currency} from document extraction for ${item.fromLocation} -> ${item.toLocation}`);
+          }
+        }
+        currency = currency || 'EUR';
+
         // Convert currency to EUR
         let amountEur = item.amount || 0;
-        if (item.currency && item.currency !== 'EUR') {
-          amountEur = this.convertToEur(item.amount, item.currency);
+        if (currency !== 'EUR') {
+          amountEur = this.convertToEur(item.amount, currency);
         }
 
         const travelItem = await prisma.travelItem.create({
@@ -559,7 +573,7 @@ Respond with ONLY a JSON object:
             bookingReference: item.bookingReference || null,
             flightNumber: item.flightNumber || null,
             amountOriginal: item.amount || 0,
-            currencyOriginal: item.currency || 'EUR',
+            currencyOriginal: currency, // Use currency from AI or document extraction
             purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
             amountEur,
             comment: item.notes || null,
