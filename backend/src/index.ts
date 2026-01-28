@@ -66,9 +66,20 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  // One-time cleanup: Clear old cached exchange rates that may have incorrect values
+  // This runs on startup to ensure fresh rates are fetched from InforEuro
+  try {
+    const result = await prisma.exchangeRate.deleteMany({});
+    if (result.count > 0) {
+      console.log(`[Startup] Cleared ${result.count} cached exchange rates - fresh rates will be fetched from InforEuro`);
+    }
+  } catch (error) {
+    console.error('[Startup] Failed to clear exchange rate cache:', error);
+  }
 });
 
 export default app;
