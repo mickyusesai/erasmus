@@ -1095,8 +1095,60 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
   projectStartDate?: string;
   projectEndDate?: string;
 }) {
+  // Create visual journey items - expand round-trips into two entries
+  interface VisualJourneyItem {
+    id: string;
+    modeOfTransport: TravelItem['modeOfTransport'];
+    fromLocation: string;
+    toLocation: string;
+    departureDate: string;
+    isReturnLeg?: boolean;  // True if this is the return portion of a round-trip
+    originalItemId: string; // Reference to the actual travel item
+  }
+
+  const visualItems: VisualJourneyItem[] = [];
+
+  items.forEach(item => {
+    // Add the outbound/original leg
+    visualItems.push({
+      id: item.id,
+      modeOfTransport: item.modeOfTransport,
+      fromLocation: item.fromLocation,
+      toLocation: item.toLocation,
+      departureDate: item.departureDate,
+      isReturnLeg: false,
+      originalItemId: item.id,
+    });
+
+    // If it's a round-trip, add a virtual return leg
+    if (item.isRoundTrip) {
+      // For return date, use project end date + 1 day, or estimate from departure
+      let returnDate: string;
+      if (projectEndDate) {
+        const endDate = new Date(projectEndDate);
+        endDate.setDate(endDate.getDate() + 1);
+        returnDate = endDate.toISOString();
+      } else {
+        // Fallback: assume return is 7 days after departure
+        const depDate = new Date(item.departureDate);
+        depDate.setDate(depDate.getDate() + 7);
+        returnDate = depDate.toISOString();
+      }
+
+      visualItems.push({
+        id: `${item.id}-return`,
+        modeOfTransport: item.modeOfTransport,
+        fromLocation: item.toLocation,  // Swap locations for return
+        toLocation: item.fromLocation,
+        departureDate: returnDate,
+        isReturnLeg: true,
+        originalItemId: item.id,
+      });
+    }
+  });
+
   // Sort items by departure date
-  const sortedItems = [...items].sort((a, b) =>
+  const sortedItems = [...visualItems].sort((a, b) =>
     new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
   );
 
@@ -1122,7 +1174,7 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
     new Date(item.departureDate) > midpointDate
   );
 
-  const renderJourneySection = (sectionItems: TravelItem[], label: string, isReturn: boolean) => {
+  const renderJourneySection = (sectionItems: VisualJourneyItem[], label: string, isReturn: boolean) => {
     if (sectionItems.length === 0) return null;
 
     return (
@@ -1141,14 +1193,17 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
                   {/* Subtle icon container - no heavy colored circle */}
                   <div className={clsx(
                     'w-10 h-10 rounded-xl flex items-center justify-center border transition-all hover:scale-105',
-                    bgColor
+                    bgColor,
+                    item.isReturnLeg && 'ring-2 ring-purple-300 ring-offset-1'  // Highlight return legs
                   )}>
                     <Icon className={clsx('w-5 h-5', iconColor)} />
                   </div>
                   <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
                     {item.fromLocation}
                   </p>
-                  <p className="text-[10px] text-gray-400">{formatDate(item.departureDate)}</p>
+                  <p className="text-[10px] text-gray-400">
+                    {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
+                  </p>
                 </div>
 
                 {/* Connector line with arrow */}
@@ -1173,7 +1228,9 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
                     <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
                       {item.toLocation}
                     </p>
-                    <p className="text-[10px] text-gray-400">{formatDate(item.departureDate)}</p>
+                    <p className="text-[10px] text-gray-400">
+                      {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
+                    </p>
                   </div>
                 )}
               </div>
