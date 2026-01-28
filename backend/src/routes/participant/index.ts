@@ -65,13 +65,30 @@ const declarationOnHonorSchema = z.object({
   place: z.string().min(1, 'Place is required'),
 });
 
+interface DeclarationOfTravelInput {
+  travelItemId?: string;
+  name: string;
+  modeOfTransport: TransportMode;
+  fromPlace: string;
+  toPlace: string;
+  travelDate: string;
+  flightNumber?: string | null;
+  bookingReference?: string | null;
+  dateOfBirth: string;
+  idNumber: string;
+  sendingOrgName: string;
+  sendingOrgOid?: string | null;
+  sendingOrgAddress: string;
+  signatureDataUrl: string;
+}
+
 const declarationOfTravelSchema = z.object({
-  travelItemId: z.string().optional(), // Optional: link to a specific travel item
+  travelItemId: z.string().optional(),
   name: z.string().min(1, 'Name is required'),
   modeOfTransport: z.nativeEnum(TransportMode),
   fromPlace: z.string().min(1, 'Departure place is required'),
   toPlace: z.string().min(1, 'Arrival place is required'),
-  travelDate: z.string().transform((s) => new Date(s)),
+  travelDate: z.string().min(1, 'Travel date is required'),
   flightNumber: z.string().nullable().optional(),
   bookingReference: z.string().nullable().optional(),
   dateOfBirth: z.string().min(1, 'Date of birth is required'),
@@ -864,7 +881,11 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
     throw new ValidationError(result.error.errors[0].message);
   }
 
-  const data = result.data;
+  const data = result.data as DeclarationOfTravelInput;
+
+  // Convert date strings to Date objects
+  const travelDateObj = new Date(data.travelDate);
+  const dateOfBirthObj = new Date(data.dateOfBirth);
 
   // If linking to a travel item, verify ownership
   if (data.travelItemId) {
@@ -886,7 +907,7 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
     modeOfTransport: data.modeOfTransport,
     fromPlace: data.fromPlace,
     toPlace: data.toPlace,
-    travelDate: data.travelDate,
+    travelDate: travelDateObj,
     flightNumber: data.flightNumber,
     bookingReference: data.bookingReference,
     dateOfBirth: data.dateOfBirth,
@@ -906,10 +927,10 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
       modeOfTransport: data.modeOfTransport,
       fromPlace: data.fromPlace,
       toPlace: data.toPlace,
-      travelDate: new Date(data.travelDate),
+      travelDate: travelDateObj,
       flightNumber: data.flightNumber || null,
       bookingReference: data.bookingReference || null,
-      dateOfBirth: new Date(data.dateOfBirth),
+      dateOfBirth: dateOfBirthObj,
       idNumber: data.idNumber,
       sendingOrgName: data.sendingOrgName,
       sendingOrgOid: data.sendingOrgOid || null,
