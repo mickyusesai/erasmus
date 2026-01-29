@@ -847,6 +847,35 @@ function Step2CheckData({
     setDismissedWarnings(prev => new Set([...prev, id]));
   };
 
+  // Auto-dismiss AI warnings when issues are fixed
+  useEffect(() => {
+    // Check if there are any "Unknown" locations or 0 amounts left
+    const hasUnknownLocations = data.travelItems.some(
+      t => t.fromLocation?.toLowerCase() === 'unknown' || t.toLocation?.toLowerCase() === 'unknown'
+    );
+    const hasZeroAmounts = data.travelItems.some(t => t.amountOriginal === 0);
+
+    // Auto-dismiss AI warnings about unknown locations if all are filled
+    if (!hasUnknownLocations) {
+      aiWarnings.forEach((warning, index) => {
+        const warningLower = warning.toLowerCase();
+        if (warningLower.includes('unknown') || warningLower.includes('location') || warningLower.includes('could not determine')) {
+          dismissWarning(`ai-warning-${index}`);
+        }
+      });
+    }
+
+    // Auto-dismiss AI warnings about amounts if all are filled
+    if (!hasZeroAmounts) {
+      aiWarnings.forEach((warning, index) => {
+        const warningLower = warning.toLowerCase();
+        if (warningLower.includes('amount') || warningLower.includes('price') || warningLower.includes('€0') || warningLower.includes('0 eur')) {
+          dismissWarning(`ai-warning-${index}`);
+        }
+      });
+    }
+  }, [data.travelItems, aiWarnings]);
+
   return (
     <div className="space-y-6">
       {/* Persistent Warnings Section */}
@@ -1317,6 +1346,18 @@ function TravelItemCard({
     setLocalBookingRef(item.bookingReference || '');
   }, [item.id]); // Only sync when switching to a different item
 
+  // Helper to check if a value needs attention (unknown or empty)
+  const needsAttention = (value: string) => {
+    const v = value?.toLowerCase().trim() || '';
+    return v === 'unknown' || v === '' || v === 'n/a' || v === '-';
+  };
+
+  // Check if amount needs attention (0 or very low)
+  const amountNeedsAttention = item.amountOriginal === 0 || item.amountOriginal === null;
+
+  // Highlight style for fields that need attention
+  const attentionInputClass = 'ring-2 ring-amber-400 bg-amber-50';
+
   // Auto-convert when currency, amount, or purchase date changes for non-EUR currencies
   const handleCurrencyConversion = useCallback(async () => {
     if (!isNonEurCurrency || !item.amountOriginal) return;
@@ -1519,16 +1560,18 @@ function TravelItemCard({
           onChange={(e) => onUpdate({ modeOfTransport: e.target.value as TransportMode })}
         />
         <Input
-          label="From"
+          label={<span className="flex items-center gap-1">From {needsAttention(localFrom) && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
           value={localFrom}
           onChange={(e) => setLocalFrom(e.target.value)}
           onBlur={() => localFrom !== item.fromLocation && onUpdate({ fromLocation: localFrom })}
+          className={needsAttention(localFrom) ? attentionInputClass : ''}
         />
         <Input
-          label="To"
+          label={<span className="flex items-center gap-1">To {needsAttention(localTo) && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
           value={localTo}
           onChange={(e) => setLocalTo(e.target.value)}
           onBlur={() => localTo !== item.toLocation && onUpdate({ toLocation: localTo })}
+          className={needsAttention(localTo) ? attentionInputClass : ''}
         />
         <Input
           label="Departure Date"
@@ -1537,11 +1580,12 @@ function TravelItemCard({
           onChange={(e) => onUpdate({ departureDate: e.target.value })}
         />
         <Input
-          label="Amount"
+          label={<span className="flex items-center gap-1">Amount {amountNeedsAttention && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
           type="number"
           step="0.01"
           value={item.amountOriginal}
           onChange={(e) => onUpdate({ amountOriginal: parseFloat(e.target.value) })}
+          className={amountNeedsAttention ? attentionInputClass : ''}
         />
         <Select
           label="Currency"
