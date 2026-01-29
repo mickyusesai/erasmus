@@ -40,11 +40,9 @@ export default function AdminLogin() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-soft mb-4">
-            <span className="text-white font-bold text-2xl">E+</span>
-          </div>
+          <img src="/logo.png" alt="EasyReimburse" className="w-16 h-16 rounded-2xl mx-auto mb-4 object-contain" />
           <h1 className="text-2xl font-bold text-gray-900">Admin Portal</h1>
-          <p className="text-gray-500 mt-1">Erasmus+ Reimbursement System</p>
+          <p className="text-gray-500 mt-1">EasyReimburse</p>
         </div>
 
         {/* Login Card */}
