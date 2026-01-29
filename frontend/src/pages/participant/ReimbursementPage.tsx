@@ -1303,6 +1303,20 @@ function TravelItemCard({
   const [isConverting, setIsConverting] = useState(false);
   const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
 
+  // Local state for text inputs - prevents re-renders on every keystroke
+  const [localFrom, setLocalFrom] = useState(item.fromLocation);
+  const [localTo, setLocalTo] = useState(item.toLocation);
+  const [localFlightNumber, setLocalFlightNumber] = useState(item.flightNumber || '');
+  const [localBookingRef, setLocalBookingRef] = useState(item.bookingReference || '');
+
+  // Sync local state when item changes from external source
+  useEffect(() => {
+    setLocalFrom(item.fromLocation);
+    setLocalTo(item.toLocation);
+    setLocalFlightNumber(item.flightNumber || '');
+    setLocalBookingRef(item.bookingReference || '');
+  }, [item.id]); // Only sync when switching to a different item
+
   // Auto-convert when currency, amount, or purchase date changes for non-EUR currencies
   const handleCurrencyConversion = useCallback(async () => {
     if (!isNonEurCurrency || !item.amountOriginal) return;
@@ -1506,13 +1520,15 @@ function TravelItemCard({
         />
         <Input
           label="From"
-          value={item.fromLocation}
-          onChange={(e) => onUpdate({ fromLocation: e.target.value })}
+          value={localFrom}
+          onChange={(e) => setLocalFrom(e.target.value)}
+          onBlur={() => localFrom !== item.fromLocation && onUpdate({ fromLocation: localFrom })}
         />
         <Input
           label="To"
-          value={item.toLocation}
-          onChange={(e) => onUpdate({ toLocation: e.target.value })}
+          value={localTo}
+          onChange={(e) => setLocalTo(e.target.value)}
+          onBlur={() => localTo !== item.toLocation && onUpdate({ toLocation: localTo })}
         />
         <Input
           label="Departure Date"
@@ -1571,13 +1587,15 @@ function TravelItemCard({
           <>
             <Input
               label="Flight Number"
-              value={item.flightNumber || ''}
-              onChange={(e) => onUpdate({ flightNumber: e.target.value })}
+              value={localFlightNumber}
+              onChange={(e) => setLocalFlightNumber(e.target.value)}
+              onBlur={() => localFlightNumber !== (item.flightNumber || '') && onUpdate({ flightNumber: localFlightNumber })}
             />
             <Input
               label="Booking Reference"
-              value={item.bookingReference || ''}
-              onChange={(e) => onUpdate({ bookingReference: e.target.value })}
+              value={localBookingRef}
+              onChange={(e) => setLocalBookingRef(e.target.value)}
+              onBlur={() => localBookingRef !== (item.bookingReference || '') && onUpdate({ bookingReference: localBookingRef })}
             />
           </>
         )}
