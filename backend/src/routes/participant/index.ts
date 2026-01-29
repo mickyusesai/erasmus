@@ -459,6 +459,7 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
       currencyOriginal: result.data.currencyOriginal,
       purchaseDate: result.data.purchaseDate || null,
       amountEur: amountEur || result.data.amountOriginal,
+      checked: true, // Manually created items are checked by default
     },
   });
 
@@ -598,6 +599,38 @@ router.delete('/travel-items/:id', participantAuth, asyncHandler(async (req: Req
   await aiService.recalculateParticipantSummary(participant.id);
 
   res.json({ success: true });
+}));
+
+/**
+ * PATCH /api/participant/travel-items/:id/toggle-checked
+ * Toggle the checked status of a travel item
+ */
+router.patch('/travel-items/:id/toggle-checked', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot modify travel items after approval');
+  }
+
+  // Verify ownership
+  const travelItem = await prisma.travelItem.findFirst({
+    where: {
+      id: req.params.id,
+      participantId: participant.id,
+    },
+  });
+
+  if (!travelItem) {
+    throw new NotFoundError('Travel item not found');
+  }
+
+  // Toggle the checked status
+  const updated = await prisma.travelItem.update({
+    where: { id: req.params.id },
+    data: { checked: !travelItem.checked },
+  });
+
+  res.json(updated);
 }));
 
 /**

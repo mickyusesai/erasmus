@@ -188,6 +188,7 @@ model TravelItem {
   amountEur             Float
   comment               String?
   manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
+  checked               Boolean               @default(false)  // User confirmed this travel item is correct
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
 
   // Round-trip bookings

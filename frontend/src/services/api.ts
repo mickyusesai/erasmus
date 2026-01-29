@@ -360,6 +360,13 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  toggleTravelItemChecked: async (token: string, itemId: string) => {
+    const res = await fetch(`${API_BASE}/participant/travel-items/${itemId}/toggle-checked?token=${token}`, {
+      method: 'PATCH',
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
   createTravelItem: async (token: string, data: CreateTravelItemData & { documentId?: string }) => {
     const res = await fetch(`${API_BASE}/participant/travel-items?token=${token}`, {
       method: 'POST',
@@ -778,6 +785,8 @@ export interface TravelItem {
   // Validation
   routeMatchesCountry?: boolean;
   validationWarnings?: string;
+  // User confirmation
+  checked?: boolean;
 }
 
 export type TransportMode = 'PLANE' | 'TRAIN' | 'BUS' | 'CAR' | 'FERRY' | 'OTHER';

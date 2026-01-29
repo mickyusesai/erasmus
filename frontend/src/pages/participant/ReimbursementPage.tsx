@@ -700,8 +700,11 @@ function Step2CheckData({
   const [missingBoardingPassItem, setMissingBoardingPassItem] = useState<TravelItem | null>(null);
 
   // Calculate unlinked documents (uploaded but not connected to any travel item)
+  // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
   const linkedDocIds = new Set(data.travelItems.map(t => t.documentId).filter(Boolean));
-  const unlinkedDocs = data.documents.filter(d => !linkedDocIds.has(d.id));
+  const unlinkedDocs = data.documents.filter(d =>
+    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+  );
   const hasUnlinkedDocs = unlinkedDocs.length > 0;
 
   // Get the first travel item's origin for country validation
@@ -747,6 +750,13 @@ function Step2CheckData({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
       toast.success('Travel item removed');
+    },
+  });
+
+  const toggleCheckedMutation = useMutation({
+    mutationFn: (id: string) => participantApi.toggleTravelItemChecked(token, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
     },
   });
 
@@ -968,6 +978,7 @@ function Step2CheckData({
                     updateMutation.mutate({ id: item.id, updates })
                   }
                   onDelete={() => deleteMutation.mutate(item.id)}
+                  onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
                   onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
                   onViewDocument={setViewingDocument}
                   onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
@@ -1073,14 +1084,35 @@ function Step2CheckData({
           </div>
 
           {/* Navigation */}
-          <div className="mt-8 flex justify-between">
-            <Button variant="secondary" onClick={onBack}>
-              Back to Upload
-            </Button>
-            <Button onClick={onNext} disabled={data.travelItems.length === 0}>
-              Continue to Confirm
-              <ChevronRight className="w-4 h-4 ml-2" />
-            </Button>
+          <div className="mt-8">
+            {/* Check if all travel items are confirmed */}
+            {data.travelItems.length > 0 && !data.travelItems.every(item => item.checked) && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                <span className="text-sm text-amber-700">
+                  Please check all travel items to confirm they are correct before continuing.
+                  ({data.travelItems.filter(item => item.checked).length} of {data.travelItems.length} confirmed)
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <Button variant="secondary" onClick={onBack}>
+                Back to Upload
+              </Button>
+              <Button
+                onClick={() => {
+                  if (data.travelItems.length > 0 && !data.travelItems.every(item => item.checked)) {
+                    toast.error('Please confirm all travel items by checking the checkbox on each one.');
+                    return;
+                  }
+                  onNext();
+                }}
+                disabled={data.travelItems.length === 0}
+              >
+                Continue to Confirm
+                <ChevronRight className="w-4 h-4 ml-2" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1291,6 +1323,7 @@ function TravelItemCard({
   token,
   onUpdate,
   onDelete,
+  onToggleChecked,
   onUploadBoardingPass,
   onViewDocument,
   onMissingBoardingPass,
@@ -1301,6 +1334,7 @@ function TravelItemCard({
   token: string;
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
+  onToggleChecked: () => void;
   onUploadBoardingPass: () => void;
   onViewDocument: (doc: Document) => void;
   onMissingBoardingPass: () => void;
@@ -1379,7 +1413,22 @@ function TravelItemCard({
   }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate]);
 
   return (
-    <div className="p-6 bg-gray-50 rounded-2xl">
+    <div className={clsx(
+      'p-6 bg-gray-50 rounded-2xl relative',
+      item.checked && 'border-l-4 border-l-emerald-500'
+    )}>
+      {/* Checkbox for confirming travel item */}
+      <div className="absolute top-4 right-14">
+        <label className="flex items-center gap-2 cursor-pointer" title={item.checked ? 'Uncheck to unlock this travel item' : 'Check to confirm this travel item'}>
+          <input
+            type="checkbox"
+            checked={item.checked || false}
+            onChange={onToggleChecked}
+            className="w-5 h-5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+          />
+          <span className="text-xs text-gray-500">{item.checked ? 'Confirmed' : 'Confirm'}</span>
+        </label>
+      </div>
       {/* Boarding Pass / Declaration Status Bar for Flights */}
       {isPlane && (
         <div className={clsx(
@@ -1697,8 +1746,11 @@ function AddTravelModal({
   const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>('');
 
   // Find documents that are not linked to any travel item
+  // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
   const linkedDocIds = new Set(travelItems.map(t => t.documentId).filter(Boolean));
-  const unlinkedDocs = documents.filter(d => !linkedDocIds.has(d.id));
+  const unlinkedDocs = documents.filter(d =>
+    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+  );
 
   const uploadAndCreateMutation = useMutation({
     mutationFn: async () => {

@@ -546,40 +546,32 @@ Respond with ONLY a JSON object:
       const result = JSON.parse(jsonMatch[0]);
       console.log(`[Consolidation] Journey: ${result.journey_summary}`);
 
-      // Get existing travel items that have been manually edited
+      // Keep ALL existing travel items - don't delete any
+      // Only add new items from AI that don't match existing items
       const existingItems = participant.travelItems || [];
-      const manuallyEditedItems = existingItems.filter((item: { manuallyEdited: boolean }) => item.manuallyEdited);
-      const manuallyEditedSignatures = manuallyEditedItems.map((item: { id: string; fromLocation: string; toLocation: string; departureDate: Date }) => ({
+      const existingSignatures = existingItems.map((item: { id: string; fromLocation: string; toLocation: string; departureDate: Date }) => ({
         id: item.id,
         signature: `${item.fromLocation.toLowerCase()}-${item.toLocation.toLowerCase()}-${item.departureDate.toISOString().split('T')[0]}`,
         item,
       }));
 
-      console.log(`[Consolidation] Found ${manuallyEditedItems.length} manually edited items to preserve`);
-
-      // Delete only non-manually-edited travel items (preserve manual edits)
-      await prisma.travelItem.deleteMany({
-        where: {
-          participantId,
-          manuallyEdited: false,
-        },
-      });
+      console.log(`[Consolidation] Found ${existingItems.length} existing travel items to preserve`);
 
       // Create new travel items based on consolidation
       const createdItems = [];
       for (const item of result.travel_items || []) {
-        // Check if this matches a manually edited item (same route and date)
+        // Check if this matches ANY existing item (same route and date)
         const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
-        const existingMatch = manuallyEditedSignatures.find(
-          (me: { signature: string; item: { fromLocation: string; toLocation: string } }) => me.signature === itemSignature ||
+        const existingMatch = existingSignatures.find(
+          (existing: { signature: string; item: { fromLocation: string; toLocation: string } }) => existing.signature === itemSignature ||
             // Fuzzy match: same locations but possibly different date format
-            (me.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
-             me.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
+            (existing.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
+             existing.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
         );
 
         if (existingMatch) {
-          // Skip creating this item - we're preserving the manually edited version
-          console.log(`[Consolidation] Preserving manually edited item: ${itemSignature}`);
+          // Skip creating this item - we're preserving the existing version
+          console.log(`[Consolidation] Preserving existing travel item: ${itemSignature}`);
           createdItems.push(existingMatch.item);
           continue;
         }
@@ -658,6 +650,14 @@ Respond with ONLY a JSON object:
         createdItems.push(travelItem);
       }
 
+      // Include any existing items that weren't matched by AI (they're still in DB)
+      const createdItemIds = new Set(createdItems.map((item: { id: string }) => item.id));
+      for (const existing of existingItems) {
+        if (!createdItemIds.has(existing.id)) {
+          createdItems.push(existing);
+        }
+      }
+
       // Mark extractions as consolidated
       await prisma.documentExtraction.updateMany({
         where: {
@@ -675,7 +675,8 @@ Respond with ONLY a JSON object:
         data: { journeyConsolidatedAt: new Date() },
       });
 
-      console.log(`[Consolidation] Created ${createdItems.length} travel items`);
+      const newlyCreatedCount = createdItems.length - existingItems.length;
+      console.log(`[Consolidation] Total ${createdItems.length} travel items (${newlyCreatedCount} new, ${existingItems.length} preserved)`);
 
       return {
         success: true,
