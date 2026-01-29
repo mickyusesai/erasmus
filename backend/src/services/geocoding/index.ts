@@ -54,7 +54,7 @@ export async function getCountryForCity(cityName: string): Promise<string | null
       return null;
     }
 
-    const results: NominatimResult[] = await response.json();
+    const results = await response.json() as NominatimResult[];
 
     if (results.length === 0) {
       cache.set(normalizedCity, { country: null, timestamp: Date.now() });
