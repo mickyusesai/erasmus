@@ -209,6 +209,7 @@ export default function ReimbursementPage() {
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
   const [activeTab, setActiveTab] = useState<ActiveTab>('reimbursement');
+  const [aiConsolidationWarnings, setAiConsolidationWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     if (!token) {
@@ -345,6 +346,7 @@ export default function ReimbursementPage() {
                 data={data}
                 token={token}
                 onNext={() => setCurrentStep(2)}
+                onAiWarnings={setAiConsolidationWarnings}
               />
             )}
             {currentStep === 2 && (
@@ -353,6 +355,7 @@ export default function ReimbursementPage() {
                 token={token}
                 onBack={() => setCurrentStep(1)}
                 onNext={() => setCurrentStep(3)}
+                aiWarnings={aiConsolidationWarnings}
               />
             )}
             {currentStep === 3 && (
@@ -453,10 +456,12 @@ function Step1Upload({
   data,
   token,
   onNext,
+  onAiWarnings,
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onNext: () => void;
+  onAiWarnings: (warnings: string[]) => void;
 }) {
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
@@ -487,15 +492,11 @@ function Step1Upload({
     try {
       const result = await participantApi.consolidateJourney(token);
 
+      // Store AI warnings to display on the next step as persistent banners
       if (result.warnings && result.warnings.length > 0) {
-        // Show warnings but still proceed
-        result.warnings.forEach((warning: string) => {
-          toast(warning, { icon: '⚠️', duration: 5000 });
-        });
-      }
-
-      if (result.success) {
-        toast.success(result.message || 'Journey analyzed successfully');
+        onAiWarnings(result.warnings);
+      } else {
+        onAiWarnings([]);
       }
 
       // Refresh data and move to next step
@@ -671,7 +672,7 @@ function Step1Upload({
 // Warning type for the persistent warnings system
 interface PersistentWarning {
   id: string;
-  type: 'error' | 'warning' | 'info';
+  type: 'error' | 'warning' | 'info' | 'notification';
   message: string;
   dismissible: boolean;
 }
@@ -681,11 +682,13 @@ function Step2CheckData({
   token,
   onBack,
   onNext,
+  aiWarnings = [],
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onBack: () => void;
   onNext: () => void;
+  aiWarnings?: string[];
 }) {
   const queryClient = useQueryClient();
   const [showAddTravelModal, setShowAddTravelModal] = useState(false);
@@ -724,6 +727,17 @@ function Step2CheckData({
   // Generate persistent warnings based on data analysis
   const warnings = useMemo((): PersistentWarning[] => {
     const w: PersistentWarning[] = [];
+
+    // Add AI consolidation warnings as notifications (friendlier style)
+    aiWarnings.forEach((warning, index) => {
+      w.push({
+        id: `ai-warning-${index}`,
+        type: 'notification',
+        message: warning,
+        dismissible: true,
+      });
+    });
+
     const participantCountry = data.participant.country?.toLowerCase();
 
     // Check for missing boarding passes for flights
@@ -824,7 +838,7 @@ function Step2CheckData({
     }
 
     return w;
-  }, [data]);
+  }, [data, aiWarnings]);
 
   // Filter out dismissed warnings
   const visibleWarnings = warnings.filter(w => !dismissedWarnings.has(w.id));
@@ -838,52 +852,61 @@ function Step2CheckData({
       {/* Persistent Warnings Section */}
       {visibleWarnings.length > 0 && (
         <div className="space-y-3">
-          {visibleWarnings.map((warning) => (
-            <div
-              key={warning.id}
-              className={clsx(
-                'p-4 rounded-xl flex items-start gap-3 border',
-                warning.type === 'error' && 'bg-red-50 border-red-200',
-                warning.type === 'warning' && 'bg-amber-50 border-amber-200',
-                warning.type === 'info' && 'bg-blue-50 border-blue-200'
-              )}
-            >
-              <AlertTriangle
+          {visibleWarnings.map((warning) => {
+            // Use Info icon for notifications, AlertTriangle for warnings/errors
+            const IconComponent = warning.type === 'notification' ? Info : AlertTriangle;
+
+            return (
+              <div
+                key={warning.id}
                 className={clsx(
-                  'w-5 h-5 flex-shrink-0 mt-0.5',
-                  warning.type === 'error' && 'text-red-500',
-                  warning.type === 'warning' && 'text-amber-500',
-                  warning.type === 'info' && 'text-blue-500'
+                  'p-4 rounded-xl flex items-start gap-3 border',
+                  warning.type === 'error' && 'bg-red-50 border-red-200',
+                  warning.type === 'warning' && 'bg-amber-50 border-amber-200',
+                  warning.type === 'info' && 'bg-blue-50 border-blue-200',
+                  warning.type === 'notification' && 'bg-indigo-50 border-indigo-200'
                 )}
-              />
-              <div className="flex-1">
-                <p
+              >
+                <IconComponent
                   className={clsx(
-                    'text-sm font-medium',
-                    warning.type === 'error' && 'text-red-800',
-                    warning.type === 'warning' && 'text-amber-800',
-                    warning.type === 'info' && 'text-blue-800'
+                    'w-5 h-5 flex-shrink-0 mt-0.5',
+                    warning.type === 'error' && 'text-red-500',
+                    warning.type === 'warning' && 'text-amber-500',
+                    warning.type === 'info' && 'text-blue-500',
+                    warning.type === 'notification' && 'text-indigo-500'
                   )}
-                >
-                  {warning.message}
-                </p>
+                />
+                <div className="flex-1">
+                  <p
+                    className={clsx(
+                      'text-sm font-medium',
+                      warning.type === 'error' && 'text-red-800',
+                      warning.type === 'warning' && 'text-amber-800',
+                      warning.type === 'info' && 'text-blue-800',
+                      warning.type === 'notification' && 'text-indigo-800'
+                    )}
+                  >
+                    {warning.message}
+                  </p>
+                </div>
+                {warning.dismissible && (
+                  <button
+                    onClick={() => dismissWarning(warning.id)}
+                    className={clsx(
+                      'p-1 rounded-full hover:bg-white/50 transition-colors',
+                      warning.type === 'error' && 'text-red-400 hover:text-red-600',
+                      warning.type === 'warning' && 'text-amber-400 hover:text-amber-600',
+                      warning.type === 'info' && 'text-blue-400 hover:text-blue-600',
+                      warning.type === 'notification' && 'text-indigo-400 hover:text-indigo-600'
+                    )}
+                    title="Dismiss"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
-              {warning.dismissible && (
-                <button
-                  onClick={() => dismissWarning(warning.id)}
-                  className={clsx(
-                    'p-1 rounded-full hover:bg-white/50 transition-colors',
-                    warning.type === 'error' && 'text-red-400 hover:text-red-600',
-                    warning.type === 'warning' && 'text-amber-400 hover:text-amber-600',
-                    warning.type === 'info' && 'text-blue-400 hover:text-blue-600'
-                  )}
-                  title="Dismiss"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
