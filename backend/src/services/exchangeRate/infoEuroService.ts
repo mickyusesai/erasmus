@@ -21,8 +21,18 @@ interface InfoEuroRate {
   dateEnd: string;
 }
 
+interface MonthlyRateResponse {
+  country: string;
+  currency: string;
+  isoA3Code: string;
+  isoA2Code: string | null;
+  value: number;
+  comment: string | null;
+}
+
 /**
  * Fetch exchange rate from InforEuro API for a specific currency
+ * Uses the monthly-rates endpoint which is more reliable
  */
 async function fetchRateFromApi(currencyCode: string, year: number, month: number): Promise<number | null> {
   const currency = currencyCode.toUpperCase();
@@ -32,11 +42,51 @@ async function fetchRateFromApi(currencyCode: string, year: number, month: numbe
   }
 
   try {
-    // InforEuro API endpoint - fetches rates for a specific currency
-    // The API returns monthly rates, we need to find the one for our month/year
-    const url = `https://ec.europa.eu/budg/inforeuro/api/public/currencies/${currency}`;
+    // Try the monthly-rates endpoint first (more reliable)
+    const monthlyUrl = `https://ec.europa.eu/budg/inforeuro/api/public/monthly-rates?year=${year}&month=${month}`;
+    console.log(`[InforEuro] Fetching rate for ${currency} ${month}/${year} from ${monthlyUrl}`);
 
-    console.log(`[InforEuro] Fetching rate for ${currency} ${month}/${year} from ${url}`);
+    const response = await fetch(monthlyUrl, {
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[InforEuro] API returned ${response.status} for monthly-rates`);
+      return await fetchRateFromCurrencyEndpoint(currency, year, month);
+    }
+
+    const data = (await response.json()) as MonthlyRateResponse[];
+
+    // Find the rate for our specific currency
+    const matchingRate = data.find(rate => rate.isoA3Code === currency);
+
+    if (matchingRate) {
+      // InforEuro gives: 1 EUR = X foreign currency (value)
+      // We need: 1 foreign currency = X EUR
+      // So we invert: rate = 1 / value
+      const rateToEur = 1 / matchingRate.value;
+      console.log(`[InforEuro] Found rate for ${currency} ${month}/${year}: 1 ${currency} = ${rateToEur.toFixed(6)} EUR (1 EUR = ${matchingRate.value} ${currency})`);
+      return rateToEur;
+    }
+
+    console.warn(`[InforEuro] No rate found for ${currency} in monthly-rates for ${month}/${year}`);
+    // Fallback to currency endpoint
+    return await fetchRateFromCurrencyEndpoint(currency, year, month);
+  } catch (error) {
+    console.error(`[InforEuro] Error fetching rate for ${currency}:`, error);
+    return await fetchRateFromCurrencyEndpoint(currency, year, month);
+  }
+}
+
+/**
+ * Fallback: Fetch from the currency-specific endpoint
+ */
+async function fetchRateFromCurrencyEndpoint(currencyCode: string, year: number, month: number): Promise<number | null> {
+  try {
+    const url = `https://ec.europa.eu/budg/inforeuro/api/public/currencies/${currencyCode}`;
+    console.log(`[InforEuro] Fallback: Fetching from ${url}`);
 
     const response = await fetch(url, {
       headers: {
@@ -45,11 +95,13 @@ async function fetchRateFromApi(currencyCode: string, year: number, month: numbe
     });
 
     if (!response.ok) {
-      console.error(`[InforEuro] API returned ${response.status} for ${currency}`);
+      console.error(`[InforEuro] Currency endpoint returned ${response.status} for ${currencyCode}`);
       return null;
     }
 
-    const data: InfoEuroRate[] = await response.json();
+    const data = (await response.json()) as InfoEuroRate[];
+
+    console.log(`[InforEuro] Currency endpoint returned ${data.length} records for ${currencyCode}`);
 
     // Find the rate for the specific month/year
     // The API returns all historical rates, we need to filter
@@ -66,14 +118,14 @@ async function fetchRateFromApi(currencyCode: string, year: number, month: numbe
       // We need: 1 foreign currency = X EUR
       // So we invert: rate = 1 / amount
       const rateToEur = 1 / matchingRate.amount;
-      console.log(`[InforEuro] Found rate for ${currency} ${month}/${year}: 1 ${currency} = ${rateToEur.toFixed(6)} EUR`);
+      console.log(`[InforEuro] Found rate for ${currencyCode} ${month}/${year}: 1 ${currencyCode} = ${rateToEur.toFixed(6)} EUR`);
       return rateToEur;
     }
 
-    console.warn(`[InforEuro] No rate found for ${currency} ${month}/${year}`);
+    console.warn(`[InforEuro] No rate found for ${currencyCode} ${month}/${year} in currency endpoint`);
     return null;
   } catch (error) {
-    console.error(`[InforEuro] Error fetching rate for ${currency}:`, error);
+    console.error(`[InforEuro] Error in currency endpoint fallback:`, error);
     return null;
   }
 }

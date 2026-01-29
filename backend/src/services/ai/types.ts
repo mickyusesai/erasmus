@@ -47,6 +47,12 @@ export interface DocumentAnalysisResult {
   suggestedFilename: string;
   extractedTravelItems: ExtractedTravelItem[];
   warnings: string[];
+  // Round-trip and multi-passenger detection
+  isRoundTrip?: boolean;
+  numberOfPassengers?: number;
+  allPassengerNames?: string;
+  outboundFlightNumber?: string;
+  returnFlightNumber?: string;
 }
 
 export interface ReimbursementValidation {

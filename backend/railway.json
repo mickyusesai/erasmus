@@ -1,9 +1,10 @@
 {
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "NIXPACKS",
+    "buildCommand": "npm install && npx prisma generate && npm run build"
   },
   "deploy": {
     "startCommand": "npm start",
-    "preDeployCommand": "npx prisma generate && npx prisma db push"
+    "preDeployCommand": "npx prisma db push"
   }
 }

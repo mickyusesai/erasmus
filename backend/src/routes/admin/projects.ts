@@ -13,6 +13,8 @@ const createProjectSchema = z.object({
   country: z.string().min(1, 'Country is required'),
   startDate: z.string().transform((s) => new Date(s)),
   endDate: z.string().transform((s) => new Date(s)),
+  disseminationEnabled: z.boolean().optional().default(false),
+  carRatePerKm: z.number().min(0).optional().default(0.22), // EUR per km for car travel
 });
 
 const updateProjectSchema = createProjectSchema.partial();
@@ -62,7 +64,7 @@ router.get('/', async (req: Request, res: Response) => {
     },
   });
 
-  const projectsWithStats = projects.map((project) => {
+  const projectsWithStats = projects.map((project: typeof projects[0]) => {
     let complete = 0;
     let approved = 0;
     let paid = 0;
@@ -83,6 +85,8 @@ router.get('/', async (req: Request, res: Response) => {
       startDate: project.startDate,
       endDate: project.endDate,
       createdAt: project.createdAt,
+      disseminationEnabled: project.disseminationEnabled,
+      carRatePerKm: project.carRatePerKm,
       stats: {
         totalParticipants: project._count.participants,
         complete,
@@ -223,7 +227,7 @@ router.get('/:id/participant-countries', async (req: Request, res: Response) => 
     orderBy: { country: 'asc' },
   });
 
-  res.json(participants.map(p => p.country));
+  res.json(participants.map((p: { country: string }) => p.country));
 });
 
 /**
@@ -243,7 +247,7 @@ router.post('/:id/country-limits/auto-populate', async (req: Request, res: Respo
     distinct: ['country'],
   });
 
-  const countries = participants.map(p => p.country);
+  const countries = participants.map((p: { country: string }) => p.country);
 
   // Create country limits for each country that doesn't already exist
   const created = [];
@@ -287,7 +291,7 @@ router.get('/:id/country-limits/check-missing', async (req: Request, res: Respon
     distinct: ['country'],
   });
 
-  const participantCountries = participants.map(p => p.country);
+  const participantCountries = participants.map((p: { country: string }) => p.country);
 
   // Get existing country limits
   const existingLimits = await prisma.projectCountryLimit.findMany({
@@ -295,10 +299,10 @@ router.get('/:id/country-limits/check-missing', async (req: Request, res: Respon
     select: { country: true },
   });
 
-  const existingCountries = new Set(existingLimits.map(l => l.country));
+  const existingCountries = new Set(existingLimits.map((l: { country: string }) => l.country));
 
   // Find missing countries
-  const missingCountries = participantCountries.filter(c => !existingCountries.has(c));
+  const missingCountries = participantCountries.filter((c: string) => !existingCountries.has(c));
 
   res.json({
     hasMissingCountries: missingCountries.length > 0,
@@ -387,7 +391,7 @@ router.get('/:id/export/csv', async (req: Request, res: Response) => {
     'Paid',
   ];
 
-  const rows = participants.map((p) => [
+  const rows = participants.map((p: typeof participants[0]) => [
     p.firstName,
     p.lastName,
     p.email,
@@ -406,8 +410,8 @@ router.get('/:id/export/csv', async (req: Request, res: Response) => {
 
   const csv = [
     headers.join(','),
-    ...rows.map((row) =>
-      row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(',')
+    ...rows.map((row: string[]) =>
+      row.map((cell: string) => `"${cell.replace(/"/g, '""')}"`).join(',')
     ),
   ].join('\n');
 

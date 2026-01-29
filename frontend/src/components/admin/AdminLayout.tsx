@@ -24,12 +24,10 @@ export default function AdminLayout() {
         {/* Logo */}
         <div className="p-6">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-soft flex items-center justify-center">
-              <span className="text-white font-bold text-lg">E+</span>
-            </div>
+            <img src="/logo.png" alt="EasyReimburse" className="w-10 h-10 rounded-xl object-contain" />
             <div>
-              <h1 className="font-semibold text-gray-900">Erasmus+</h1>
-              <p className="text-xs text-gray-500">Reimbursement Portal</p>
+              <h1 className="font-semibold text-gray-900">EasyReimburse</h1>
+              <p className="text-xs text-gray-500">Portal</p>
             </div>
           </div>
         </div>

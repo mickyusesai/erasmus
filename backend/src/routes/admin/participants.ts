@@ -77,17 +77,40 @@ router.get('/', async (req: Request, res: Response) => {
     where,
     include: {
       project: {
-        select: { name: true, country: true },
+        select: { name: true, country: true, disseminationEnabled: true },
       },
       reimbursementSummary: true,
       _count: {
-        select: { documents: true, travelItems: true },
+        select: { documents: true, travelItems: true, socialMediaPosts: true },
       },
     },
     orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
   });
 
-  res.json(participants);
+  // Get dissemination activity counts for participants whose projects have dissemination enabled
+  const participantsWithDissemination = await Promise.all(
+    participants.map(async (p) => {
+      let hasDisseminationActivity = false;
+      if (p.project?.disseminationEnabled) {
+        const activityCount = await prisma.disseminationActivity.count({
+          where: {
+            projectId: p.projectId,
+            country: p.country,
+          },
+        });
+        hasDisseminationActivity = activityCount > 0;
+      }
+      return {
+        ...p,
+        disseminationStatus: {
+          hasActivity: hasDisseminationActivity,
+          hasSocialMedia: (p._count?.socialMediaPosts || 0) > 0,
+        },
+      };
+    })
+  );
+
+  res.json(participantsWithDissemination);
 });
 
 /**
@@ -108,9 +131,13 @@ router.get('/:id', async (req: Request, res: Response) => {
       },
       travelItems: {
         orderBy: { departureDate: 'asc' },
+        include: {
+          declarationsOfTravel: true,
+        },
       },
       reimbursementSummary: true,
       declarationsOnHonor: true,
+      declarationsOfTravel: true,
       changeLogEntries: {
         orderBy: { changedAt: 'desc' },
         take: 50,
@@ -124,12 +151,35 @@ router.get('/:id', async (req: Request, res: Response) => {
 
   // Get country limit for this participant
   const countryLimit = participant.project.countryLimits.find(
-    (limit) => limit.country === participant.country
+    (limit: { country: string }) => limit.country === participant.country
   );
+
+  // Get dissemination status
+  let disseminationStatus = {
+    hasDisseminationActivity: false,
+    hasSocialMediaPost: false,
+  };
+
+  if (participant.project.disseminationEnabled) {
+    const activityCount = await prisma.disseminationActivity.count({
+      where: {
+        projectId: participant.project.id,
+        country: participant.country,
+      },
+    });
+    const socialMediaCount = await prisma.socialMediaPost.count({
+      where: { participantId: participant.id },
+    });
+    disseminationStatus = {
+      hasDisseminationActivity: activityCount > 0,
+      hasSocialMediaPost: socialMediaCount > 0,
+    };
+  }
 
   res.json({
     ...participant,
     maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
+    disseminationStatus,
   });
 });
 
@@ -187,6 +237,30 @@ const createParticipantSchema = z.object({
   country: z.string().min(1, 'Country is required'),
 });
 
+// Helper function to auto-create country limits for new countries
+async function ensureCountryLimitExists(projectId: string, country: string): Promise<void> {
+  const existingLimit = await prisma.projectCountryLimit.findUnique({
+    where: {
+      projectId_country: {
+        projectId,
+        country,
+      },
+    },
+  });
+
+  if (!existingLimit) {
+    await prisma.projectCountryLimit.create({
+      data: {
+        projectId,
+        country,
+        maxReimbursementAmount: 0, // Admin needs to set the actual amount
+        currency: 'EUR',
+        greenTravel: false,
+      },
+    });
+  }
+}
+
 /**
  * POST /api/admin/participants
  * Create a single participant
@@ -220,6 +294,9 @@ router.post('/', async (req: Request, res: Response) => {
   if (existing) {
     throw new ValidationError('A participant with this email already exists in this project');
   }
+
+  // Auto-create country limit if it doesn't exist
+  await ensureCountryLimitExists(projectId, country);
 
   // Create participant
   const participant = await prisma.participant.create({
@@ -316,6 +393,9 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
     }
 
     try {
+      // Auto-create country limit if it doesn't exist
+      await ensureCountryLimitExists(projectId, data.country);
+
       const participant = await prisma.participant.create({
         data: {
           projectId,

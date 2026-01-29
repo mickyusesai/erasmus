@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -24,12 +24,18 @@ import {
   MapPin,
   Ticket,
   X,
+  Share2,
+  Info,
+  FileCheck,
+  Users,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
+import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
+import DisseminationPage from './DisseminationPage';
 import {
   participantApi,
   ParticipantAuthResponse,
@@ -37,6 +43,7 @@ import {
   TransportMode,
   DocumentType,
   Document,
+  DeclarationOfTravel,
 } from '../../services/api';
 import { clsx } from 'clsx';
 
@@ -194,21 +201,14 @@ const transportBgColors: Record<TransportMode, string> = {
   OTHER: 'bg-gray-50 border-gray-200',
 };
 
-// Legacy colors for backwards compatibility (can be removed later)
-const transportColors: Record<TransportMode, string> = {
-  PLANE: 'bg-blue-500',
-  TRAIN: 'bg-green-500',
-  BUS: 'bg-orange-500',
-  CAR: 'bg-purple-500',
-  FERRY: 'bg-cyan-500',
-  OTHER: 'bg-gray-500',
-};
+type ActiveTab = 'reimbursement' | 'dissemination';
 
 export default function ReimbursementPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('reimbursement');
 
   useEffect(() => {
     if (!token) {
@@ -253,6 +253,7 @@ export default function ReimbursementPage() {
   }
 
   const isComplete = data.participant.status !== 'DRAFT';
+  const disseminationEnabled = data.project.disseminationEnabled;
 
   return (
     <div className="min-h-screen pb-12">
@@ -274,8 +275,49 @@ export default function ReimbursementPage() {
             </p>
           </div>
 
-          {/* Progress Steps */}
-          {!isComplete && (
+          {/* Tabs (when dissemination is enabled) */}
+          {disseminationEnabled && (
+            <div className="mt-6 flex gap-2">
+              <button
+                onClick={() => setActiveTab('reimbursement')}
+                className={clsx(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                  activeTab === 'reimbursement'
+                    ? 'bg-white text-primary-600'
+                    : 'bg-white/10 text-white/80 hover:bg-white/20'
+                )}
+              >
+                <Ticket className="w-4 h-4 inline-block mr-2" />
+                Reimbursement
+              </button>
+              <button
+                onClick={() => setActiveTab('dissemination')}
+                className={clsx(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2',
+                  activeTab === 'dissemination'
+                    ? 'bg-white text-primary-600'
+                    : 'bg-white/10 text-white/80 hover:bg-white/20'
+                )}
+              >
+                <Share2 className="w-4 h-4" />
+                Dissemination
+                {data.disseminationStatus && (
+                  <span
+                    className={clsx(
+                      'w-2 h-2 rounded-full',
+                      data.disseminationStatus.hasDisseminationActivity &&
+                        data.disseminationStatus.hasSocialMediaPost
+                        ? 'bg-green-400'
+                        : 'bg-amber-400'
+                    )}
+                  />
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Progress Steps (only for reimbursement tab) */}
+          {!isComplete && activeTab === 'reimbursement' && (
             <div className="mt-8">
               <ProgressSteps currentStep={currentStep} />
             </div>
@@ -285,7 +327,16 @@ export default function ReimbursementPage() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto px-4 -mt-6">
-        {isComplete ? (
+        {activeTab === 'dissemination' ? (
+          <Card className="mt-6">
+            <CardContent className="p-6">
+              <DisseminationPage
+                token={token}
+                participantCountry={data.participant.country}
+              />
+            </CardContent>
+          </Card>
+        ) : isComplete ? (
           <CompletedView data={data} />
         ) : (
           <>
@@ -643,6 +694,7 @@ function Step2CheckData({
   const [noteEdited, setNoteEdited] = useState(false);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
+  const [missingBoardingPassItem, setMissingBoardingPassItem] = useState<TravelItem | null>(null);
 
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
@@ -878,6 +930,7 @@ function Step2CheckData({
                   key={item.id}
                   item={item}
                   documents={data.documents}
+                  declarationsOfTravel={data.declarationsOfTravel || []}
                   token={token}
                   onUpdate={(updates) =>
                     updateMutation.mutate({ id: item.id, updates })
@@ -885,6 +938,7 @@ function Step2CheckData({
                   onDelete={() => deleteMutation.mutate(item.id)}
                   onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
                   onViewDocument={setViewingDocument}
+                  onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
                 />
               ))}
             </div>
@@ -1018,6 +1072,19 @@ function Step2CheckData({
         document={viewingDocument}
         onClose={() => setViewingDocument(null)}
       />
+
+      {/* Missing Boarding Pass Modal */}
+      {missingBoardingPassItem && (
+        <MissingBoardingPassModal
+          isOpen={true}
+          onClose={() => setMissingBoardingPassItem(null)}
+          token={token}
+          travelItem={missingBoardingPassItem}
+          documents={data.documents}
+          participantName={`${data.participant.firstName} ${data.participant.lastName}`}
+          participantCountry={data.participant.country}
+        />
+      )}
     </div>
   );
 }
@@ -1028,8 +1095,60 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
   projectStartDate?: string;
   projectEndDate?: string;
 }) {
+  // Create visual journey items - expand round-trips into two entries
+  interface VisualJourneyItem {
+    id: string;
+    modeOfTransport: TravelItem['modeOfTransport'];
+    fromLocation: string;
+    toLocation: string;
+    departureDate: string;
+    isReturnLeg?: boolean;  // True if this is the return portion of a round-trip
+    originalItemId: string; // Reference to the actual travel item
+  }
+
+  const visualItems: VisualJourneyItem[] = [];
+
+  items.forEach(item => {
+    // Add the outbound/original leg
+    visualItems.push({
+      id: item.id,
+      modeOfTransport: item.modeOfTransport,
+      fromLocation: item.fromLocation,
+      toLocation: item.toLocation,
+      departureDate: item.departureDate,
+      isReturnLeg: false,
+      originalItemId: item.id,
+    });
+
+    // If it's a round-trip, add a virtual return leg
+    if (item.isRoundTrip) {
+      // For return date, use project end date + 1 day, or estimate from departure
+      let returnDate: string;
+      if (projectEndDate) {
+        const endDate = new Date(projectEndDate);
+        endDate.setDate(endDate.getDate() + 1);
+        returnDate = endDate.toISOString();
+      } else {
+        // Fallback: assume return is 7 days after departure
+        const depDate = new Date(item.departureDate);
+        depDate.setDate(depDate.getDate() + 7);
+        returnDate = depDate.toISOString();
+      }
+
+      visualItems.push({
+        id: `${item.id}-return`,
+        modeOfTransport: item.modeOfTransport,
+        fromLocation: item.toLocation,  // Swap locations for return
+        toLocation: item.fromLocation,
+        departureDate: returnDate,
+        isReturnLeg: true,
+        originalItemId: item.id,
+      });
+    }
+  });
+
   // Sort items by departure date
-  const sortedItems = [...items].sort((a, b) =>
+  const sortedItems = [...visualItems].sort((a, b) =>
     new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
   );
 
@@ -1055,7 +1174,7 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
     new Date(item.departureDate) > midpointDate
   );
 
-  const renderJourneySection = (sectionItems: TravelItem[], label: string, isReturn: boolean) => {
+  const renderJourneySection = (sectionItems: VisualJourneyItem[], label: string, isReturn: boolean) => {
     if (sectionItems.length === 0) return null;
 
     return (
@@ -1074,14 +1193,17 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
                   {/* Subtle icon container - no heavy colored circle */}
                   <div className={clsx(
                     'w-10 h-10 rounded-xl flex items-center justify-center border transition-all hover:scale-105',
-                    bgColor
+                    bgColor,
+                    item.isReturnLeg && 'ring-2 ring-purple-300 ring-offset-1'  // Highlight return legs
                   )}>
                     <Icon className={clsx('w-5 h-5', iconColor)} />
                   </div>
                   <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
                     {item.fromLocation}
                   </p>
-                  <p className="text-[10px] text-gray-400">{formatDate(item.departureDate)}</p>
+                  <p className="text-[10px] text-gray-400">
+                    {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
+                  </p>
                 </div>
 
                 {/* Connector line with arrow */}
@@ -1106,7 +1228,9 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
                     <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
                       {item.toLocation}
                     </p>
-                    <p className="text-[10px] text-gray-400">{formatDate(item.departureDate)}</p>
+                    <p className="text-[10px] text-gray-400">
+                      {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
+                    </p>
                   </div>
                 )}
               </div>
@@ -1129,23 +1253,28 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
 function TravelItemCard({
   item,
   documents,
+  declarationsOfTravel,
   token,
   onUpdate,
   onDelete,
   onUploadBoardingPass,
   onViewDocument,
+  onMissingBoardingPass,
 }: {
   item: TravelItem;
   documents: Document[];
+  declarationsOfTravel: DeclarationOfTravel[];
   token: string;
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
   onUploadBoardingPass: () => void;
   onViewDocument: (doc: Document) => void;
+  onMissingBoardingPass: () => void;
 }) {
   const Icon = transportIcons[item.modeOfTransport];
   const isPlane = item.modeOfTransport === 'PLANE';
   const hasBoardingPass = documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+  const hasDeclaration = declarationsOfTravel.some(dec => dec.travelItemId === item.id);
   const linkedDocument = documents.find(d => d.id === item.documentId);
   const isNonEurCurrency = item.currencyOriginal !== 'EUR';
   const [isConverting, setIsConverting] = useState(false);
@@ -1191,26 +1320,100 @@ function TravelItemCard({
 
   return (
     <div className="p-6 bg-gray-50 rounded-2xl">
-      {/* Boarding Pass Status Bar for Flights */}
+      {/* Boarding Pass / Declaration Status Bar for Flights */}
       {isPlane && (
         <div className={clsx(
           'mb-4 p-3 rounded-xl flex items-center justify-between',
-          hasBoardingPass ? 'bg-emerald-50 border border-emerald-200' : 'bg-amber-50 border border-amber-200'
+          (hasBoardingPass || hasDeclaration) ? 'bg-emerald-50 border border-emerald-200' : 'bg-amber-50 border border-amber-200'
         )}>
           <div className="flex items-center gap-2">
-            <Ticket className={clsx('w-5 h-5', hasBoardingPass ? 'text-emerald-600' : 'text-amber-600')} />
-            <span className={clsx('text-sm font-medium', hasBoardingPass ? 'text-emerald-700' : 'text-amber-700')}>
-              {hasBoardingPass ? 'Boarding Pass Added' : 'Boarding Pass Missing'}
-            </span>
+            {hasBoardingPass ? (
+              <>
+                <Ticket className="w-5 h-5 text-emerald-600" />
+                <span className="text-sm font-medium text-emerald-700">
+                  Boarding Pass Added
+                </span>
+              </>
+            ) : hasDeclaration ? (
+              <>
+                <FileCheck className="w-5 h-5 text-emerald-600" />
+                <span className="text-sm font-medium text-emerald-700">
+                  Declaration Created
+                </span>
+              </>
+            ) : (
+              <>
+                <Ticket className="w-5 h-5 text-amber-600" />
+                <span className="text-sm font-medium text-amber-700">
+                  Boarding Pass Missing
+                </span>
+              </>
+            )}
           </div>
-          {!hasBoardingPass && (
-            <button
-              onClick={onUploadBoardingPass}
-              className="text-sm text-amber-700 hover:text-amber-800 font-medium underline"
-            >
-              Upload now
-            </button>
+          {!hasBoardingPass && !hasDeclaration && (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onUploadBoardingPass}
+                className="text-sm text-amber-700 hover:text-amber-800 font-medium underline"
+              >
+                Upload now
+              </button>
+              <button
+                onClick={onMissingBoardingPass}
+                className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                title="Can't find your boarding pass?"
+              >
+                <Info className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Missing?</span>
+              </button>
+            </div>
           )}
+        </div>
+      )}
+
+      {/* Multi-passenger booking alert */}
+      {item.numberOfPassengers && item.numberOfPassengers > 1 && (
+        <div className="mb-4 p-3 rounded-xl bg-blue-50 border border-blue-200">
+          <div className="flex items-start gap-3">
+            <Users className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-blue-800">
+                Multi-passenger booking ({item.numberOfPassengers} passengers)
+              </p>
+              <p className="text-xs text-blue-700 mt-1">
+                This booking was for multiple people. Please enter your share of the cost below.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <label className="text-sm text-blue-800">My portion:</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max={item.amountOriginal}
+                  value={item.participantPortion || ''}
+                  onChange={(e) => onUpdate({ participantPortion: parseFloat(e.target.value) || 0 })}
+                  className="w-28"
+                  placeholder={`Max: ${item.amountOriginal}`}
+                />
+                <span className="text-sm text-blue-700">{item.currencyOriginal}</span>
+                <span className="text-xs text-blue-600 ml-2">
+                  (Total: {formatCurrency(item.amountOriginal, item.currencyOriginal)})
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Round-trip indicator */}
+      {item.isRoundTrip && (
+        <div className="mb-4 p-2 rounded-lg bg-purple-50 border border-purple-200 flex items-center gap-2">
+          <span className="text-xs font-medium text-purple-700">
+            Round-trip booking
+          </span>
+          <span className="text-xs text-purple-600">
+            (Requires 2 boarding passes: outbound and return)
+          </span>
         </div>
       )}
 
@@ -1353,6 +1556,44 @@ function TravelItemCard({
               value={item.bookingReference || ''}
               onChange={(e) => onUpdate({ bookingReference: e.target.value })}
             />
+          </>
+        )}
+        {/* Car travel specific fields */}
+        {item.modeOfTransport === 'CAR' && (
+          <>
+            <div className="col-span-1">
+              <Input
+                label={
+                  <span className="flex items-center gap-1">
+                    Distance (km)
+                    <span className="text-xs text-gray-400 ml-1">(one-way)</span>
+                  </span>
+                }
+                type="number"
+                step="1"
+                min="0"
+                value={item.distanceKm || ''}
+                onChange={(e) => onUpdate({ distanceKm: parseFloat(e.target.value) || 0 })}
+                placeholder="e.g., 350"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Enter the distance driven. Reimbursement = distance × rate per km.
+              </p>
+            </div>
+            <div className="col-span-1">
+              <label className="flex items-center gap-2 p-3 bg-white rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={item.isDriverCarpool || false}
+                  onChange={(e) => onUpdate({ isDriverCarpool: e.target.checked })}
+                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-700">I was the driver</span>
+                  <p className="text-xs text-gray-500">Check if you drove (not a passenger)</p>
+                </div>
+              </label>
+            </div>
           </>
         )}
       </div>
@@ -1645,6 +1886,24 @@ function Step3Confirm({
   });
   const [showDeclarationModal, setShowDeclarationModal] = useState(false);
   const [selectedMissingDoc, setSelectedMissingDoc] = useState<DocumentType | null>(null);
+  const [declarationTravelItem, setDeclarationTravelItem] = useState<TravelItem | null>(null);
+
+  // Find flights missing boarding passes (no linked boarding pass document and no declaration of travel)
+  const declarationsOfTravel = data.declarationsOfTravel || [];
+  const flightsMissingBoardingPass = data.travelItems.filter((item) => {
+    if (item.modeOfTransport !== 'PLANE') return false;
+
+    // Check if there's a linked boarding pass document
+    const linkedDoc = data.documents.find((d) => d.id === item.documentId);
+    const hasBoardingPass =
+      linkedDoc?.documentType === 'FLIGHT_BOARDING_PASS' ||
+      data.documents.some((d) => d.documentType === 'FLIGHT_BOARDING_PASS');
+
+    // Check if there's a declaration of travel for this item
+    const hasDeclaration = declarationsOfTravel.some((dec) => dec.travelItemId === item.id);
+
+    return !hasBoardingPass && !hasDeclaration;
+  });
 
   const updateBankMutation = useMutation({
     mutationFn: () => participantApi.updateBankDetails(token, bankDetails),
@@ -1685,7 +1944,8 @@ function Step3Confirm({
     confirmations.dataCorrect &&
     confirmations.erasmusRules &&
     bankDetails.bankAccountIban &&
-    bankDetails.bankAccountHolderName;
+    bankDetails.bankAccountHolderName &&
+    bankDetails.bankAccountBic;
 
   return (
     <>
@@ -1727,6 +1987,48 @@ function Step3Confirm({
             </div>
           )}
 
+          {/* Flights Missing Boarding Pass Warning */}
+          {flightsMissingBoardingPass.length > 0 && (
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <Plane className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <h4 className="font-semibold text-blue-800">
+                    Flights Without Boarding Pass
+                  </h4>
+                  <p className="text-sm text-blue-700 mt-1">
+                    The following flights don't have a boarding pass. You can either upload
+                    one or sign a declaration of travel.
+                  </p>
+                  <ul className="mt-3 space-y-2">
+                    {flightsMissingBoardingPass.map((item) => (
+                      <li
+                        key={item.id}
+                        className="flex items-center justify-between bg-white p-3 rounded-lg border border-blue-100"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">
+                            {item.fromLocation} → {item.toLocation}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {new Date(item.departureDate).toLocaleDateString()}
+                            {item.flightNumber && ` • ${item.flightNumber}`}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setDeclarationTravelItem(item)}
+                          className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          Sign Declaration
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Bank Details */}
           <div className="space-y-4">
             <h3 className="font-semibold text-gray-900">Bank Account Details</h3>
@@ -1749,15 +2051,29 @@ function Step3Confirm({
                 onBlur={() => updateBankMutation.mutate()}
                 placeholder="John Doe"
               />
-              <Input
-                label="BIC (Optional)"
-                value={bankDetails.bankAccountBic}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
-                }
-                onBlur={() => updateBankMutation.mutate()}
-                placeholder="COBADEFFXXX"
-              />
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <label className="block text-sm font-medium text-gray-700">
+                    BIC/SWIFT Code
+                  </label>
+                  <div className="relative group">
+                    <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
+                      The BIC (Bank Identifier Code) is an 8-11 character code. You can find it on your bank statement, in your banking app, or by searching &quot;[your bank name] BIC code&quot;.
+                      <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+                    </div>
+                  </div>
+                </div>
+                <Input
+                  value={bankDetails.bankAccountBic}
+                  onChange={(e) =>
+                    setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
+                  }
+                  onBlur={() => updateBankMutation.mutate()}
+                  placeholder="COBADEFFXXX"
+                  required
+                />
+              </div>
             </div>
           </div>
 
@@ -1843,6 +2159,19 @@ function Step3Confirm({
         onSubmit={(decData) => createDeclarationMutation.mutate(decData)}
         isLoading={createDeclarationMutation.isPending}
       />
+
+      {/* Declaration of Travel Modal (for missing boarding pass) */}
+      {declarationTravelItem && (
+        <MissingBoardingPassModal
+          isOpen={true}
+          onClose={() => setDeclarationTravelItem(null)}
+          token={token}
+          travelItem={declarationTravelItem}
+          documents={data.documents}
+          participantName={`${data.participant.firstName} ${data.participant.lastName}`}
+          participantCountry={data.participant.country}
+        />
+      )}
     </>
   );
 }
