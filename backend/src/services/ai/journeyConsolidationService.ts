@@ -448,10 +448,17 @@ CRITICAL DATE PARSING:
 - German months: Jan/Januar, Feb/Februar, Mär/März, Apr/April, Mai, Jun/Juni, Jul/Juli, Aug/August, Sep/September, Okt/Oktober, Nov/November, Dez/Dezember
 - Always output dates in YYYY-MM-DD format
 
-WARNING RULES:
-- Travel dates are EXPECTED to be close to but outside the project period (participants travel TO the event before it starts and travel BACK after it ends)
-- Only generate a warning if a travel date is MORE THAN 30 DAYS before the project start date OR MORE THAN 30 DAYS after the project end date
-- Do NOT warn about dates that are within 30 days of the project period - this is normal
+WARNING RULES - BE VERY SELECTIVE:
+- Travel dates BEFORE project start and AFTER project end are COMPLETELY NORMAL - participants travel TO the event and BACK home
+- Do NOT warn about travel being before/after the project period unless it's MORE THAN 30 DAYS outside
+- Do NOT generate explanatory warnings like "appears to be returning home" - just process the data silently
+- ONLY generate warnings for ACTUAL PROBLEMS that need participant action:
+  * Name on ticket doesn't match participant name
+  * Round-trip booking requires 2 boarding passes
+  * Multi-passenger booking needs portion specified
+  * Amount is 0 or missing
+  * Location couldn't be determined (shows as Unknown)
+- Keep warnings SHORT and ACTIONABLE, not explanatory
 
 IMPORTANT RULES:
 - Boarding pass dates are ALWAYS departure dates (when the person flew)

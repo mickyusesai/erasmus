@@ -699,6 +699,11 @@ function Step2CheckData({
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
   const [missingBoardingPassItem, setMissingBoardingPassItem] = useState<TravelItem | null>(null);
 
+  // Calculate unlinked documents (uploaded but not connected to any travel item)
+  const linkedDocIds = new Set(data.travelItems.map(t => t.documentId).filter(Boolean));
+  const unlinkedDocs = data.documents.filter(d => !linkedDocIds.has(d.id));
+  const hasUnlinkedDocs = unlinkedDocs.length > 0;
+
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
     onSuccess: () => {
@@ -804,6 +809,27 @@ function Step2CheckData({
           'ireland': ['dublin', 'cork', 'galway', 'limerick'],
           'uk': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
           'united kingdom': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
+          // Balkan and Eastern European countries
+          'north macedonia': ['skopje', 'bitola', 'kumanovo', 'prilep', 'ohrid'],
+          'macedonia': ['skopje', 'bitola', 'kumanovo', 'prilep', 'ohrid'],
+          'serbia': ['belgrade', 'novi sad', 'nis', 'kragujevac', 'subotica'],
+          'bosnia': ['sarajevo', 'banja luka', 'mostar', 'tuzla', 'zenica'],
+          'bosnia and herzegovina': ['sarajevo', 'banja luka', 'mostar', 'tuzla', 'zenica'],
+          'montenegro': ['podgorica', 'niksic', 'budva', 'kotor', 'herceg novi'],
+          'albania': ['tirana', 'durres', 'vlora', 'shkoder', 'elbasan'],
+          'kosovo': ['pristina', 'prizren', 'peja', 'gjakova', 'mitrovica'],
+          'moldova': ['chisinau', 'balti', 'tiraspol'],
+          'ukraine': ['kyiv', 'kharkiv', 'odesa', 'lviv', 'dnipro'],
+          'belarus': ['minsk', 'gomel', 'mogilev', 'vitebsk', 'grodno'],
+          'lithuania': ['vilnius', 'kaunas', 'klaipeda', 'siauliai'],
+          'latvia': ['riga', 'daugavpils', 'liepaja', 'jelgava'],
+          'estonia': ['tallinn', 'tartu', 'narva', 'parnu'],
+          'turkey': ['istanbul', 'ankara', 'izmir', 'bursa', 'antalya'],
+          'cyprus': ['nicosia', 'limassol', 'larnaca', 'paphos', 'famagusta'],
+          'malta': ['valletta', 'sliema', 'st julians', 'birkirkara'],
+          'iceland': ['reykjavik', 'kopavogur', 'hafnarfjordur', 'akureyri'],
+          'luxembourg': ['luxembourg', 'esch-sur-alzette', 'differdange'],
+          'switzerland': ['zurich', 'geneva', 'basel', 'bern', 'lausanne'],
         };
 
         // Check if origin city matches participant's country
@@ -966,11 +992,17 @@ function Step2CheckData({
               </p>
             </div>
             <Button
-              variant="secondary"
+              variant={hasUnlinkedDocs ? "primary" : "secondary"}
               onClick={() => setShowAddTravelModal(true)}
+              className={hasUnlinkedDocs ? "ring-2 ring-amber-400 ring-offset-2 animate-pulse" : ""}
             >
               <Plus className="w-4 h-4 mr-2" />
               Add Travel
+              {hasUnlinkedDocs && (
+                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs rounded-full">
+                  {unlinkedDocs.length}
+                </span>
+              )}
             </Button>
           </div>
         </CardHeader>
@@ -1110,6 +1142,8 @@ function Step2CheckData({
         isOpen={showAddTravelModal}
         onClose={() => setShowAddTravelModal(false)}
         token={token}
+        documents={data.documents}
+        travelItems={data.travelItems}
       />
 
       {/* Boarding Pass Upload Modal */}
@@ -1691,10 +1725,14 @@ function AddTravelModal({
   isOpen,
   onClose,
   token,
+  documents,
+  travelItems,
 }: {
   isOpen: boolean;
   onClose: () => void;
   token: string;
+  documents: Document[];
+  travelItems: TravelItem[];
 }) {
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
@@ -1708,12 +1746,21 @@ function AddTravelModal({
     bookingReference: '',
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>('');
+
+  // Find documents that are not linked to any travel item
+  const linkedDocIds = new Set(travelItems.map(t => t.documentId).filter(Boolean));
+  const unlinkedDocs = documents.filter(d => !linkedDocIds.has(d.id));
 
   const uploadAndCreateMutation = useMutation({
     mutationFn: async () => {
-      // First upload document if selected
       let documentId: string | undefined;
-      if (selectedFile) {
+
+      // Use existing document if selected
+      if (selectedExistingDocId) {
+        documentId = selectedExistingDocId;
+      } else if (selectedFile) {
+        // Upload new document if file selected
         const uploadResult = await participantApi.uploadDocument(token, selectedFile);
         documentId = uploadResult.document.id;
       }
@@ -1741,6 +1788,7 @@ function AddTravelModal({
         bookingReference: '',
       });
       setSelectedFile(null);
+      setSelectedExistingDocId('');
     },
     onError: () => {
       toast.error('Failed to add travel item');
@@ -1762,37 +1810,78 @@ function AddTravelModal({
           </p>
         </div>
 
-        {/* File Upload */}
+        {/* Document Selection - Existing or New Upload */}
         <div>
           <label className="label">Supporting Document</label>
-          <div className="border-2 border-dashed border-gray-200 rounded-xl p-4">
-            {selectedFile ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-gray-400" />
-                  <span className="text-sm text-gray-700">{selectedFile.name}</span>
+
+          {/* Option to link existing unlinked document */}
+          {unlinkedDocs.length > 0 && (
+            <div className="mb-3">
+              <p className="text-sm text-amber-700 mb-2 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4" />
+                You have {unlinkedDocs.length} uploaded document(s) not linked to any travel item
+              </p>
+              <Select
+                label=""
+                value={selectedExistingDocId}
+                options={[
+                  { value: '', label: '-- Select an existing document --' },
+                  ...unlinkedDocs.map(d => ({
+                    value: d.id,
+                    label: d.originalFilename,
+                  })),
+                ]}
+                onChange={(e) => {
+                  setSelectedExistingDocId(e.target.value);
+                  if (e.target.value) setSelectedFile(null); // Clear file if existing doc selected
+                }}
+              />
+            </div>
+          )}
+
+          {/* Or upload new file */}
+          {!selectedExistingDocId && (
+            <div className="border-2 border-dashed border-gray-200 rounded-xl p-4">
+              {selectedFile ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-gray-400" />
+                    <span className="text-sm text-gray-700">{selectedFile.name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFile(null)}
+                    className="text-red-500 hover:text-red-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedFile(null)}
-                  className="text-red-500 hover:text-red-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <label className="cursor-pointer flex flex-col items-center">
-                <Upload className="w-8 h-8 text-gray-400 mb-2" />
-                <span className="text-sm text-gray-600">Click to upload document</span>
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                />
-              </label>
-            )}
-          </div>
+              ) : (
+                <label className="cursor-pointer flex flex-col items-center">
+                  <Upload className="w-8 h-8 text-gray-400 mb-2" />
+                  <span className="text-sm text-gray-600">
+                    {unlinkedDocs.length > 0 ? 'Or upload a new document' : 'Click to upload document'}
+                  </span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+          {selectedExistingDocId && (
+            <button
+              type="button"
+              onClick={() => setSelectedExistingDocId('')}
+              className="text-sm text-blue-600 hover:text-blue-700 mt-2"
+            >
+              Clear selection and upload new instead
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">

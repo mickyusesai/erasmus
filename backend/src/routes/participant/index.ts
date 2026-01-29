@@ -512,6 +512,16 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
     }
   }
 
+  // Recalculate amountEur when amountOriginal changes
+  // For EUR currency, amountEur equals amountOriginal
+  // For non-EUR, keep existing amountEur (will be recalculated by currency conversion)
+  if (result.data.amountOriginal !== undefined) {
+    const currency = result.data.currencyOriginal || current.currencyOriginal;
+    if (currency === 'EUR') {
+      updateData.amountEur = result.data.amountOriginal;
+    }
+  }
+
   // Update
   const travelItem = await prisma.travelItem.update({
     where: { id: req.params.id },
