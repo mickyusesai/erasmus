@@ -704,6 +704,27 @@ function Step2CheckData({
   const unlinkedDocs = data.documents.filter(d => !linkedDocIds.has(d.id));
   const hasUnlinkedDocs = unlinkedDocs.length > 0;
 
+  // Get the first travel item's origin for country validation
+  const firstTravelItem = useMemo(() => {
+    if (data.travelItems.length === 0) return null;
+    const sorted = [...data.travelItems].sort(
+      (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+    );
+    return sorted[0];
+  }, [data.travelItems]);
+
+  // Validate city-country using geocoding API
+  const cityCountryValidation = useQuery({
+    queryKey: ['city-country-validation', firstTravelItem?.fromLocation, data.participant.country],
+    queryFn: () => participantApi.validateCityCountry(
+      token,
+      firstTravelItem!.fromLocation,
+      data.participant.country!
+    ),
+    enabled: !!firstTravelItem?.fromLocation && !!data.participant.country,
+    staleTime: 24 * 60 * 60 * 1000, // Cache for 24 hours
+  });
+
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
     onSuccess: () => {
@@ -743,8 +764,6 @@ function Step2CheckData({
       });
     });
 
-    const participantCountry = data.participant.country?.toLowerCase();
-
     // Check for missing boarding passes for flights
     const hasFlights = data.travelItems.some(t => t.modeOfTransport === 'PLANE');
     const hasBoardingPass = data.documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
@@ -768,86 +787,15 @@ function Step2CheckData({
       });
     }
 
-    // Check if participant traveled from their registered country
-    if (participantCountry && data.travelItems.length > 0) {
-      // Find the first outbound travel item (earliest departure)
-      const sortedItems = [...data.travelItems].sort(
-        (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
-      );
-      const firstTravelItem = sortedItems[0];
-
-      if (firstTravelItem) {
-        const originLocation = firstTravelItem.fromLocation?.toLowerCase() || '';
-        // Check if the origin doesn't match the participant's country
-        const countryDoesNotMatch = !originLocation.includes(participantCountry) &&
-          !participantCountry.includes(originLocation.split(',')[0]?.trim() || '');
-
-        // List of common city-to-country mappings for better matching
-        const cityCountryMap: Record<string, string[]> = {
-          'poland': ['warsaw', 'krakow', 'poznan', 'gdansk', 'wroclaw', 'lodz', 'katowice'],
-          'germany': ['berlin', 'munich', 'frankfurt', 'hamburg', 'cologne', 'dusseldorf', 'stuttgart'],
-          'spain': ['madrid', 'barcelona', 'valencia', 'seville', 'malaga', 'bilbao'],
-          'italy': ['rome', 'milan', 'naples', 'turin', 'florence', 'venice', 'bologna'],
-          'france': ['paris', 'lyon', 'marseille', 'toulouse', 'nice', 'bordeaux'],
-          'netherlands': ['amsterdam', 'rotterdam', 'the hague', 'utrecht', 'eindhoven'],
-          'czech republic': ['prague', 'brno', 'ostrava', 'plzen'],
-          'czechia': ['prague', 'brno', 'ostrava', 'plzen'],
-          'hungary': ['budapest', 'debrecen', 'szeged', 'miskolc'],
-          'romania': ['bucharest', 'cluj', 'timisoara', 'iasi', 'brasov'],
-          'bulgaria': ['sofia', 'plovdiv', 'varna', 'burgas'],
-          'greece': ['athens', 'thessaloniki', 'patras', 'heraklion'],
-          'portugal': ['lisbon', 'porto', 'faro', 'braga'],
-          'croatia': ['zagreb', 'split', 'dubrovnik', 'rijeka'],
-          'slovenia': ['ljubljana', 'maribor'],
-          'slovakia': ['bratislava', 'kosice'],
-          'austria': ['vienna', 'salzburg', 'graz', 'linz', 'innsbruck'],
-          'belgium': ['brussels', 'antwerp', 'ghent', 'bruges', 'liege'],
-          'sweden': ['stockholm', 'gothenburg', 'malmo', 'uppsala'],
-          'denmark': ['copenhagen', 'aarhus', 'odense'],
-          'finland': ['helsinki', 'tampere', 'turku', 'oulu'],
-          'norway': ['oslo', 'bergen', 'trondheim', 'stavanger'],
-          'ireland': ['dublin', 'cork', 'galway', 'limerick'],
-          'uk': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
-          'united kingdom': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
-          // Balkan and Eastern European countries
-          'north macedonia': ['skopje', 'bitola', 'kumanovo', 'prilep', 'ohrid'],
-          'macedonia': ['skopje', 'bitola', 'kumanovo', 'prilep', 'ohrid'],
-          'serbia': ['belgrade', 'novi sad', 'nis', 'kragujevac', 'subotica'],
-          'bosnia': ['sarajevo', 'banja luka', 'mostar', 'tuzla', 'zenica'],
-          'bosnia and herzegovina': ['sarajevo', 'banja luka', 'mostar', 'tuzla', 'zenica'],
-          'montenegro': ['podgorica', 'niksic', 'budva', 'kotor', 'herceg novi'],
-          'albania': ['tirana', 'durres', 'vlora', 'shkoder', 'elbasan'],
-          'kosovo': ['pristina', 'prizren', 'peja', 'gjakova', 'mitrovica'],
-          'moldova': ['chisinau', 'balti', 'tiraspol'],
-          'ukraine': ['kyiv', 'kharkiv', 'odesa', 'lviv', 'dnipro'],
-          'belarus': ['minsk', 'gomel', 'mogilev', 'vitebsk', 'grodno'],
-          'lithuania': ['vilnius', 'kaunas', 'klaipeda', 'siauliai'],
-          'latvia': ['riga', 'daugavpils', 'liepaja', 'jelgava'],
-          'estonia': ['tallinn', 'tartu', 'narva', 'parnu'],
-          'turkey': ['istanbul', 'ankara', 'izmir', 'bursa', 'antalya'],
-          'cyprus': ['nicosia', 'limassol', 'larnaca', 'paphos', 'famagusta'],
-          'malta': ['valletta', 'sliema', 'st julians', 'birkirkara'],
-          'iceland': ['reykjavik', 'kopavogur', 'hafnarfjordur', 'akureyri'],
-          'luxembourg': ['luxembourg', 'esch-sur-alzette', 'differdange'],
-          'switzerland': ['zurich', 'geneva', 'basel', 'bern', 'lausanne'],
-        };
-
-        // Check if origin city matches participant's country
-        const countryKey = Object.keys(cityCountryMap).find(
-          k => participantCountry.includes(k) || k.includes(participantCountry)
-        );
-        const matchingCities = countryKey ? cityCountryMap[countryKey] : [];
-        const originMatchesCountry = matchingCities.some(city => originLocation.includes(city));
-
-        if (countryDoesNotMatch && !originMatchesCountry) {
-          w.push({
-            id: 'country-mismatch',
-            type: 'warning',
-            message: `Your first travel origin (${firstTravelItem.fromLocation}) appears to be different from your registered country (${data.participant.country}). Please verify this is correct.`,
-            dismissible: true,
-          });
-        }
-      }
+    // Check if participant traveled from their registered country (using geocoding API)
+    // Only show warning if validation completed and city doesn't match country
+    if (cityCountryValidation.data && !cityCountryValidation.data.matches && firstTravelItem) {
+      w.push({
+        id: 'country-mismatch',
+        type: 'warning',
+        message: `Your first travel origin (${firstTravelItem.fromLocation}) appears to be different from your registered country (${data.participant.country}). Please verify this is correct.`,
+        dismissible: true,
+      });
     }
 
     // Check for non-EUR currencies without purchase date
@@ -864,7 +812,7 @@ function Step2CheckData({
     }
 
     return w;
-  }, [data, aiWarnings]);
+  }, [data, aiWarnings, cityCountryValidation.data, firstTravelItem]);
 
   // Filter out dismissed warnings
   const visibleWarnings = warnings.filter(w => !dismissedWarnings.has(w.id));

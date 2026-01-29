@@ -449,6 +449,15 @@ export const participantApi = {
     return handleResponse<CurrencyConversionResponse>(res);
   },
 
+  /**
+   * Validate if a city is in a given country using geocoding
+   */
+  validateCityCountry: async (token: string, city: string, country: string) => {
+    const params = new URLSearchParams({ city, country });
+    const res = await fetch(`${API_BASE}/participant/validate-city-country?token=${token}&${params}`);
+    return handleResponse<CityCountryValidationResponse>(res);
+  },
+
   // Document linking
   linkDocumentToTravelItem: async (token: string, travelItemId: string, documentId: string) => {
     const res = await fetch(`${API_BASE}/participant/travel-items/${travelItemId}/link-document?token=${token}`, {
@@ -914,6 +923,13 @@ export interface CurrencyConversionResponse {
   purchaseDate: string;
   year: number;
   month: number;
+}
+
+export interface CityCountryValidationResponse {
+  city: string;
+  expectedCountry: string;
+  detectedCountry: string | null;
+  matches: boolean;
 }
 
 // Declaration of Travel types

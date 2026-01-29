@@ -12,6 +12,7 @@ import { JourneyConsolidationService } from '../../services/ai/journeyConsolidat
 import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
+import { validateCityCountry } from '../../services/geocoding/index.js';
 import disseminationRoutes from './dissemination.js';
 
 // Initialize the consolidation service
@@ -1150,6 +1151,31 @@ router.post('/convert-currency', participantAuth, asyncHandler(async (req: Reque
     purchaseDate: date.toISOString(),
     year: date.getFullYear(),
     month: date.getMonth() + 1,
+  });
+}));
+
+/**
+ * GET /api/participant/validate-city-country
+ * Validate if a city is in a given country using geocoding API
+ */
+router.get('/validate-city-country', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { city, country } = req.query;
+
+  if (!city || typeof city !== 'string') {
+    throw new ValidationError('City is required');
+  }
+
+  if (!country || typeof country !== 'string') {
+    throw new ValidationError('Country is required');
+  }
+
+  const result = await validateCityCountry(city, country);
+
+  res.json({
+    city,
+    expectedCountry: country,
+    detectedCountry: result.detectedCountry,
+    matches: result.matches,
   });
 }));
 
