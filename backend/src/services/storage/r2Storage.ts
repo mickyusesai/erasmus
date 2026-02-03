@@ -19,6 +19,7 @@ import { StorageService, StorageFile, StoredFile } from './types.js';
  * - R2_ACCESS_KEY_ID: R2 access key ID
  * - R2_SECRET_ACCESS_KEY: R2 secret access key
  * - R2_BUCKET_NAME: R2 bucket name
+ * - R2_JURISDICTION: (optional) "eu" for EU buckets, empty for default
  * - R2_PUBLIC_URL: (optional) Custom domain or public bucket URL for public files
  */
 export class R2StorageService implements StorageService {
@@ -32,12 +33,14 @@ export class R2StorageService implements StorageService {
     accessKeyId?: string;
     secretAccessKey?: string;
     bucketName?: string;
+    jurisdiction?: string;
     publicUrl?: string;
     signedUrlExpiresIn?: number;
   }) {
     const accountId = options?.accountId || process.env.R2_ACCOUNT_ID;
     const accessKeyId = options?.accessKeyId || process.env.R2_ACCESS_KEY_ID;
     const secretAccessKey = options?.secretAccessKey || process.env.R2_SECRET_ACCESS_KEY;
+    const jurisdiction = options?.jurisdiction || process.env.R2_JURISDICTION;
     this.bucketName = options?.bucketName || process.env.R2_BUCKET_NAME || '';
     this.publicUrl = options?.publicUrl || process.env.R2_PUBLIC_URL;
     this.signedUrlExpiresIn = options?.signedUrlExpiresIn || 3600; // 1 hour default
@@ -48,9 +51,13 @@ export class R2StorageService implements StorageService {
       );
     }
 
+    // Build endpoint URL - EU jurisdiction requires different subdomain
+    const jurisdictionPrefix = jurisdiction ? `${jurisdiction}.` : '';
+    const endpoint = `https://${accountId}.${jurisdictionPrefix}r2.cloudflarestorage.com`;
+
     this.client = new S3Client({
       region: 'auto',
-      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+      endpoint,
       credentials: {
         accessKeyId,
         secretAccessKey,
