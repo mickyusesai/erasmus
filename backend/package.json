@@ -21,7 +21,7 @@
     "@anthropic-ai/sdk": "^0.71.2",
     "@aws-sdk/client-s3": "^3.981.0",
     "@aws-sdk/s3-request-presigner": "^3.981.0",
-    "@prisma/client": "^7.3.0",
+    "@prisma/client": "^6.19.2",
     "@types/pdfkit": "^0.17.4",
     "archiver": "^6.0.1",
     "cors": "^2.8.5",
@@ -43,7 +43,7 @@
     "@types/multer": "^1.4.11",
     "@types/node": "^20.11.16",
     "@types/uuid": "^9.0.8",
-    "prisma": "^7.3.0",
+    "prisma": "^6.19.2",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "vitest": "^1.2.2"
