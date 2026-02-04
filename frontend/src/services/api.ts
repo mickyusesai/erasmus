@@ -759,6 +759,7 @@ export interface TravelItem {
   id: string;
   participantId: string;
   documentId?: string;
+  additionalDocumentIds?: string;  // JSON array of additional document IDs
   modeOfTransport: TransportMode;
   fromLocation: string;
   toLocation: string;
@@ -787,6 +788,8 @@ export interface TravelItem {
   validationWarnings?: string;
   // User confirmation
   checked?: boolean;
+  // Exclusion from reimbursement
+  excludedFromReimbursement?: boolean;
 }
 
 export type TransportMode = 'PLANE' | 'TRAIN' | 'BUS' | 'CAR' | 'FERRY' | 'OTHER';

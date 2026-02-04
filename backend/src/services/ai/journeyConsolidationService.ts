@@ -452,9 +452,9 @@ WARNING RULES - BE VERY SELECTIVE:
 - Travel dates BEFORE project start and AFTER project end are COMPLETELY NORMAL - participants travel TO the event and BACK home
 - Do NOT warn about travel being before/after the project period unless it's MORE THAN 30 DAYS outside
 - Do NOT generate explanatory warnings like "appears to be returning home" - just process the data silently
+- Do NOT warn about round-trip bookings needing boarding passes (the UI shows this already)
 - ONLY generate warnings for ACTUAL PROBLEMS that need participant action:
   * Name on ticket doesn't match participant name
-  * Round-trip booking requires 2 boarding passes
   * Multi-passenger booking needs portion specified
   * Amount is 0 or missing
   * Location couldn't be determined (shows as Unknown)
@@ -474,7 +474,7 @@ ROUND-TRIP HANDLING:
 - Create ONE travel item with the TOTAL price (do NOT split into two items)
 - Set isRoundTrip to true on the travel item
 - The fromLocation/toLocation should be the OUTBOUND journey (home country to project country)
-- Add a warning like "Round-trip booking - requires 2 boarding passes for confirmation (outbound and return)"
+- Do NOT add a warning for round-trips (the UI already shows this information on the travel item)
 - Keep priceAllocation at 1.0 (full price)
 
 MULTI-PASSENGER HANDLING:
@@ -575,25 +575,33 @@ Respond with ONLY a JSON object:
           createdItems.push(existingMatch.item);
           continue;
         }
-        // Find a valid document to link - only use IDs that actually exist
+        // Find valid documents to link - only use IDs that actually exist
         const linkedDocs = (item.linkedDocumentIds || []) as string[];
-        const validLinkedDoc = linkedDocs.find((docId: string) => validDocumentIds.has(docId));
+        const validLinkedDocs: string[] = [];
 
-        // If no valid linked doc found, try to match by document index reference
-        let primaryDocId: string | null = validLinkedDoc || null;
-
-        // If AI returned something like "doc-1" or index numbers, try to match
-        if (!primaryDocId && linkedDocs.length > 0) {
-          const docRef = linkedDocs[0];
-          // Check if it's a numeric reference like "1" or "doc-1"
-          const match = docRef.match(/(\d+)/);
-          if (match) {
-            const index = parseInt(match[1], 10) - 1; // AI uses 1-based indexing
-            if (index >= 0 && index < participant.documents.length) {
-              primaryDocId = participant.documents[index].id;
+        // Process all linked document references
+        for (const docRef of linkedDocs) {
+          if (validDocumentIds.has(docRef)) {
+            // It's a valid UUID directly
+            validLinkedDocs.push(docRef);
+          } else {
+            // Check if it's a numeric reference like "1" or "doc-1"
+            const match = docRef.match(/(\d+)/);
+            if (match) {
+              const index = parseInt(match[1], 10) - 1; // AI uses 1-based indexing
+              if (index >= 0 && index < participant.documents.length) {
+                const resolvedId = participant.documents[index].id;
+                if (!validLinkedDocs.includes(resolvedId)) {
+                  validLinkedDocs.push(resolvedId);
+                }
+              }
             }
           }
         }
+
+        // First valid doc is primary, rest are additional
+        const primaryDocId: string | null = validLinkedDocs.length > 0 ? validLinkedDocs[0] : null;
+        const additionalDocIds = validLinkedDocs.slice(1);
 
         // Get currency - ALWAYS prefer document extraction's currency as source of truth
         // The AI consolidation may incorrectly default to EUR
@@ -626,6 +634,7 @@ Respond with ONLY a JSON object:
           data: {
             participantId,
             documentId: primaryDocId, // Will be null if no valid document found
+            additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
             modeOfTransport: this.mapTransportMode(item.modeOfTransport),
             fromLocation: item.fromLocation || 'Unknown',
             toLocation: item.toLocation || 'Unknown',

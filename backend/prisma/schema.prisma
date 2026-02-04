@@ -175,6 +175,7 @@ model TravelItem {
   participant           Participant           @relation(fields: [participantId], references: [id], onDelete: Cascade)
   documentId            String?
   document              Document?             @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  additionalDocumentIds String?               // JSON array of additional document IDs linked to this travel item
   modeOfTransport       TransportMode
   fromLocation          String
   toLocation            String
@@ -208,6 +209,9 @@ model TravelItem {
   // Validation flags
   routeMatchesCountry   Boolean?              // Whether from/to matches participant's country
   validationWarnings    String?               // JSON array of warning messages
+
+  // Exclusion from reimbursement
+  excludedFromReimbursement Boolean           @default(false)  // User marked this item to be excluded from reimbursement (e.g., personal trip)
 
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt

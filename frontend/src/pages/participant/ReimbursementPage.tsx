@@ -541,6 +541,17 @@ function Step1Upload({
 
   const isGreenTravel = data.greenTravel || false;
 
+  // Handler to view document using signed URL
+  const handleViewDocument = async (docId: string) => {
+    try {
+      const result = await participantApi.getDocumentUrl(token, docId);
+      window.open(result.url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      console.error('Failed to get document URL:', error);
+      toast.error('Failed to open document');
+    }
+  };
+
   return (
     <>
       {/* Show loading screen with Erasmus quotes during consolidation */}
@@ -551,11 +562,16 @@ function Step1Upload({
           <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
         <p className="text-gray-500 mt-1">
           {isGreenTravel ? (
-            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). We'll automatically extract the information.</>
+            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel) in one go. We'll automatically extract the information and understand your complete journey better.</>
           ) : (
-            'Upload all your travel tickets, invoices, and boarding passes. We\'ll automatically extract the information.'
+            'Upload all your travel tickets, invoices, and boarding passes in one go. We\'ll automatically extract the information and understand your complete journey better.'
           )}
         </p>
+        <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-sm text-blue-700">
+            <strong>Tip:</strong> For best results, upload all your documents at once. This helps our AI understand your complete journey and link related documents (like booking confirmations and boarding passes) together.
+          </p>
+        </div>
         {isGreenTravel && (
           <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
             <p className="text-sm text-emerald-700">
@@ -628,15 +644,13 @@ function Step1Upload({
                       </div>
                     )}
                     <div className="flex gap-3 mt-3">
-                      <a
-                        href={`/api/uploads/${doc.storedFilePath}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        onClick={() => handleViewDocument(doc.id)}
                         className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
                       >
                         <ExternalLink className="w-3 h-3" />
                         View
-                      </a>
+                      </button>
                       <button
                         onClick={() => deleteMutation.mutate(doc.id)}
                         className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
@@ -672,7 +686,7 @@ function Step1Upload({
 // Warning type for the persistent warnings system
 interface PersistentWarning {
   id: string;
-  type: 'error' | 'warning' | 'info' | 'notification';
+  type: 'error' | 'warning' | 'info' | 'notification' | 'success';
   message: string;
   dismissible: boolean;
 }
@@ -764,15 +778,29 @@ function Step2CheckData({
   const warnings = useMemo((): PersistentWarning[] => {
     const w: PersistentWarning[] = [];
 
-    // Add AI consolidation warnings as notifications (friendlier style)
-    aiWarnings.forEach((warning, index) => {
+    // Add confirmation guidance notification if there are unconfirmed items
+    const unconfirmedCount = data.travelItems.filter(item => !item.checked).length;
+    if (data.travelItems.length > 0 && unconfirmedCount > 0) {
       w.push({
-        id: `ai-warning-${index}`,
-        type: 'notification',
-        message: warning,
+        id: 'confirmation-guidance',
+        type: 'success',
+        message: `Please review each travel item below and click "Confirm" when the information is correct. (${data.travelItems.length - unconfirmedCount}/${data.travelItems.length} confirmed)`,
         dismissible: true,
       });
-    });
+    }
+
+    // Add AI consolidation warnings as notifications (friendlier style)
+    // Filter out round-trip warnings as they're shown at the travel item level
+    aiWarnings
+      .filter(warning => !warning.toLowerCase().includes('round-trip') && !warning.toLowerCase().includes('round trip'))
+      .forEach((warning, index) => {
+        w.push({
+          id: `ai-warning-${index}`,
+          type: 'notification',
+          message: warning,
+          dismissible: true,
+        });
+      });
 
     // Check for missing boarding passes for flights
     const hasFlights = data.travelItems.some(t => t.modeOfTransport === 'PLANE');
@@ -866,8 +894,10 @@ function Step2CheckData({
       {visibleWarnings.length > 0 && (
         <div className="space-y-3">
           {visibleWarnings.map((warning) => {
-            // Use Info icon for notifications, AlertTriangle for warnings/errors
-            const IconComponent = warning.type === 'notification' ? Info : AlertTriangle;
+            // Use different icons based on type
+            const IconComponent = warning.type === 'success' ? CheckCircle
+              : warning.type === 'notification' ? Info
+              : AlertTriangle;
 
             return (
               <div
@@ -877,7 +907,8 @@ function Step2CheckData({
                   warning.type === 'error' && 'bg-red-50 border-red-200',
                   warning.type === 'warning' && 'bg-amber-50 border-amber-200',
                   warning.type === 'info' && 'bg-blue-50 border-blue-200',
-                  warning.type === 'notification' && 'bg-indigo-50 border-indigo-200'
+                  warning.type === 'notification' && 'bg-indigo-50 border-indigo-200',
+                  warning.type === 'success' && 'bg-emerald-50 border-emerald-200'
                 )}
               >
                 <IconComponent
@@ -886,7 +917,8 @@ function Step2CheckData({
                     warning.type === 'error' && 'text-red-500',
                     warning.type === 'warning' && 'text-amber-500',
                     warning.type === 'info' && 'text-blue-500',
-                    warning.type === 'notification' && 'text-indigo-500'
+                    warning.type === 'notification' && 'text-indigo-500',
+                    warning.type === 'success' && 'text-emerald-500'
                   )}
                 />
                 <div className="flex-1">
@@ -896,7 +928,8 @@ function Step2CheckData({
                       warning.type === 'error' && 'text-red-800',
                       warning.type === 'warning' && 'text-amber-800',
                       warning.type === 'info' && 'text-blue-800',
-                      warning.type === 'notification' && 'text-indigo-800'
+                      warning.type === 'notification' && 'text-indigo-800',
+                      warning.type === 'success' && 'text-emerald-800'
                     )}
                   >
                     {warning.message}
@@ -910,7 +943,8 @@ function Step2CheckData({
                       warning.type === 'error' && 'text-red-400 hover:text-red-600',
                       warning.type === 'warning' && 'text-amber-400 hover:text-amber-600',
                       warning.type === 'info' && 'text-blue-400 hover:text-blue-600',
-                      warning.type === 'notification' && 'text-indigo-400 hover:text-indigo-600'
+                      warning.type === 'notification' && 'text-indigo-400 hover:text-indigo-600',
+                      warning.type === 'success' && 'text-emerald-400 hover:text-emerald-600'
                     )}
                     title="Dismiss"
                   >
@@ -1038,13 +1072,27 @@ function Step2CheckData({
             {/* Itemized List */}
             <div className="space-y-2 mb-4">
               {data.travelItems.map((item) => (
-                <div key={item.id} className="flex justify-between text-sm">
-                  <span className="text-gray-600">
+                <div
+                  key={item.id}
+                  className={clsx(
+                    'flex justify-between text-sm',
+                    item.excludedFromReimbursement && 'opacity-50'
+                  )}
+                >
+                  <span className={clsx(
+                    item.excludedFromReimbursement ? 'text-gray-400 line-through' : 'text-gray-600'
+                  )}>
                     {item.fromLocation} → {item.toLocation}
                     <span className="text-gray-400 ml-2">({item.modeOfTransport.toLowerCase()})</span>
                     {item.comment && <span className="text-gray-400 ml-1">*</span>}
+                    {item.excludedFromReimbursement && <span className="ml-2 text-amber-600 no-underline">(excluded)</span>}
                   </span>
-                  <span className="text-gray-900 font-medium">{formatCurrency(item.amountEur)}</span>
+                  <span className={clsx(
+                    'font-medium',
+                    item.excludedFromReimbursement ? 'text-gray-400 line-through' : 'text-gray-900'
+                  )}>
+                    {formatCurrency(item.amountEur)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -1052,32 +1100,47 @@ function Step2CheckData({
             {/* Divider */}
             <div className="border-t border-gray-300 my-4" />
 
-            {/* Total with max reimbursement inline */}
-            <div className="flex items-baseline justify-between">
-              <div className="flex items-baseline gap-3">
-                <div>
-                  <p className="text-sm text-gray-500">Total Travel Costs</p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {formatCurrency(data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0))}
-                  </p>
-                </div>
-                {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
-                  <span className="text-sm text-blue-600 font-medium">
-                    (max: {formatCurrency(data.maxReimbursementForCountry)})
-                  </span>
-                )}
-              </div>
-              {/* Show actual amount to receive if over limit */}
-              {data.maxReimbursementForCountry &&
-               (data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0)) > data.maxReimbursementForCountry && (
-                <div className="text-right">
-                  <p className="text-xs text-gray-500">You will receive</p>
-                  <p className="text-lg font-bold text-emerald-600">
-                    {formatCurrency(data.maxReimbursementForCountry)}
-                  </p>
-                </div>
-              )}
-            </div>
+            {/* Total with max reimbursement inline - excluding items marked for exclusion */}
+            {(() => {
+              const includedItems = data.travelItems.filter(item => !item.excludedFromReimbursement);
+              const excludedItems = data.travelItems.filter(item => item.excludedFromReimbursement);
+              const totalIncluded = includedItems.reduce((sum, item) => sum + item.amountEur, 0);
+              const totalExcluded = excludedItems.reduce((sum, item) => sum + item.amountEur, 0);
+
+              return (
+                <>
+                  <div className="flex items-baseline justify-between">
+                    <div className="flex items-baseline gap-3">
+                      <div>
+                        <p className="text-sm text-gray-500">Total Travel Costs</p>
+                        <p className="text-2xl font-bold text-gray-900">
+                          {formatCurrency(totalIncluded)}
+                        </p>
+                      </div>
+                      {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
+                        <span className="text-sm text-blue-600 font-medium">
+                          (max: {formatCurrency(data.maxReimbursementForCountry)})
+                        </span>
+                      )}
+                    </div>
+                    {/* Show actual amount to receive if over limit */}
+                    {data.maxReimbursementForCountry && totalIncluded > data.maxReimbursementForCountry && (
+                      <div className="text-right">
+                        <p className="text-xs text-gray-500">You will receive</p>
+                        <p className="text-lg font-bold text-emerald-600">
+                          {formatCurrency(data.maxReimbursementForCountry)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  {excludedItems.length > 0 && (
+                    <p className="text-xs text-amber-600 mt-2">
+                      {excludedItems.length} item(s) excluded from reimbursement ({formatCurrency(totalExcluded)})
+                    </p>
+                  )}
+                </>
+              );
+            })()}
             <p className="text-xs text-gray-400 mt-3">
               Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
             </p>
@@ -1136,6 +1199,7 @@ function Step2CheckData({
       {/* Document View Modal */}
       <DocumentViewModal
         document={viewingDocument}
+        token={token}
         onClose={() => setViewingDocument(null)}
       />
 
@@ -1345,6 +1409,25 @@ function TravelItemCard({
   const hasDeclaration = declarationsOfTravel.some(dec => dec.travelItemId === item.id);
   const linkedDocument = documents.find(d => d.id === item.documentId);
   const isNonEurCurrency = item.currencyOriginal !== 'EUR';
+
+  // Get additional linked documents
+  const additionalDocuments = useMemo(() => {
+    if (!item.additionalDocumentIds) return [];
+    try {
+      const ids = JSON.parse(item.additionalDocumentIds) as string[];
+      return documents.filter(d => ids.includes(d.id));
+    } catch {
+      return [];
+    }
+  }, [item.additionalDocumentIds, documents]);
+
+  // All linked documents (primary + additional)
+  const allLinkedDocuments = useMemo(() => {
+    const docs: Document[] = [];
+    if (linkedDocument) docs.push(linkedDocument);
+    docs.push(...additionalDocuments);
+    return docs;
+  }, [linkedDocument, additionalDocuments]);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
 
@@ -1353,6 +1436,9 @@ function TravelItemCard({
   const [localTo, setLocalTo] = useState(item.toLocation);
   const [localFlightNumber, setLocalFlightNumber] = useState(item.flightNumber || '');
   const [localBookingRef, setLocalBookingRef] = useState(item.bookingReference || '');
+  const [localAmount, setLocalAmount] = useState(String(item.amountOriginal || ''));
+  const [localDistanceKm, setLocalDistanceKm] = useState(String(item.distanceKm || ''));
+  const [localParticipantPortion, setLocalParticipantPortion] = useState(String(item.participantPortion || ''));
 
   // Sync local state when item changes from external source
   useEffect(() => {
@@ -1360,6 +1446,9 @@ function TravelItemCard({
     setLocalTo(item.toLocation);
     setLocalFlightNumber(item.flightNumber || '');
     setLocalBookingRef(item.bookingReference || '');
+    setLocalAmount(String(item.amountOriginal || ''));
+    setLocalDistanceKm(String(item.distanceKm || ''));
+    setLocalParticipantPortion(String(item.participantPortion || ''));
   }, [item.id]); // Only sync when switching to a different item
 
   // Helper to check if a value needs attention (unknown or empty)
@@ -1414,21 +1503,10 @@ function TravelItemCard({
 
   return (
     <div className={clsx(
-      'p-6 bg-gray-50 rounded-2xl relative',
-      item.checked && 'border-l-4 border-l-emerald-500'
+      'bg-gray-50 rounded-2xl relative overflow-hidden',
+      item.checked && 'ring-2 ring-emerald-500'
     )}>
-      {/* Checkbox for confirming travel item */}
-      <div className="absolute top-4 right-14">
-        <label className="flex items-center gap-2 cursor-pointer" title={item.checked ? 'Uncheck to unlock this travel item' : 'Check to confirm this travel item'}>
-          <input
-            type="checkbox"
-            checked={item.checked || false}
-            onChange={onToggleChecked}
-            className="w-5 h-5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-          />
-          <span className="text-xs text-gray-500">{item.checked ? 'Confirmed' : 'Confirm'}</span>
-        </label>
-      </div>
+      <div className="p-6">
       {/* Boarding Pass / Declaration Status Bar for Flights */}
       {isPlane && (
         <div className={clsx(
@@ -1499,8 +1577,14 @@ function TravelItemCard({
                   step="0.01"
                   min="0"
                   max={item.amountOriginal}
-                  value={item.participantPortion || ''}
-                  onChange={(e) => onUpdate({ participantPortion: parseFloat(e.target.value) || 0 })}
+                  value={localParticipantPortion}
+                  onChange={(e) => setLocalParticipantPortion(e.target.value)}
+                  onBlur={() => {
+                    const parsed = parseFloat(localParticipantPortion);
+                    if (!isNaN(parsed) && parsed !== item.participantPortion) {
+                      onUpdate({ participantPortion: parsed });
+                    }
+                  }}
                   className="w-28"
                   placeholder={`Max: ${item.amountOriginal}`}
                 />
@@ -1561,21 +1645,31 @@ function TravelItemCard({
         </button>
       </div>
 
-      {/* Linked Document */}
-      {linkedDocument && (
-        <div className="mb-4 p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3">
-          <FileText className="w-4 h-4 text-gray-400" />
-          <span className="text-sm text-gray-600 flex-1 truncate">{linkedDocument.renamedFilename}</span>
-          <button
-            onClick={() => onViewDocument(linkedDocument)}
-            className="text-xs text-primary-600 hover:text-primary-700 font-medium"
-          >
-            View
-          </button>
+      {/* Linked Documents */}
+      {allLinkedDocuments.length > 0 ? (
+        <div className="mb-4 space-y-2">
+          {allLinkedDocuments.map((doc, index) => (
+            <div
+              key={doc.id}
+              className="p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3"
+            >
+              <FileText className="w-4 h-4 text-gray-400" />
+              <div className="flex-1 min-w-0">
+                <span className="text-sm text-gray-600 truncate block">{doc.renamedFilename}</span>
+                {index > 0 && (
+                  <span className="text-xs text-gray-400">Additional document</span>
+                )}
+              </div>
+              <button
+                onClick={() => onViewDocument(doc)}
+                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+              >
+                View
+              </button>
+            </div>
+          ))}
         </div>
-      )}
-
-      {!linkedDocument && (
+      ) : (
         <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200 flex items-center gap-3">
           <AlertTriangle className="w-4 h-4 text-amber-500" />
           <span className="text-sm text-amber-700">No document linked to this travel item</span>
@@ -1614,8 +1708,14 @@ function TravelItemCard({
           label={<span className="flex items-center gap-1">Amount {amountNeedsAttention && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
           type="number"
           step="0.01"
-          value={item.amountOriginal}
-          onChange={(e) => onUpdate({ amountOriginal: parseFloat(e.target.value) })}
+          value={localAmount}
+          onChange={(e) => setLocalAmount(e.target.value)}
+          onBlur={() => {
+            const parsed = parseFloat(localAmount);
+            if (!isNaN(parsed) && parsed !== item.amountOriginal) {
+              onUpdate({ amountOriginal: parsed });
+            }
+          }}
           className={amountNeedsAttention ? attentionInputClass : ''}
         />
         <Select
@@ -1688,8 +1788,14 @@ function TravelItemCard({
                 type="number"
                 step="1"
                 min="0"
-                value={item.distanceKm || ''}
-                onChange={(e) => onUpdate({ distanceKm: parseFloat(e.target.value) || 0 })}
+                value={localDistanceKm}
+                onChange={(e) => setLocalDistanceKm(e.target.value)}
+                onBlur={() => {
+                  const parsed = parseFloat(localDistanceKm);
+                  if (!isNaN(parsed) && parsed !== item.distanceKm) {
+                    onUpdate({ distanceKm: parsed });
+                  }
+                }}
                 placeholder="e.g., 350"
               />
               <p className="text-xs text-gray-500 mt-1">
@@ -1712,6 +1818,89 @@ function TravelItemCard({
             </div>
           </>
         )}
+      </div>
+
+      {/* Exclude from Reimbursement Option */}
+      <div className="mt-6 pt-4 border-t border-gray-200">
+        <div className={clsx(
+          'p-3 rounded-lg border transition-colors',
+          item.excludedFromReimbursement
+            ? 'bg-amber-50 border-amber-200'
+            : 'bg-white border-gray-200'
+        )}>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={item.excludedFromReimbursement || false}
+              onChange={(e) => onUpdate({ excludedFromReimbursement: e.target.checked })}
+              className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+            />
+            <div className="flex-1">
+              <span className={clsx(
+                'text-sm font-medium',
+                item.excludedFromReimbursement ? 'text-amber-800' : 'text-gray-700'
+              )}>
+                Exclude from reimbursement
+              </span>
+            </div>
+            <div className="relative group">
+              <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 cursor-help" />
+              <div className="absolute right-0 bottom-full mb-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 shadow-lg">
+                <p className="font-medium mb-1">When to exclude a travel item:</p>
+                <ul className="list-disc list-inside space-y-1 text-gray-300">
+                  <li>The trip was to a different destination than your home or project location</li>
+                  <li>You took an extra trip to visit a city or for personal reasons</li>
+                  <li>The travel was not directly related to the project</li>
+                </ul>
+                <p className="mt-2 text-gray-400">Only direct travel to and from the project location is eligible for reimbursement.</p>
+                <div className="absolute bottom-0 right-4 transform translate-y-1/2 rotate-45 w-2 h-2 bg-gray-900" />
+              </div>
+            </div>
+          </label>
+          {item.excludedFromReimbursement && (
+            <p className="mt-2 ml-6 text-xs text-amber-600">
+              This item will not be included in your reimbursement total
+            </p>
+          )}
+        </div>
+      </div>
+      </div>
+
+      {/* Confirmation Bottom Bar */}
+      <div className={clsx(
+        'px-6 py-4 flex items-center justify-between border-t transition-colors',
+        item.checked
+          ? 'bg-emerald-50 border-emerald-200'
+          : 'bg-white border-gray-200'
+      )}>
+        <div className="flex items-center gap-3">
+          {item.checked ? (
+            <>
+              <CheckCircle className="w-5 h-5 text-emerald-600" />
+              <span className="text-sm font-medium text-emerald-700">
+                This travel item is confirmed
+              </span>
+            </>
+          ) : (
+            <>
+              <AlertCircle className="w-5 h-5 text-amber-500" />
+              <span className="text-sm text-gray-600">
+                Please verify the information above is correct
+              </span>
+            </>
+          )}
+        </div>
+        <button
+          onClick={onToggleChecked}
+          className={clsx(
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            item.checked
+              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+              : 'bg-emerald-600 text-white hover:bg-emerald-700'
+          )}
+        >
+          {item.checked ? 'Edit' : 'Confirm'}
+        </button>
       </div>
     </div>
   );
@@ -2353,49 +2542,105 @@ function Step3Confirm({
 // Document View Modal - shows document in a popup
 function DocumentViewModal({
   document,
+  token,
   onClose,
 }: {
   document: Document | null;
+  token: string;
   onClose: () => void;
 }) {
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch signed URL when document changes
+  useEffect(() => {
+    if (!document) {
+      setFileUrl(null);
+      setError(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    participantApi.getDocumentUrl(token, document.id)
+      .then((result) => {
+        setFileUrl(result.url);
+      })
+      .catch((err) => {
+        console.error('Failed to get document URL:', err);
+        setError('Failed to load document. Please try again.');
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
+  }, [document?.id, token]);
+
   if (!document) return null;
 
   const isImage = document.mimeType.startsWith('image/');
   const isPdf = document.mimeType === 'application/pdf';
-  const fileUrl = `/api/uploads/${document.storedFilePath}`;
 
   return (
     <Modal isOpen={!!document} onClose={onClose} title={document.renamedFilename}>
       <div className="max-h-[70vh] overflow-auto">
-        {isImage && (
-          <img
-            src={fileUrl}
-            alt={document.renamedFilename}
-            className="w-full h-auto rounded-lg"
-          />
-        )}
-        {isPdf && (
-          <iframe
-            src={fileUrl}
-            title={document.renamedFilename}
-            className="w-full h-[60vh] rounded-lg border border-gray-200"
-          />
-        )}
-        {!isImage && !isPdf && (
-          <div className="text-center py-8">
-            <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-600">This file type cannot be previewed.</p>
-            <a
-              href={fileUrl}
-              download={document.originalFilename}
-              className="text-primary-600 hover:text-primary-700 mt-2 inline-block"
-            >
-              Download File
-            </a>
+        {isLoading && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 text-primary-600 animate-spin" />
+            <span className="ml-3 text-gray-600">Loading document...</span>
           </div>
         )}
+        {error && (
+          <div className="text-center py-8">
+            <AlertCircle className="w-16 h-16 text-red-300 mx-auto mb-4" />
+            <p className="text-red-600">{error}</p>
+          </div>
+        )}
+        {!isLoading && !error && fileUrl && (
+          <>
+            {isImage && (
+              <img
+                src={fileUrl}
+                alt={document.renamedFilename}
+                className="w-full h-auto rounded-lg"
+              />
+            )}
+            {isPdf && (
+              <iframe
+                src={fileUrl}
+                title={document.renamedFilename}
+                className="w-full h-[60vh] rounded-lg border border-gray-200"
+              />
+            )}
+            {!isImage && !isPdf && (
+              <div className="text-center py-8">
+                <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-600">This file type cannot be previewed.</p>
+                <a
+                  href={fileUrl}
+                  download={document.originalFilename}
+                  className="text-primary-600 hover:text-primary-700 mt-2 inline-block"
+                >
+                  Download File
+                </a>
+              </div>
+            )}
+          </>
+        )}
       </div>
-      <div className="mt-4 flex justify-end">
+      <div className="mt-4 flex justify-end gap-2">
+        {isPdf && fileUrl && (
+          <a
+            href={fileUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+          >
+            <ExternalLink className="w-4 h-4 mr-2" />
+            Open in New Tab
+          </a>
+        )}
         <Button variant="secondary" onClick={onClose}>
           Close
         </Button>
