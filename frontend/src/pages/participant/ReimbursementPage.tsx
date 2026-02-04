@@ -562,16 +562,11 @@ function Step1Upload({
           <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
         <p className="text-gray-500 mt-1">
           {isGreenTravel ? (
-            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel) in one go. We'll automatically extract the information and understand your complete journey better.</>
+            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). For best results, upload everything at once so our AI can understand your complete journey and link related documents together.</>
           ) : (
-            'Upload all your travel tickets, invoices, and boarding passes in one go. We\'ll automatically extract the information and understand your complete journey better.'
+            'Upload all your travel tickets, invoices, and boarding passes. For best results, upload everything at once so our AI can understand your complete journey and link related documents together.'
           )}
         </p>
-        <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <p className="text-sm text-blue-700">
-            <strong>Tip:</strong> For best results, upload all your documents at once. This helps our AI understand your complete journey and link related documents (like booking confirmations and boarding passes) together.
-          </p>
-        </div>
         {isGreenTravel && (
           <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
             <p className="text-sm text-emerald-700">
@@ -715,7 +710,22 @@ function Step2CheckData({
 
   // Calculate unlinked documents (uploaded but not connected to any travel item)
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
-  const linkedDocIds = new Set(data.travelItems.map(t => t.documentId).filter(Boolean));
+  // Include both primary documentId and additionalDocumentIds in the linked set
+  const linkedDocIds = useMemo(() => {
+    const ids = new Set<string>();
+    data.travelItems.forEach(t => {
+      if (t.documentId) ids.add(t.documentId);
+      if (t.additionalDocumentIds) {
+        try {
+          const additionalIds = JSON.parse(t.additionalDocumentIds) as string[];
+          additionalIds.forEach(id => ids.add(id));
+        } catch {
+          // Ignore invalid JSON
+        }
+      }
+    });
+    return ids;
+  }, [data.travelItems]);
   const unlinkedDocs = data.documents.filter(d =>
     !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
   );
@@ -754,7 +764,33 @@ function Step2CheckData({
   const updateMutation = useMutation({
     mutationFn: ({ id, updates }: { id: string; updates: Partial<TravelItem> }) =>
       participantApi.updateTravelItem(token, id, updates),
-    onSuccess: () => {
+    // Optimistic update for instant UI feedback
+    onMutate: async ({ id, updates }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
+      // Snapshot the previous value
+      const previousData = queryClient.getQueryData(['participant-auth']);
+      // Optimistically update the cache
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.map((item: TravelItem) =>
+            item.id === id ? { ...item, ...updates } : item
+          ),
+        };
+      });
+      return { previousData };
+    },
+    onError: (_err, _variables, context) => {
+      // Revert to previous data on error
+      if (context?.previousData) {
+        queryClient.setQueryData(['participant-auth'], context.previousData);
+      }
+      toast.error('Failed to update travel item');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure consistency
       queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
     },
   });
@@ -769,7 +805,33 @@ function Step2CheckData({
 
   const toggleCheckedMutation = useMutation({
     mutationFn: (id: string) => participantApi.toggleTravelItemChecked(token, id),
-    onSuccess: () => {
+    // Optimistic update for instant UI feedback
+    onMutate: async (id) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
+      // Snapshot the previous value
+      const previousData = queryClient.getQueryData(['participant-auth']);
+      // Optimistically toggle the checked state
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.map((item: TravelItem) =>
+            item.id === id ? { ...item, checked: !item.checked } : item
+          ),
+        };
+      });
+      return { previousData };
+    },
+    onError: (_err, _id, context) => {
+      // Revert to previous data on error
+      if (context?.previousData) {
+        queryClient.setQueryData(['participant-auth'], context.previousData);
+      }
+      toast.error('Failed to update confirmation status');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure consistency
       queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
     },
   });
@@ -999,6 +1061,13 @@ function Step2CheckData({
           </div>
         </CardHeader>
         <CardContent>
+          {/* Eligibility guidance */}
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-sm text-blue-800">
+              <strong>Important:</strong> Please only add travel items that are eligible for Erasmus+ reimbursement. This includes travel from your home country to the project location and back, within the approved project and travel dates. Do not add trips to other destinations, extra days, or personal travel. If a travel item is not eligible for reimbursement, it should not be added here.
+            </p>
+          </div>
+
           {data.travelItems.length > 0 ? (
             <div className="space-y-6">
               {data.travelItems.map((item) => (
@@ -1074,23 +1143,14 @@ function Step2CheckData({
               {data.travelItems.map((item) => (
                 <div
                   key={item.id}
-                  className={clsx(
-                    'flex justify-between text-sm',
-                    item.excludedFromReimbursement && 'opacity-50'
-                  )}
+                  className="flex justify-between text-sm"
                 >
-                  <span className={clsx(
-                    item.excludedFromReimbursement ? 'text-gray-400 line-through' : 'text-gray-600'
-                  )}>
+                  <span className="text-gray-600">
                     {item.fromLocation} → {item.toLocation}
                     <span className="text-gray-400 ml-2">({item.modeOfTransport.toLowerCase()})</span>
                     {item.comment && <span className="text-gray-400 ml-1">*</span>}
-                    {item.excludedFromReimbursement && <span className="ml-2 text-amber-600 no-underline">(excluded)</span>}
                   </span>
-                  <span className={clsx(
-                    'font-medium',
-                    item.excludedFromReimbursement ? 'text-gray-400 line-through' : 'text-gray-900'
-                  )}>
+                  <span className="font-medium text-gray-900">
                     {formatCurrency(item.amountEur)}
                   </span>
                 </div>
@@ -1100,45 +1160,35 @@ function Step2CheckData({
             {/* Divider */}
             <div className="border-t border-gray-300 my-4" />
 
-            {/* Total with max reimbursement inline - excluding items marked for exclusion */}
+            {/* Total with max reimbursement inline */}
             {(() => {
-              const includedItems = data.travelItems.filter(item => !item.excludedFromReimbursement);
-              const excludedItems = data.travelItems.filter(item => item.excludedFromReimbursement);
-              const totalIncluded = includedItems.reduce((sum, item) => sum + item.amountEur, 0);
-              const totalExcluded = excludedItems.reduce((sum, item) => sum + item.amountEur, 0);
+              const total = data.travelItems.reduce((sum, item) => sum + item.amountEur, 0);
 
               return (
-                <>
-                  <div className="flex items-baseline justify-between">
-                    <div className="flex items-baseline gap-3">
-                      <div>
-                        <p className="text-sm text-gray-500">Total Travel Costs</p>
-                        <p className="text-2xl font-bold text-gray-900">
-                          {formatCurrency(totalIncluded)}
-                        </p>
-                      </div>
-                      {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
-                        <span className="text-sm text-blue-600 font-medium">
-                          (max: {formatCurrency(data.maxReimbursementForCountry)})
-                        </span>
-                      )}
+                <div className="flex items-baseline justify-between">
+                  <div className="flex items-baseline gap-3">
+                    <div>
+                      <p className="text-sm text-gray-500">Total Travel Costs</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {formatCurrency(total)}
+                      </p>
                     </div>
-                    {/* Show actual amount to receive if over limit */}
-                    {data.maxReimbursementForCountry && totalIncluded > data.maxReimbursementForCountry && (
-                      <div className="text-right">
-                        <p className="text-xs text-gray-500">You will receive</p>
-                        <p className="text-lg font-bold text-emerald-600">
-                          {formatCurrency(data.maxReimbursementForCountry)}
-                        </p>
-                      </div>
+                    {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
+                      <span className="text-sm text-blue-600 font-medium">
+                        (max: {formatCurrency(data.maxReimbursementForCountry)})
+                      </span>
                     )}
                   </div>
-                  {excludedItems.length > 0 && (
-                    <p className="text-xs text-amber-600 mt-2">
-                      {excludedItems.length} item(s) excluded from reimbursement ({formatCurrency(totalExcluded)})
-                    </p>
+                  {/* Show actual amount to receive if over limit */}
+                  {data.maxReimbursementForCountry && total > data.maxReimbursementForCountry && (
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">You will receive</p>
+                      <p className="text-lg font-bold text-emerald-600">
+                        {formatCurrency(data.maxReimbursementForCountry)}
+                      </p>
+                    </div>
                   )}
-                </>
+                </div>
               );
             })()}
             <p className="text-xs text-gray-400 mt-3">
@@ -1820,50 +1870,6 @@ function TravelItemCard({
         )}
       </div>
 
-      {/* Exclude from Reimbursement Option */}
-      <div className="mt-6 pt-4 border-t border-gray-200">
-        <div className={clsx(
-          'p-3 rounded-lg border transition-colors',
-          item.excludedFromReimbursement
-            ? 'bg-amber-50 border-amber-200'
-            : 'bg-white border-gray-200'
-        )}>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={item.excludedFromReimbursement || false}
-              onChange={(e) => onUpdate({ excludedFromReimbursement: e.target.checked })}
-              className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
-            />
-            <div className="flex-1">
-              <span className={clsx(
-                'text-sm font-medium',
-                item.excludedFromReimbursement ? 'text-amber-800' : 'text-gray-700'
-              )}>
-                Exclude from reimbursement
-              </span>
-            </div>
-            <div className="relative group">
-              <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 cursor-help" />
-              <div className="absolute right-0 bottom-full mb-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 shadow-lg">
-                <p className="font-medium mb-1">When to exclude a travel item:</p>
-                <ul className="list-disc list-inside space-y-1 text-gray-300">
-                  <li>The trip was to a different destination than your home or project location</li>
-                  <li>You took an extra trip to visit a city or for personal reasons</li>
-                  <li>The travel was not directly related to the project</li>
-                </ul>
-                <p className="mt-2 text-gray-400">Only direct travel to and from the project location is eligible for reimbursement.</p>
-                <div className="absolute bottom-0 right-4 transform translate-y-1/2 rotate-45 w-2 h-2 bg-gray-900" />
-              </div>
-            </div>
-          </label>
-          {item.excludedFromReimbursement && (
-            <p className="mt-2 ml-6 text-xs text-amber-600">
-              This item will not be included in your reimbursement total
-            </p>
-          )}
-        </div>
-      </div>
       </div>
 
       {/* Confirmation Bottom Bar */}
@@ -1936,7 +1942,22 @@ function AddTravelModal({
 
   // Find documents that are not linked to any travel item
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
-  const linkedDocIds = new Set(travelItems.map(t => t.documentId).filter(Boolean));
+  // Include both primary documentId and additionalDocumentIds in the linked set
+  const linkedDocIds = useMemo(() => {
+    const ids = new Set<string>();
+    travelItems.forEach(t => {
+      if (t.documentId) ids.add(t.documentId);
+      if (t.additionalDocumentIds) {
+        try {
+          const additionalIds = JSON.parse(t.additionalDocumentIds) as string[];
+          additionalIds.forEach(id => ids.add(id));
+        } catch {
+          // Ignore invalid JSON
+        }
+      }
+    });
+    return ids;
+  }, [travelItems]);
   const unlinkedDocs = documents.filter(d =>
     !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
   );
