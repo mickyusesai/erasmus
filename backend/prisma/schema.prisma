@@ -67,6 +67,9 @@ model Participant {
   participantNote           String?                 // Note from participant explaining travel situations (e.g., missed bus, lost ticket)
   lastMagicLinkSentAt       DateTime?
   journeyConsolidatedAt     DateTime?               // When the AI last consolidated all documents
+  detectedHomeCountry       String?                 // AI-detected home country based on travel patterns
+  homeCountryConfidence     Float?                  // Confidence score (0-1) for detected home country
+  homeCountryReasoning      String?                 // AI reasoning for the detected home country
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   documents                 Document[]

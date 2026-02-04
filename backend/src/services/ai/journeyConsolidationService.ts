@@ -435,10 +435,17 @@ EXTRACTED DOCUMENT DATA:
 ${JSON.stringify(extractionSummary, null, 2)}
 
 YOUR TASK:
-1. Understand the complete journey: The participant likely traveled from their home country to the project location and back.
-2. Link related documents: Match boarding passes to their flight invoices using booking references, flight numbers, or matching routes.
-3. Create travel items: Each distinct travel segment (e.g., outbound flight, return flight) should be a separate travel item.
-4. Identify issues: Flag any warnings (name mismatches, missing documents, conflicting data).
+1. DETECT THE ACTUAL HOME COUNTRY: Analyze ALL travel documents to determine which country the participant actually traveled FROM. Look for:
+   - Where does the return journey end? (This is likely their home country)
+   - What is the first origin and final destination across all documents?
+   - Multi-leg journeys: the TRUE home might not be the first city (e.g., someone might take a train from a small city to an airport in another city, then fly)
+   - Round-trip flights: the origin is their home
+   - Be smart about connecting flights or trains - the home country is where the COMPLETE journey starts and ends
+
+2. Understand the complete journey: The participant traveled from their home country to the project location and back.
+3. Link related documents: Match boarding passes to their flight invoices using booking references, flight numbers, or matching routes.
+4. Create travel items: Each distinct travel segment (e.g., outbound flight, return flight) should be a separate travel item.
+5. Identify issues: Flag any warnings (name mismatches, missing documents, conflicting data).
 
 CRITICAL DATE PARSING:
 - Documents may contain dates in EUROPEAN format (DD/MM/YYYY or DD.MM.YYYY) - day comes FIRST!
@@ -486,6 +493,9 @@ MULTI-PASSENGER HANDLING:
 Respond with ONLY a JSON object:
 {
   "journey_summary": "Brief description of the understood journey",
+  "detected_home_country": "Country name (e.g., 'Hungary', 'Netherlands') - the country where the participant's journey truly starts and ends",
+  "home_country_confidence": 0.0-1.0,
+  "home_country_reasoning": "Brief explanation of how you determined the home country (e.g., 'Return flight ends in Budapest, Hungary' or 'Round-trip booking originates from Warsaw, Poland')",
   "travel_items": [
     {
       "modeOfTransport": "PLANE" | "TRAIN" | "BUS" | "CAR" | "FERRY" | "OTHER",
@@ -678,14 +688,22 @@ Respond with ONLY a JSON object:
         },
       });
 
-      // Update participant consolidation timestamp
+      // Update participant consolidation timestamp and detected home country
       await prisma.participant.update({
         where: { id: participantId },
-        data: { journeyConsolidatedAt: new Date() },
+        data: {
+          journeyConsolidatedAt: new Date(),
+          detectedHomeCountry: result.detected_home_country || null,
+          homeCountryConfidence: result.home_country_confidence || null,
+          homeCountryReasoning: result.home_country_reasoning || null,
+        },
       });
 
       const newlyCreatedCount = createdItems.length - existingItems.length;
       console.log(`[Consolidation] Total ${createdItems.length} travel items (${newlyCreatedCount} new, ${existingItems.length} preserved)`);
+      if (result.detected_home_country) {
+        console.log(`[Consolidation] Detected home country: ${result.detected_home_country} (confidence: ${result.home_country_confidence})`);
+      }
 
       return {
         success: true,
@@ -694,6 +712,9 @@ Respond with ONLY a JSON object:
         warnings: result.warnings || [],
         missingDocuments: result.missing_documents || [],
         documentLinks: result.document_links || [],
+        detectedHomeCountry: result.detected_home_country || null,
+        homeCountryConfidence: result.home_country_confidence || null,
+        homeCountryReasoning: result.home_country_reasoning || null,
       };
     } catch (error) {
       console.error('[Consolidation] Error consolidating journey:', error);
