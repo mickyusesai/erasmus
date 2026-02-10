@@ -479,15 +479,18 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
     const prompt = `You are an expert travel document analyst for Erasmus+ reimbursements.
 
-=== DOCUMENT IDENTIFICATION - CRITICAL ===
-The documents shown above are labeled: [Document 1 - ID: xxx], [Document 2 - ID: yyy], etc.
-The extraction summary below has matching numbers:
-- docIndex: 1 corresponds to Document 1 above
-- docIndex: 2 corresponds to Document 2 above
-- etc.
+=== DOCUMENT IDENTIFICATION - ABSOLUTELY CRITICAL ===
+Documents are shown visually above, each labeled: [Document X - ID: <uuid>]
+The DOCUMENT REFERENCE TABLE below maps each document to its UUID.
 
-WHEN RETURNING linkedDocumentIds, YOU MUST USE THE documentId (UUID) FROM THE EXTRACTION SUMMARY.
-Example: If Document 3 has documentId "abc-123-def", use "abc-123-def" in linkedDocumentIds, NOT "3" or "Document 3".
+*** WHEN RETURNING linkedDocumentIds, COPY THE EXACT UUID STRING ***
+Example: If the train ticket is Document 3 with documentId "a1b2c3d4-e5f6-...",
+your linkedDocumentIds MUST be: ["a1b2c3d4-e5f6-..."]
+WRONG: ["3"], ["Document 3"], ["doc-3"]
+RIGHT: ["a1b2c3d4-e5f6-..."] (the actual UUID)
+
+For each travel item, find the matching document(s) by content (route, date, mode),
+then copy that document's UUID from the DOCUMENT REFERENCE TABLE into linkedDocumentIds.
 
 THINK STEP BY STEP - Before generating output, reason through:
 1. What is the participant's home country based on travel patterns?
@@ -506,7 +509,7 @@ PARTICIPANT INFO:
 - Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
 - Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
 
-DOCUMENT REFERENCE TABLE (docIndex matches visual Document number above):
+DOCUMENT REFERENCE TABLE (use documentId UUIDs in your response!):
 ${JSON.stringify(extractionSummary, null, 2)}
 
 === CRITICAL RULES - DO NOT VIOLATE ===
@@ -599,7 +602,7 @@ Respond with ONLY a JSON object:
       "numberOfPassengers": 1,
       "hasPerLegPrices": false,
       "priceSource": "Document #3 (flight itinerary)",
-      "linkedDocumentIds": ["doc-id-1", "doc-id-3"]
+      "linkedDocumentIds": ["<UUID from DOCUMENT REFERENCE TABLE>"]
     }
   ],
 
@@ -617,12 +620,16 @@ Respond with ONLY a JSON object:
       "amountIncludedInRoundTrip": false (true if this is return leg with price on outbound),
       "priceEditable": true or false,
       "priceMissing": true or false (true if no price found anywhere for this leg),
-      "priceSourceDocId": "doc-id that provided the price, or null",
+      "priceSourceDocId": "<UUID> or null",
       "purchaseDate": "YYYY-MM-DD or null",
-      "linkedDocumentIds": ["primary-doc-id", "additional-doc-id-1", "additional-doc-id-2"],
+      "linkedDocumentIds": ["<UUID of primary doc>", "<UUID of additional doc if any>"],
       "numberOfPassengers": 1
     }
   ],
+
+  IMPORTANT: All document IDs (linkedDocumentIds, priceSourceDocId, etc.) MUST be
+  actual UUID strings copied from the "documentId" field in DOCUMENT REFERENCE TABLE.
+  Example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
   "document_links": [
     {
@@ -797,18 +804,27 @@ Do NOT warn about:
 
       console.log(`[Consolidation] Found ${existingItems.length} existing travel items to preserve`);
 
-      // Helper to resolve document IDs (handles both actual IDs and index references like "doc-1")
+      // Helper to resolve document IDs
+      // IMPORTANT: We prefer UUIDs but also handle index references as fallback
       const resolveDocumentId = (docRef: string): string | null => {
+        // First, check if it's a valid UUID (direct match)
         if (validDocumentIds.has(docRef)) {
           return docRef;
         }
+
+        // Fallback: try to parse as a document number/index
+        // This handles cases where AI returns "1", "doc-1", "Document 1", etc.
         const match = docRef.match(/(\d+)/);
         if (match) {
-          const index = parseInt(match[1], 10) - 1;
+          const index = parseInt(match[1], 10) - 1; // Convert 1-based to 0-based
           if (index >= 0 && index < participant.documents.length) {
-            return participant.documents[index].id;
+            const resolvedId = participant.documents[index].id;
+            console.log(`[Consolidation] WARNING: AI returned "${docRef}" instead of UUID. Resolved to index ${index} -> ${resolvedId}`);
+            return resolvedId;
           }
         }
+
+        console.log(`[Consolidation] WARNING: Could not resolve document reference "${docRef}"`);
         return null;
       };
 
