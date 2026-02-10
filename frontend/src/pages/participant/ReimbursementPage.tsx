@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -1937,6 +1937,7 @@ function AddTravelModal({
   onViewDocument: (doc: Document) => void;
 }) {
   const queryClient = useQueryClient();
+  const [mode, setMode] = useState<'create' | 'link'>('create');
   const [formData, setFormData] = useState({
     modeOfTransport: 'PLANE' as TransportMode,
     fromLocation: '',
@@ -1949,6 +1950,7 @@ function AddTravelModal({
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>('');
+  const [selectedTravelItemId, setSelectedTravelItemId] = useState<string>('');
 
   // Find documents that are not linked to any travel item
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
@@ -2015,32 +2017,103 @@ function AddTravelModal({
     },
   });
 
+  // Mutation to link a document to an existing travel item
+  const linkDocumentMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedExistingDocId || !selectedTravelItemId) {
+        throw new Error('Please select both a document and a travel item');
+      }
+
+      const targetItem = travelItems.find(t => t.id === selectedTravelItemId);
+      if (!targetItem) throw new Error('Travel item not found');
+
+      // Get existing additional document IDs
+      let additionalIds: string[] = [];
+      if (targetItem.additionalDocumentIds) {
+        try {
+          additionalIds = JSON.parse(targetItem.additionalDocumentIds) as string[];
+        } catch {
+          additionalIds = [];
+        }
+      }
+
+      // Add new document ID (avoid duplicates)
+      if (!additionalIds.includes(selectedExistingDocId) && targetItem.documentId !== selectedExistingDocId) {
+        additionalIds.push(selectedExistingDocId);
+      }
+
+      // Update the travel item with new additional documents
+      return participantApi.updateTravelItem(token, selectedTravelItemId, {
+        additionalDocumentIds: additionalIds.length > 0 ? JSON.stringify(additionalIds) : null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      toast.success('Document linked to travel item');
+      onClose();
+      setSelectedExistingDocId('');
+      setSelectedTravelItemId('');
+      setMode('create');
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'Failed to link document');
+    },
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    uploadAndCreateMutation.mutate();
+    if (mode === 'link') {
+      linkDocumentMutation.mutate();
+    } else {
+      uploadAndCreateMutation.mutate();
+    }
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add Travel Manually" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={unlinkedDocs.length > 0 ? "Manage Documents" : "Add Travel Manually"} size="lg">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="p-4 bg-blue-50 rounded-xl">
-          <p className="text-sm text-blue-800">
-            Please upload a supporting document (ticket, invoice, receipt) for this travel item.
-            If you don't have a document, you'll need to provide a declaration later.
-          </p>
-        </div>
+        {/* Mode tabs - only show if there are unlinked documents */}
+        {unlinkedDocs.length > 0 && (
+          <div className="flex border-b border-gray-200">
+            <button
+              type="button"
+              onClick={() => setMode('create')}
+              className={clsx(
+                'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                mode === 'create'
+                  ? 'border-emerald-500 text-emerald-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              )}
+            >
+              Create New Travel Item
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('link')}
+              className={clsx(
+                'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                mode === 'link'
+                  ? 'border-emerald-500 text-emerald-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              )}
+            >
+              Link to Existing Travel Item
+            </button>
+          </div>
+        )}
 
-        {/* Document Selection - Existing or New Upload */}
-        <div>
-          <label className="label">Supporting Document</label>
-
-          {/* Option to link existing unlinked document */}
-          {unlinkedDocs.length > 0 && (
-            <div className="mb-3">
-              <p className="text-sm text-amber-700 mb-2 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" />
-                You have {unlinkedDocs.length} uploaded document(s) not linked to any travel item
+        {mode === 'link' ? (
+          /* Link mode - connect document to existing travel item */
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 rounded-xl">
+              <p className="text-sm text-blue-800">
+                Select a document and an existing travel item to link them together.
               </p>
+            </div>
+
+            {/* Document selection */}
+            <div>
+              <label className="label">Select Document</label>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {unlinkedDocs.map(doc => (
                   <div
@@ -2051,10 +2124,7 @@ function AddTravelModal({
                         ? 'border-emerald-500 bg-emerald-50'
                         : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                     )}
-                    onClick={() => {
-                      setSelectedExistingDocId(selectedExistingDocId === doc.id ? '' : doc.id);
-                      if (selectedExistingDocId !== doc.id) setSelectedFile(null);
-                    }}
+                    onClick={() => setSelectedExistingDocId(selectedExistingDocId === doc.id ? '' : doc.id)}
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
@@ -2068,6 +2138,114 @@ function AddTravelModal({
                       onClick={(e) => {
                         e.stopPropagation();
                         onViewDocument(doc);
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium ml-2"
+                    >
+                      View
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Travel item selection */}
+            <div>
+              <label className="label">Select Travel Item to Link</label>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {travelItems.map(item => (
+                  <div
+                    key={item.id}
+                    className={clsx(
+                      'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                      selectedTravelItemId === item.id
+                        ? 'border-emerald-500 bg-emerald-50'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    )}
+                    onClick={() => setSelectedTravelItemId(selectedTravelItemId === item.id ? '' : item.id)}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {React.createElement(transportIcons[item.modeOfTransport] || HelpCircle, {
+                        className: 'w-5 h-5 text-gray-500 flex-shrink-0',
+                      })}
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-gray-900 truncate">
+                          {item.fromLocation} → {item.toLocation}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {formatDate(item.departureDate)}
+                          {item.flightNumber && ` • ${item.flightNumber}`}
+                        </div>
+                      </div>
+                    </div>
+                    {selectedTravelItemId === item.id && (
+                      <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                loading={linkDocumentMutation.isPending}
+                disabled={!selectedExistingDocId || !selectedTravelItemId}
+              >
+                Link Document
+              </Button>
+            </div>
+          </div>
+        ) : (
+          /* Create mode - existing functionality */
+          <>
+            <div className="p-4 bg-blue-50 rounded-xl">
+              <p className="text-sm text-blue-800">
+                Please upload a supporting document (ticket, invoice, receipt) for this travel item.
+                If you don't have a document, you'll need to provide a declaration later.
+              </p>
+            </div>
+
+            {/* Document Selection - Existing or New Upload */}
+            <div>
+              <label className="label">Supporting Document</label>
+
+              {/* Option to link existing unlinked document */}
+              {unlinkedDocs.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-sm text-amber-700 mb-2 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    You have {unlinkedDocs.length} uploaded document(s) not linked to any travel item
+                  </p>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {unlinkedDocs.map(doc => (
+                      <div
+                        key={doc.id}
+                        className={clsx(
+                          'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                          selectedExistingDocId === doc.id
+                            ? 'border-emerald-500 bg-emerald-50'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        )}
+                        onClick={() => {
+                          setSelectedExistingDocId(selectedExistingDocId === doc.id ? '' : doc.id);
+                          if (selectedExistingDocId !== doc.id) setSelectedFile(null);
+                        }}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                          <span className="text-sm text-gray-700 truncate">{doc.originalFilename}</span>
+                          {selectedExistingDocId === doc.id && (
+                            <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewDocument(doc);
                       }}
                       className="text-sm text-blue-600 hover:text-blue-700 font-medium ml-2"
                     >
@@ -2113,100 +2291,102 @@ function AddTravelModal({
             </div>
           )}
 
-          {selectedExistingDocId && (
-            <button
-              type="button"
-              onClick={() => setSelectedExistingDocId('')}
-              className="text-sm text-blue-600 hover:text-blue-700 mt-2"
-            >
-              Clear selection and upload new instead
-            </button>
-          )}
-        </div>
+              {selectedExistingDocId && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedExistingDocId('')}
+                  className="text-sm text-blue-600 hover:text-blue-700 mt-2"
+                >
+                  Clear selection and upload new instead
+                </button>
+              )}
+            </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Select
-            label="Mode of Transport"
-            value={formData.modeOfTransport}
-            options={transportOptions}
-            onChange={(e) => setFormData({ ...formData, modeOfTransport: e.target.value as TransportMode })}
-          />
-          <Input
-            label="Departure Date"
-            type="date"
-            value={formData.departureDate}
-            onChange={(e) => setFormData({ ...formData, departureDate: e.target.value })}
-            required
-          />
-        </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Select
+                label="Mode of Transport"
+                value={formData.modeOfTransport}
+                options={transportOptions}
+                onChange={(e) => setFormData({ ...formData, modeOfTransport: e.target.value as TransportMode })}
+              />
+              <Input
+                label="Departure Date"
+                type="date"
+                value={formData.departureDate}
+                onChange={(e) => setFormData({ ...formData, departureDate: e.target.value })}
+                required
+              />
+            </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="From"
-            value={formData.fromLocation}
-            onChange={(e) => setFormData({ ...formData, fromLocation: e.target.value })}
-            placeholder="e.g., Amsterdam"
-            required
-          />
-          <Input
-            label="To"
-            value={formData.toLocation}
-            onChange={(e) => setFormData({ ...formData, toLocation: e.target.value })}
-            placeholder="e.g., Barcelona"
-            required
-          />
-        </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="From"
+                value={formData.fromLocation}
+                onChange={(e) => setFormData({ ...formData, fromLocation: e.target.value })}
+                placeholder="e.g., Amsterdam"
+                required
+              />
+              <Input
+                label="To"
+                value={formData.toLocation}
+                onChange={(e) => setFormData({ ...formData, toLocation: e.target.value })}
+                placeholder="e.g., Barcelona"
+                required
+              />
+            </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="Amount"
-            type="number"
-            step="0.01"
-            value={formData.amountOriginal || ''}
-            onChange={(e) => setFormData({ ...formData, amountOriginal: parseFloat(e.target.value) || 0 })}
-            required
-          />
-          <Select
-            label="Currency"
-            value={formData.currencyOriginal}
-            options={[
-              { value: 'EUR', label: 'EUR' },
-              { value: 'USD', label: 'USD' },
-              { value: 'GBP', label: 'GBP' },
-              { value: 'PLN', label: 'PLN' },
-              { value: 'CZK', label: 'CZK' },
-              { value: 'HUF', label: 'HUF' },
-              { value: 'RON', label: 'RON' },
-            ]}
-            onChange={(e) => setFormData({ ...formData, currencyOriginal: e.target.value })}
-          />
-        </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Amount"
+                type="number"
+                step="0.01"
+                value={formData.amountOriginal || ''}
+                onChange={(e) => setFormData({ ...formData, amountOriginal: parseFloat(e.target.value) || 0 })}
+                required
+              />
+              <Select
+                label="Currency"
+                value={formData.currencyOriginal}
+                options={[
+                  { value: 'EUR', label: 'EUR' },
+                  { value: 'USD', label: 'USD' },
+                  { value: 'GBP', label: 'GBP' },
+                  { value: 'PLN', label: 'PLN' },
+                  { value: 'CZK', label: 'CZK' },
+                  { value: 'HUF', label: 'HUF' },
+                  { value: 'RON', label: 'RON' },
+                ]}
+                onChange={(e) => setFormData({ ...formData, currencyOriginal: e.target.value })}
+              />
+            </div>
 
-        {formData.modeOfTransport === 'PLANE' && (
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Flight Number"
-              value={formData.flightNumber}
-              onChange={(e) => setFormData({ ...formData, flightNumber: e.target.value })}
-              placeholder="e.g., KL1234"
-            />
-            <Input
-              label="Booking Reference"
-              value={formData.bookingReference}
-              onChange={(e) => setFormData({ ...formData, bookingReference: e.target.value })}
-              placeholder="e.g., ABC123"
-            />
-          </div>
+            {formData.modeOfTransport === 'PLANE' && (
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  label="Flight Number"
+                  value={formData.flightNumber}
+                  onChange={(e) => setFormData({ ...formData, flightNumber: e.target.value })}
+                  placeholder="e.g., KL1234"
+                />
+                <Input
+                  label="Booking Reference"
+                  value={formData.bookingReference}
+                  onChange={(e) => setFormData({ ...formData, bookingReference: e.target.value })}
+                  placeholder="e.g., ABC123"
+                />
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" loading={uploadAndCreateMutation.isPending}>
+                Add Travel Item
+              </Button>
+            </div>
+          </>
         )}
-
-        <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
-          <Button type="button" variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={uploadAndCreateMutation.isPending}>
-            Add Travel Item
-          </Button>
-        </div>
       </form>
     </Modal>
   );

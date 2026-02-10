@@ -808,6 +808,9 @@ export interface CreateTravelItemData {
   purchaseDate?: string;
   amountEur: number;
   comment?: string;
+  // Document linking (for updates)
+  documentId?: string | null;
+  additionalDocumentIds?: string | null;  // JSON array string
 }
 
 export interface Declaration {

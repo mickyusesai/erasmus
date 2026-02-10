@@ -57,6 +57,9 @@ const updateTravelItemSchema = z.object({
   purchaseDate: z.string().transform((s) => new Date(s)).nullable().optional(),
   amountEur: z.number().optional(),
   comment: z.string().nullable().optional(),
+  // Document linking
+  documentId: z.string().nullable().optional(),
+  additionalDocumentIds: z.string().nullable().optional(), // JSON array of additional document IDs
   // Multi-passenger bookings
   participantPortion: z.number().nullable().optional(),
   // Car travel specific
