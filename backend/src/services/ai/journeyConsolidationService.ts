@@ -470,11 +470,11 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 THINK STEP BY STEP - Before generating output, reason through:
 1. What is the participant's home country based on travel patterns?
 2. Which documents are tickets vs. payment receipts vs. bank transactions?
-3. For each ticket: what is the route, date, and price?
-4. Do any bank transactions match tickets by merchant name/amount/date?
+3. For each ticket: what is the route, date, mode of transport, and price?
+4. Do any bank transactions/receipts match tickets by merchant name/amount/date?
 5. Are there round-trip bookings? If so, identify both legs.
-6. Are there multi-ticket documents? Check "additionalTickets" field.
-7. Is any price information missing that exists in other documents?
+6. Are there multi-ticket documents? Check for multiple legs in same PDF.
+7. Which documents belong to which travel legs? Match by route, date, AND mode.
 8. What is the complete journey timeline from home → project → home?
 
 PARTICIPANT INFO:
@@ -484,7 +484,7 @@ PARTICIPANT INFO:
 - Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
 - Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
 
-EXTRACTED DOCUMENT DATA:
+EXTRACTED DOCUMENT DATA (for reference - verify against actual documents above):
 ${JSON.stringify(extractionSummary, null, 2)}
 
 === CRITICAL RULES - DO NOT VIOLATE ===
@@ -498,42 +498,65 @@ RULE 1: DO NOT INVENT ROUTES OR SEGMENTS
 RULE 2: DO NOT INVENT PRICES
 - Only use prices that are EXPLICITLY stated in uploaded documents
 - If no price is found in ANY document for a travel item, set amount to null
-- NEVER use 0 as a placeholder for unknown prices (0 means actually free)
+- NEVER use 0 as a placeholder for unknown prices
 - NEVER estimate or calculate prices that aren't documented
-- If summing prices, the sum must equal the exact total of documented individual prices
+- Boarding passes typically have no price - rely on invoice/booking/bank statement for the amount
 
-RULE 3: ROUND-TRIP BOOKINGS - SEPARATE LEGS
-When a booking is marked isRoundTrip=true:
-- Create TWO separate travel_items: one for outbound, one for return
-- Link both to the same booking object via bookingReference
-- For PRICE handling on round-trips:
-  * If only a TOTAL booking price is known (no per-leg prices): set amount=null on EACH leg, and create a booking entry
-  * If per-leg prices are explicitly documented: use those prices on each leg
-- Set priceEditable=false on legs if only total booking price exists
+RULE 3: DOCUMENT MATCHING - ATTACH DOCUMENTS TO CORRECT LEGS
+For every document, you MUST explicitly decide which travel item(s) it belongs to.
 
-RULE 4: PRICE RESOLUTION ACROSS DOCUMENTS
-For each travel item, search ALL documents for a matching price:
-- Match by: booking reference, flight number, or route+date
-- If a flight leg has no price but an itinerary/invoice has the total booking price, note this in the booking
-- If a ticket has a price on a separate bank transaction, link them and use that price
-- Record priceSourceDocId to show which document provided the price
+Match documents to legs using these criteria:
+- Route (from/to): City names, station names, airport codes (ZAG, EIN, CRL, etc.)
+- Date: Must match the travel date
+- Mode of transport: Bus ticket → bus leg, train ticket → train leg, boarding pass → plane leg
+- Amount and currency (if present)
 
-RULE 5: BANK TRANSACTIONS ARE NOT TRAVEL ITEMS
-- BANK_TRANSACTION documents should ONLY provide price information
-- Link them to the corresponding ticket via document_links
+CRITICAL MATCHING RULES:
+- Do NOT attach a bus ticket to a plane leg (e.g., bus "Brussels → Charleroi Airport" is NOT the same as plane "Charleroi → Zagreb")
+- Do NOT attach a Dutch train ticket to a Croatian bus leg
+- If a receipt has same date, route, and amount as a ticket, attach BOTH to the same travel item
+- Prefer UNDER-ATTACHMENT over WRONG ATTACHMENT: if genuinely unsure where a document belongs, leave it unassigned rather than linking it to the wrong trip
+
+RULE 4: MULTIPLE DOCUMENTS FOR ONE LEG
+Some legs have more than one document (e.g., a bus ticket PDF + a bank payment screenshot for same trip):
+- Create ONE travel item for that leg
+- Set the ticket/boarding pass as the primary document (linkedDocumentIds[0])
+- Add receipts/bank statements as additional documents (linkedDocumentIds[1], [2], etc.)
+- Do NOT leave supporting receipts floating unassigned if they clearly match a leg
+
+RULE 5: SAME DOCUMENT CONTAINS MULTIPLE LEGS
+If a single PDF contains multiple tickets/boarding passes (e.g., outbound AND return in one "Flights.pdf"):
+- Create SEPARATE travel items for each leg
+- Link the SAME document ID to BOTH travel items
+- This is the ONLY case where one document appears in multiple travel items
+
+RULE 6: ROUND-TRIP BOOKINGS - PRICE HANDLING
+When a booking covers both outbound AND return (one booking reference, one total price):
+- Create TWO travel items (one per flight/leg)
+- Attach the booking document to BOTH items
+- Put the FULL total amount on the OUTBOUND leg
+- Set amount to 0 on the RETURN leg with "amountIncludedInRoundTrip": true
+- Set "priceEditable": false on the return leg
+- Do NOT try to guess or split the price per flight
+
+RULE 7: BANK TRANSACTIONS ARE NOT TRAVEL ITEMS
+- BANK_TRANSACTION documents provide price information only
+- Match them to tickets by merchant name, amount, and date
+- Add as additional document to the matching travel item
 - NEVER create a travel item from a bank transaction alone
-- If a bank transaction cannot be matched to any ticket, note it in unmatched_payments
+- If unmatched, add to unmatched_payments
 
-RULE 6: MULTI-TICKET DOCUMENTS
-If one document (e.g., train booking) contains multiple ticket segments:
-- Create a SEPARATE travel_item for EACH segment
-- Each segment has its own from, to, date, and amount
-- If the document shows a total price and individual segment prices, use the individual prices
-- If only a total is shown, split proportionally OR set individual amounts to null and note the total
+RULE 8: UNASSIGNED DOCUMENTS
+After matching, check which documents remain unassigned:
+- If an unassigned file matches an existing leg (same date, route, amount), attach it
+- Only keep a document unassigned if:
+  * Its route, date, or mode do NOT match any existing travel item
+  * It genuinely looks like a separate trip not yet added
+- The "unassigned_documents" list should NOT include receipts you could confidently match
 
-RULE 7: AMOUNT HANDLING
+RULE 9: AMOUNT HANDLING
 - null = price is unknown (could not find in any document)
-- 0 = price is explicitly zero (free travel, promo, etc.)
+- 0 = price is explicitly zero (free) OR included in round-trip (with amountIncludedInRoundTrip: true)
 - NEVER use 0 as a substitute for null
 
 === OUTPUT FORMAT ===
@@ -567,13 +590,14 @@ Respond with ONLY a JSON object:
       "arrivalDate": "YYYY-MM-DD or null",
       "bookingReference": "Reference or null (links to bookings array)",
       "flightNumber": "Flight number or null",
-      "amount": 123.45 or null (ONLY if explicitly documented, otherwise null),
+      "amount": 123.45 or null or 0,
       "currency": "EUR",
-      "priceEditable": true or false (false if part of round-trip with only total price),
-      "priceMissing": true or false (true if no price found anywhere),
+      "amountIncludedInRoundTrip": false (true if this is return leg with price on outbound),
+      "priceEditable": true or false,
+      "priceMissing": true or false (true if no price found anywhere for this leg),
       "priceSourceDocId": "doc-id that provided the price, or null",
       "purchaseDate": "YYYY-MM-DD or null",
-      "linkedDocumentIds": ["doc-id-1"],
+      "linkedDocumentIds": ["primary-doc-id", "additional-doc-id-1", "additional-doc-id-2"],
       "numberOfPassengers": 1
     }
   ],
@@ -582,7 +606,15 @@ Respond with ONLY a JSON object:
     {
       "ticketDocId": "doc-id-for-ticket",
       "paymentDocId": "doc-id-for-payment",
-      "reason": "Matching merchant name and date"
+      "matchReason": "Same date (2025-11-22), merchant 'PLESO PRIJEVOZ' matches bus company, amount 8.00 EUR"
+    }
+  ],
+
+  "unassigned_documents": [
+    {
+      "docId": "doc-id",
+      "documentType": "BUS_TICKET",
+      "reason": "Route Amsterdam→Brussels does not match any travel item in the journey"
     }
   ],
 
@@ -591,11 +623,12 @@ Respond with ONLY a JSON object:
       "docId": "doc-id",
       "merchantName": "UNKNOWN MERCHANT",
       "amount": 50.00,
-      "reason": "Could not match to any ticket"
+      "date": "2025-11-20",
+      "reason": "Could not match to any ticket - unknown merchant"
     }
   ],
 
-  "warnings": ["Only actionable issues - missing boarding pass, name mismatch, etc."],
+  "warnings": ["Only actionable issues - name mismatch, missing price, etc."],
 
   "missing_documents": [
     {
@@ -604,6 +637,14 @@ Respond with ONLY a JSON object:
     }
   ]
 }
+
+=== DOCUMENT MATCHING EXAMPLE ===
+If documents include:
+- Doc 1: Bus ticket "City A → Airport A, 22-11-2025, 8 EUR"
+- Doc 2: Bank screenshot "Airport Shuttle, 22-11-2025, 8.00 EUR"
+
+Correct: ONE travel item with linkedDocumentIds: ["doc-1-id", "doc-2-id"]
+Wrong: Two separate items, or doc-2 left unassigned
 
 === DATE PARSING ===
 - European format: DD/MM/YYYY or DD.MM.YYYY - day comes FIRST!
@@ -616,11 +657,12 @@ Only warn about ACTIONABLE problems:
 - Multi-passenger booking needs portion specified
 - Missing boarding pass for a documented flight
 - Price truly missing (priceMissing=true)
+- Country mismatch between profile and travel pattern
 
 Do NOT warn about:
 - Travel dates before/after project (normal for travel to/from)
 - Round-trip structure (UI handles this)
-- Explanatory messages`;
+- Matched receipts (those are attached, not warnings)`;
 
     // Build a set of valid document IDs for this participant
     const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
@@ -843,6 +885,9 @@ Do NOT warn about:
         // Link to booking if bookingReference matches
         const bookingId = item.bookingReference ? bookingIdMap.get(item.bookingReference) || null : null;
 
+        // Handle amountIncludedInRoundTrip - if true, this is return leg with price on outbound
+        const amountIncludedInRoundTrip = item.amountIncludedInRoundTrip === true;
+
         const travelItem = await prisma.travelItem.create({
           data: {
             participantId,
@@ -866,12 +911,14 @@ Do NOT warn about:
             priceEditable: item.priceEditable !== false, // Default to true
             priceMissing: item.priceMissing === true,
             priceSourceDocId: priceSourceDocId,
+            amountIncludedInRoundTrip: amountIncludedInRoundTrip,
             isRoundTrip: false, // Individual legs are not round-trips; the booking is
             numberOfPassengers: item.numberOfPassengers || null,
           },
         });
 
-        console.log(`[Consolidation] Created travel item: ${item.fromLocation} -> ${item.toLocation}, amount: ${baseAmount ?? 'null'} ${currency}, priceMissing: ${item.priceMissing}`);
+        const amountInfo = amountIncludedInRoundTrip ? '0 (included in round-trip)' : `${baseAmount ?? 'null'} ${currency}`;
+        console.log(`[Consolidation] Created travel item: ${item.fromLocation} -> ${item.toLocation}, amount: ${amountInfo}, priceMissing: ${item.priceMissing}`);
         createdItems.push(travelItem);
       }
 
@@ -920,6 +967,7 @@ Do NOT warn about:
         missingDocuments: result.missing_documents || [],
         documentLinks: result.document_links || [],
         unmatchedPayments: result.unmatched_payments || [],
+        unassignedDocuments: result.unassigned_documents || [],
         detectedHomeCountry: result.detected_home_country || null,
         homeCountryConfidence: result.home_country_confidence || null,
         homeCountryReasoning: result.home_country_reasoning || null,
@@ -982,8 +1030,9 @@ export interface ConsolidationResult {
   bookings?: unknown[];
   warnings: string[];
   missingDocuments?: { type: string; description: string }[];
-  documentLinks?: { ticketDocId: string; paymentDocId: string; reason: string }[];
-  unmatchedPayments?: { docId: string; merchantName: string; amount: number; reason: string }[];
+  documentLinks?: { ticketDocId: string; paymentDocId: string; matchReason?: string; reason?: string }[];
+  unmatchedPayments?: { docId: string; merchantName: string; amount: number; date?: string; reason: string }[];
+  unassignedDocuments?: { docId: string; documentType: string; reason: string }[];
   detectedHomeCountry?: string | null;
   homeCountryConfidence?: number | null;
   homeCountryReasoning?: string | null;

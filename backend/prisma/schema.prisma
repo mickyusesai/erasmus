@@ -232,9 +232,10 @@ model TravelItem {
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
 
   // Price editability for this leg
-  priceEditable         Boolean               @default(true)   // False if part of booking with only total price
-  priceMissing          Boolean               @default(false)  // True if no price found in any document
-  priceSourceDocId      String?               // Document ID where this price was found
+  priceEditable             Boolean               @default(true)   // False if part of booking with only total price
+  priceMissing              Boolean               @default(false)  // True if no price found in any document
+  priceSourceDocId          String?               // Document ID where this price was found
+  amountIncludedInRoundTrip Boolean               @default(false)  // True if this is return leg with price on outbound
 
   // Legacy round-trip fields (kept for compatibility, prefer using TravelBooking)
   isRoundTrip           Boolean               @default(false)
