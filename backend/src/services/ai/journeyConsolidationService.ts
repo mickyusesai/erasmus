@@ -138,6 +138,15 @@ Quick extraction for UI feedback - a more thorough analysis will happen later.
 IMAGE QUALITY NOTE:
 This may be a PHOTO of a physical receipt or ticket (not a digital document). Photos can be blurry, tilted, low contrast, or show crumpled paper. TRY YOUR BEST to extract information even from poor quality images.
 
+=== MULTILINGUAL DOCUMENT HANDLING ===
+STEP 1: DETECT THE DOCUMENT LANGUAGE FIRST
+Before extracting any data, identify what language the document is written in. Common languages:
+- English, Dutch, German, French, Spanish, Italian, Polish, Croatian, Czech, Slovak, Hungarian, Romanian, etc.
+Knowing the language helps you correctly interpret abbreviations, dates, and terminology.
+
+STEP 2: INTERPRET IN CONTEXT OF THAT LANGUAGE
+Once you know the language, use that context to understand abbreviations, month names, and terms.
+
 DOCUMENT TYPE CLASSIFICATION:
 Carefully determine the document type:
 
@@ -180,11 +189,18 @@ Documents may show dates in various EUROPEAN formats. You MUST recognize and cor
 - DD.MM.YY (e.g., 22.11.25 = November 22, 2025) - 2-digit year means 20XX
 - "DD. MMM YYYY" with abbreviated month (e.g., "21. stu 2025" = November 21, 2025)
 
-MONTH NAMES - Full AND ABBREVIATED forms:
-  * Croatian: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
-  * Croatian abbreviated: sij=Jan, velj=Feb, ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
-  * German: Januar, Februar, März, April, Mai, Juni, Juli, August, September, Oktober, November, Dezember
-  * Dutch: januari, februari, maart, april, mei, juni, juli, augustus, september, oktober, november, december
+MONTH NAMES - Full AND ABBREVIATED forms (learn these patterns!):
+  * Croatian full: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
+  * Croatian abbrev: sij/sije=Jan, velj=Feb, ožu/ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
+  * German full: Januar, Februar, März, April, Mai, Juni, Juli, August, September, Oktober, November, Dezember
+  * German abbrev: Jan, Feb, Mär/Mrz, Apr, Mai, Jun, Jul, Aug, Sep, Okt, Nov, Dez
+  * Dutch full: januari, februari, maart, april, mei, juni, juli, augustus, september, oktober, november, december
+  * Dutch abbrev: jan, feb, mrt, apr, mei, jun, jul, aug, sep, okt, nov, dec
+  * Polish full: styczeń, luty, marzec, kwiecień, maj, czerwiec, lipiec, sierpień, wrzesień, październik, listopad, grudzień
+  * Polish abbrev: sty=Jan, lut=Feb, mar=Mar, kwi=Apr, maj=May, cze=Jun, lip=Jul, sie=Aug, wrz=Sep, paź=Oct, lis=Nov, gru=Dec
+  * French: janvier, février, mars, avril, mai, juin, juillet, août, septembre, octobre, novembre, décembre
+  * Spanish: enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, octubre, noviembre, diciembre
+  * Italian: gennaio, febbraio, marzo, aprile, maggio, giugno, luglio, agosto, settembre, ottobre, novembre, dicembre
 
 IMPORTANT: In European dates, the DAY comes FIRST, then the month. 15/03/2025 means March 15, NOT October 3!
 
@@ -201,9 +217,10 @@ PRICE EXTRACTION:
 
 Extract ALL information you can find. Respond with ONLY a JSON object:
 {
+  "documentLanguage": "Croatian" | "English" | "Dutch" | "German" | "French" | "Polish" | "Spanish" | "Italian" | "other",
   "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "OTHER",
   "confidence": 0.0-1.0,
-  "reasoning": "Brief explanation of how you identified the document type and extracted key information",
+  "reasoning": "Brief explanation: 1) What language is this document in? 2) How did you identify the document type? 3) Key information extracted",
 
   "passengerName": "Full name of passenger or null",
   "fromLocation": "Origin city/airport or null (null for bank transactions without explicit route)",
@@ -591,7 +608,31 @@ When multiple documents for the same travel leg show different prices:
 - Example: If invoice shows €50 but bank statement shows €53.50, use €53.50
 - Document your choice in the "priceSourceDocId" field
 
-RULE 11: JOURNEY COHERENCE - SELF-VALIDATE
+RULE 11: DETECT DUPLICATE DOCUMENTS FOR SAME TRIP
+Multiple documents may describe the SAME trip - DO NOT create duplicate travel items:
+- SAME ROUTE pattern: "Brussels Midi → Charleroi Airport" and "Brussels South (Gare du Midi) → Aéroport de Charleroi" are THE SAME route
+- Location name variations: Stations/airports may be written differently in different languages or document types
+  * "Brussels Midi Station" = "Bruxelles-Midi" = "Brussels South" = "Gare du Midi"
+  * "Charleroi Airport" = "Brussels South Charleroi" = "CRL" = "Aéroport de Charleroi"
+  * "Zagreb Airport" = "Pleso" = "ZAG" = "Franjo Tuđman"
+- If two documents show the same route on the same date, they describe ONE trip - create ONE travel item with both documents linked
+- Compare SEMANTIC meaning of locations, not just text match
+- Check: Do these documents describe the same physical journey? If yes → ONE travel item, MULTIPLE linkedDocumentIds
+
+RULE 12: FLIGHT DOCUMENT SETS
+A single flight typically has MULTIPLE related documents - link them ALL to ONE travel item:
+- BOOKING CONFIRMATION: Has price, booking reference, flight details
+- INVOICE/ITINERARY: May have detailed price breakdown
+- BOARDING PASS: Has gate, seat, confirms the flight happened
+- BANK TRANSACTION: Shows the payment for this booking
+
+When you see these document types with matching flight number, date, and route:
+→ Create ONE travel item
+→ Link ALL related documents in linkedDocumentIds
+→ Use the booking/invoice price (or bank transaction if higher)
+→ Boarding pass confirms travel but usually has no price
+
+RULE 13: JOURNEY COHERENCE - SELF-VALIDATE
 Before finalizing, verify your journey makes logical sense:
 - Each leg's departure city should match the previous leg's arrival city
 - The journey should form a sensible path: Home → Project Location → Home

@@ -805,10 +805,33 @@ function Step2CheckData({
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => participantApi.deleteTravelItem(token, id),
+    // Optimistic delete for instant UI feedback
+    onMutate: async (id) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
+      // Snapshot the previous value
+      const previousData = queryClient.getQueryData(['participant-auth']);
+      // Optimistically remove from the cache
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.filter((item: TravelItem) => item.id !== id),
+        };
+      });
+      return { previousData };
+    },
+    onError: (_err, _variables, context) => {
+      // Revert to previous data on error
+      if (context?.previousData) {
+        queryClient.setQueryData(['participant-auth'], context.previousData);
+      }
+      toast.error('Failed to remove travel item');
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
       toast.success('Travel item removed');
     },
+    // No onSettled refetch - optimistic update is sufficient
   });
 
   const toggleCheckedMutation = useMutation({
