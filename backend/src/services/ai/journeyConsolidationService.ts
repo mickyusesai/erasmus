@@ -554,9 +554,33 @@ Match documents to legs using these criteria:
 - Mode of transport: Bus ticket → bus leg, train ticket → train leg, boarding pass → plane leg
 - Amount and currency (if present)
 
-CRITICAL MATCHING RULES:
-- Do NOT attach a bus ticket to a plane leg (e.g., bus "Brussels → Charleroi Airport" is NOT the same as plane "Charleroi → Zagreb")
-- Do NOT attach a Dutch train ticket to a Croatian bus leg
+CRITICAL MATCHING RULES - TRANSPORT MODE MUST MATCH:
+*** A BUS TICKET CAN NEVER BE PART OF A FLIGHT ***
+*** A TRAIN TICKET CAN NEVER BE PART OF A BUS JOURNEY ***
+
+Before linking ANY document to a travel item, verify:
+1. The document type matches the transport mode:
+   - BUS_TICKET → only link to BUS travel items
+   - TRAIN_TICKET → only link to TRAIN travel items
+   - FLIGHT_INVOICE, FLIGHT_BOARDING_PASS → only link to PLANE travel items
+2. Even if cities overlap, different transport modes = DIFFERENT trips
+
+BUS COMPANY DOCUMENTS - ALWAYS CREATE BUS TRAVEL ITEMS:
+- FlixBus, Flibco, Eurolines, BlaBlaBus, RegioJet, Student Agency → BUS
+- Look for: "autobusni kolodvor" (bus station), "Ruta" (route), bus route numbers
+- A FlixBus Zagreb→Split ticket is a BUS trip, even if there's also a FLIGHT from Zagreb
+
+EXAMPLES OF WRONG MATCHING (DO NOT DO THIS):
+❌ FlixBus Zagreb→Split linked to WizzAir Zagreb→Brussels flight
+❌ NS train ticket Amsterdam→Rotterdam linked to bus Brussels→Charleroi
+❌ Boarding pass for flight linked to a different flight's booking
+
+EXAMPLES OF CORRECT MATCHING:
+✓ FlixBus ticket + FlixBus bank payment → same BUS travel item
+✓ Flight booking + boarding pass + bank payment for same flight → same PLANE travel item
+✓ Two NS train tickets for different dates → TWO separate TRAIN travel items
+
+Additional rules:
 - If a receipt has same date, route, and amount as a ticket, attach BOTH to the same travel item
 - Prefer UNDER-ATTACHMENT over WRONG ATTACHMENT: if genuinely unsure where a document belongs, leave it unassigned rather than linking it to the wrong trip
 
@@ -609,15 +633,27 @@ When multiple documents for the same travel leg show different prices:
 - Document your choice in the "priceSourceDocId" field
 
 RULE 11: DETECT DUPLICATE DOCUMENTS FOR SAME TRIP
-Multiple documents may describe the SAME trip - DO NOT create duplicate travel items:
-- SAME ROUTE pattern: "Brussels Midi → Charleroi Airport" and "Brussels South (Gare du Midi) → Aéroport de Charleroi" are THE SAME route
-- Location name variations: Stations/airports may be written differently in different languages or document types
-  * "Brussels Midi Station" = "Bruxelles-Midi" = "Brussels South" = "Gare du Midi"
-  * "Charleroi Airport" = "Brussels South Charleroi" = "CRL" = "Aéroport de Charleroi"
-  * "Zagreb Airport" = "Pleso" = "ZAG" = "Franjo Tuđman"
-- If two documents show the same route on the same date, they describe ONE trip - create ONE travel item with both documents linked
-- Compare SEMANTIC meaning of locations, not just text match
-- Check: Do these documents describe the same physical journey? If yes → ONE travel item, MULTIPLE linkedDocumentIds
+Multiple documents may describe the SAME trip - DO NOT create duplicate travel items.
+
+*** BUT ONLY IF TRANSPORT MODE MATCHES! ***
+A bus ticket and a flight ticket are NEVER duplicates, even if routes overlap!
+
+Requirements for documents to be duplicates:
+1. SAME transport mode (both bus, both train, or both plane)
+2. SAME route (accounting for name variations)
+3. SAME date
+
+Location name variations (only relevant when transport mode matches):
+- "Brussels Midi Station" = "Bruxelles-Midi" = "Brussels South" = "Gare du Midi"
+- "Charleroi Airport" = "Brussels South Charleroi" = "CRL" = "Aéroport de Charleroi"
+- "Zagreb Airport" = "Pleso" = "ZAG" = "Franjo Tuđman"
+
+NOT DUPLICATES (different transport modes):
+- FlixBus Zagreb→Split (BUS) and WizzAir Zagreb→Brussels (PLANE) = TWO separate travel items
+- NS train Rotterdam→Amsterdam and FlixBus Rotterdam→Brussels = TWO separate travel items
+
+Compare SEMANTIC meaning of locations, not just text match.
+Check: Do these documents describe the same physical journey WITH THE SAME TRANSPORT MODE? If yes → ONE travel item
 
 RULE 12: FLIGHT DOCUMENT SETS
 A single flight typically has MULTIPLE related documents - link them ALL to ONE travel item:
