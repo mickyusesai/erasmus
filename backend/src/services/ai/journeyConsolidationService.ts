@@ -133,11 +133,39 @@ export class JourneyConsolidationService {
 IMAGE QUALITY NOTE:
 This may be a PHOTO of a physical receipt or ticket (not a digital document). Photos can be blurry, tilted, low contrast, or show crumpled paper. TRY YOUR BEST to extract information even from poor quality images.
 
-COMMON DOCUMENT TYPES:
-- NS train tickets: "Enkele reis" (single trip), stations like "Rotterdam C." or "Eindhoven C.", date DD-MM-YYYY, price in EUR
-- Station receipts: "Customer's receipt", show "PAYMENT Date:" and "Total:" - use payment date as travel date
+DOCUMENT TYPE CLASSIFICATION:
+Carefully determine the document type:
+
+1. TICKET DOCUMENTS (have route/journey information):
+   - FLIGHT_INVOICE: Flight booking confirmation, e-ticket, itinerary with flight details
+   - FLIGHT_BOARDING_PASS: Boarding pass with gate, seat, flight number
+   - TRAIN_TICKET: Train ticket with stations, date, sometimes price
+   - BUS_TICKET: Bus ticket with route, date, company name
+
+2. PAYMENT/RECEIPT DOCUMENTS (have amount but may lack route):
+   - BANK_TRANSACTION: Bank statement, mobile banking screenshot, card transaction
+   - These show merchant name, amount, date - but often NO route information
+   - Example: "PLESO PRIJEVOZ, ZAGREB" is a payment to a bus company, not a ticket
+
+3. OTHER DOCUMENTS:
+   - FUEL_RECEIPT: Gas station receipt
+   - GREEN_TRAVEL_DECLARATION: Declaration for green travel
+   - OTHER: Anything else
+
+CRITICAL: Bank transactions and payment screenshots are NOT tickets!
+- If you see a bank app interface, transaction history, or payment confirmation
+- If the document shows "Kartična transakcija" (card transaction), "ISPLATA" (payment), etc.
+- Set documentType to "BANK_TRANSACTION"
+- The date shown is the PURCHASE DATE (when payment was made), NOT the travel date
+- fromLocation and toLocation should be null unless the route is explicitly stated
+
+COMMON DOCUMENT PATTERNS:
+- NS train tickets: "Enkele reis" (single trip), stations like "Rotterdam C.", date DD-MM-YYYY, price
+- Station receipts: "Customer's receipt", show "PAYMENT Date:" and "Total:"
 - Bus tickets: FlixBus, Flibco, Bravo - look for route, date, and price
-- Omio/Trainline receipts: Online booking - may show booking fee markup over actual ticket price
+- Omio/Trainline: Online booking - may show booking fee markup
+- Bank transactions: Show merchant name (e.g., "PLESO PRIJEVOZ", "WIZZAIR"), amount, date
+- Flight itineraries: Look for "Total price of your trip: XX.XX EUR" patterns
 
 CRITICAL DATE PARSING INSTRUCTIONS:
 Documents may show dates in various EUROPEAN formats. You MUST recognize and correctly parse:
@@ -146,72 +174,63 @@ Documents may show dates in various EUROPEAN formats. You MUST recognize and cor
 - DD-MM-YYYY (e.g., 15-03-2025 = March 15, 2025)
 - DD.MM.YY (e.g., 22.11.25 = November 22, 2025) - 2-digit year means 20XX
 - "DD. MMM YYYY" with abbreviated month (e.g., "21. stu 2025" = November 21, 2025)
-- Dates with day names (e.g., "petak, 21. stu 2025." = Friday, November 21, 2025)
 
-MONTH NAMES - Full AND ABBREVIATED forms (tickets often use abbreviations like "stu" for studeni/November!):
+MONTH NAMES - Full AND ABBREVIATED forms:
   * Croatian: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
-  * Polish: styczeń, luty, marzec, kwiecień, maj, czerwiec, lipiec, sierpień, wrzesień, październik, listopad, grudzień
-  * Czech: leden, únor, březen, duben, květen, červen, červenec, srpen, září, říjen, listopad, prosinac
-  * Hungarian: január, február, március, április, május, június, július, augusztus, szeptember, október, november, december
+  * Croatian abbreviated: sij=Jan, velj=Feb, ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
   * German: Januar, Februar, März, April, Mai, Juni, Juli, August, September, Oktober, November, Dezember
   * Dutch: januari, februari, maart, april, mei, juni, juli, augustus, september, oktober, november, december
-  * Spanish: enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, octubre, noviembre, diciembre
-  * French: janvier, février, mars, avril, mai, juin, juillet, août, septembre, octobre, novembre, décembre
-  * Italian: gennaio, febbraio, marzo, aprile, maggio, giugno, luglio, agosto, settembre, ottobre, novembre, dicembre
-
-ABBREVIATED MONTHS (CRITICAL for ticket parsing):
-* Croatian: sij=Jan, velj=Feb, ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
-* German: Jan, Feb, Mär, Apr, Mai, Jun, Jul, Aug, Sep, Okt, Nov, Dez
-* Example: "petak, 21. stu 2025." = Friday, November 21, 2025 (stu = studeni = November)
 
 IMPORTANT: In European dates, the DAY comes FIRST, then the month. 15/03/2025 means March 15, NOT October 3!
 
 DATE TYPE CONTEXT:
-- If this is a BOARDING PASS: The date shown is the DEPARTURE/FLIGHT date (when the person actually flew)
-- If this is a FLIGHT INVOICE or BOOKING CONFIRMATION: There may be TWO dates:
-  * The PURCHASE DATE (when the ticket was bought) - often shown as "booking date", "purchase date", "invoice date"
-  * The DEPARTURE DATE (when the flight occurs) - shown as "flight date", "departure", or in the itinerary
-- If this is a TRAIN or BUS TICKET: The date is typically the TRAVEL date
+- BOARDING PASS: Date = DEPARTURE date (when person flew)
+- FLIGHT INVOICE/BOOKING: May have purchase date AND departure date - extract BOTH
+- TRAIN/BUS TICKET: Date = TRAVEL date
+- BANK TRANSACTION: Date = PURCHASE date (NOT travel date!) - set as purchaseDate, leave departureDate null
+
+PRICE EXTRACTION:
+- For flight itineraries, look for total price patterns like "Total price of your trip: 66.99 EUR"
+- Use null for amount if no price is visible - do NOT use 0
+- Only use 0 if the document explicitly shows a zero price
 
 Extract ALL information you can find. Respond with ONLY a JSON object:
 {
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "OTHER",
   "confidence": 0.0-1.0,
   "passengerName": "Full name of passenger or null",
-  "fromLocation": "Origin city/airport or null",
-  "toLocation": "Destination city/airport or null",
-  "departureDate": "YYYY-MM-DD (ALWAYS output in this format, regardless of input format) or null",
-  "purchaseDate": "YYYY-MM-DD (ALWAYS output in this format) or null",
-  "documentDate": "YYYY-MM-DD (ALWAYS output in this format) or null",
+  "fromLocation": "Origin city/airport or null (null for bank transactions without explicit route)",
+  "toLocation": "Destination city/airport or null (null for bank transactions without explicit route)",
+  "departureDate": "YYYY-MM-DD or null (null for bank transactions - use purchaseDate instead)",
+  "purchaseDate": "YYYY-MM-DD or null (use this for bank transaction dates)",
+  "documentDate": "YYYY-MM-DD or null",
   "flightNumber": "e.g., KL1234 or null",
   "airline": "e.g., KLM or null",
   "bookingReference": "PNR/confirmation code or null",
   "seatNumber": "e.g., 14A or null",
   "trainNumber": "Train number or null",
   "busCompany": "Bus company name or null",
-  "amount": 123.45 (numeric, total price) or null,
+  "merchantName": "For bank transactions: the merchant/company name (e.g., 'PLESO PRIJEVOZ', 'WIZZAIR') or null",
+  "amount": 123.45 (numeric, total price) or null (use null if unknown, NOT 0),
   "currency": "EUR/USD/GBP/PLN etc. or null",
   "isRoundTrip": true/false (true if this booking includes BOTH outbound AND return journey),
   "numberOfPassengers": 1 (count of passengers on this booking),
-  "allPassengerNames": "Name1, Name2, Name3" or null (comma-separated if multiple passengers),
+  "allPassengerNames": "Name1, Name2, Name3" or null,
   "outboundFlightNumber": "Flight number for outbound journey or null",
-  "returnFlightNumber": "Flight number for return journey or null"
+  "returnFlightNumber": "Flight number for return journey or null",
+  "outboundDepartureDate": "YYYY-MM-DD for outbound flight or null",
+  "returnDepartureDate": "YYYY-MM-DD for return flight or null"
 }
 
 IMPORTANT - Round-trip detection:
 - Look for keywords like "Return", "Round trip", "Hin- und Rückflug", "Retour", two different flight dates
 - If you see TWO flights in the booking (outbound AND return), set isRoundTrip to true
+- Extract BOTH outboundDepartureDate and returnDepartureDate if visible
 - For round-trips, fromLocation/toLocation should be the OUTBOUND journey
 - Set both outboundFlightNumber and returnFlightNumber if visible
 
-IMPORTANT - Multi-passenger detection:
-- Count how many passengers are listed on the booking
-- If more than 1 passenger, list all their names in allPassengerNames
-- The amount should be the TOTAL price for ALL passengers
-
 Extract real values only - use null if not visible.
-For station names like "Rotterdam C." or "Eindhoven C." use just the city name (Rotterdam, Eindhoven).
-For "Instaphalte: Airport" type entries, use the actual location (e.g., Eindhoven Airport).
+For station names like "Rotterdam C." or "Eindhoven C." use just the city name.
 REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
     contentParts.push({ type: 'text', text: prompt });
@@ -261,6 +280,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           seatNumber: parsed.seatNumber || null,
           trainNumber: parsed.trainNumber || null,
           busCompany: parsed.busCompany || null,
+          merchantName: parsed.merchantName || null,
           amount: parsed.amount || null,
           currency: parsed.currency || null,
           isRoundTrip: parsed.isRoundTrip || false,
@@ -285,6 +305,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           seatNumber: parsed.seatNumber || null,
           trainNumber: parsed.trainNumber || null,
           busCompany: parsed.busCompany || null,
+          merchantName: parsed.merchantName || null,
           amount: parsed.amount || null,
           currency: parsed.currency || null,
           isRoundTrip: parsed.isRoundTrip || false,
@@ -386,6 +407,8 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         allPassengerNames?: string;
         outboundFlightNumber?: string;
         returnFlightNumber?: string;
+        merchantName?: string;
+        busCompany?: string;
       };
       return {
         docIndex: i + 1,
@@ -405,6 +428,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         allPassengerNames: ext.allPassengerNames || null,
         outboundFlightNumber: ext.outboundFlightNumber || null,
         returnFlightNumber: ext.returnFlightNumber || null,
+        merchantName: ext.merchantName || ext.busCompany || null,
       };
     });
 
@@ -421,67 +445,86 @@ EXTRACTED DOCUMENT DATA:
 ${JSON.stringify(extractionSummary, null, 2)}
 
 YOUR TASK:
-1. DETECT THE ACTUAL HOME COUNTRY: Analyze ALL travel documents to determine which country the participant actually traveled FROM. Look for:
-   - Where does the return journey end? (This is likely their home country)
-   - What is the first origin and final destination across all documents?
-   - Multi-leg journeys: the TRUE home might not be the first city (e.g., someone might take a train from a small city to an airport in another city, then fly)
-   - Round-trip flights: the origin is their home
-   - Be smart about connecting flights or trains - the home country is where the COMPLETE journey starts and ends
+1. DETECT THE ACTUAL HOME COUNTRY: Analyze ALL travel documents to determine which country the participant actually traveled FROM.
+2. MERGE related documents into single travel items (see MERGING RULES below)
+3. Create a coherent journey timeline from home → project → home
+4. Flag only actionable warnings
 
-2. Understand the complete journey: The participant traveled from their home country to the project location and back.
-3. Link related documents: Match boarding passes to their flight invoices using booking references, flight numbers, or matching routes.
-4. Create travel items: Each distinct travel segment (e.g., outbound flight, return flight) should be a separate travel item.
-5. Identify issues: Flag any warnings (name mismatches, missing documents, conflicting data).
+=== CRITICAL MERGING RULES ===
 
-CRITICAL DATE PARSING:
-- Documents may contain dates in EUROPEAN format (DD/MM/YYYY or DD.MM.YYYY) - day comes FIRST!
-- Dates may include day names and abbreviated months (e.g., "petak, 21. stu 2025." = Friday, November 21, 2025)
-- ABBREVIATED MONTHS (critical for tickets): Croatian: sij=Jan, velj=Feb, ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
-- Full Croatian months: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
-- German months: Jan/Januar, Feb/Februar, Mär/März, Apr/April, Mai, Jun/Juni, Jul/Juli, Aug/August, Sep/September, Okt/Oktober, Nov/November, Dez/Dezember
-- Always output dates in YYYY-MM-DD format
+RULE 1: MERGE TICKETS AND BANK TRANSACTIONS
+When a ticket document and a bank transaction/payment clearly belong to the same journey, MERGE them into ONE travel item:
 
-WARNING RULES - BE VERY SELECTIVE:
-- Travel dates BEFORE project start and AFTER project end are COMPLETELY NORMAL - participants travel TO the event and BACK home
-- Do NOT warn about travel being before/after the project period unless it's MORE THAN 30 DAYS outside
-- Do NOT generate explanatory warnings like "appears to be returning home" - just process the data silently
-- Do NOT warn about round-trip bookings needing boarding passes (the UI shows this already)
-- ONLY generate warnings for ACTUAL PROBLEMS that need participant action:
-  * Name on ticket doesn't match participant name
-  * Multi-passenger booking needs portion specified
-  * Amount is 0 or missing
-  * Location couldn't be determined (shows as Unknown)
-- Keep warnings SHORT and ACTIONABLE, not explanatory
+Matching criteria:
+- Similar merchant/company name (e.g., "Pleso prijevoz" on ticket matches "PLESO PRIJEVOZ" on bank statement)
+- Compatible dates (purchase date may be before travel date)
+- Amount on payment matches expected ticket price
 
-IMPORTANT RULES:
-- Boarding pass dates are ALWAYS departure dates (when the person flew)
-- Invoice/booking dates might be purchase dates OR departure dates - use context to determine
-- If multiple documents exist for the SAME trip (e.g., Omio receipt + FlixBus ticket, or booking confirmation + boarding pass), use the HIGHEST price - that's what they actually paid including booking fees
-- If a boarding pass and invoice have the same route/flight, they are the SAME trip - combine into ONE travel item
-- Verify passenger name matches participant name (flag if different)
-- Each leg of the journey should be ONE travel item (don't duplicate for boarding pass + invoice)
-- Train receipts and tickets for the same journey should be combined - use the receipt amount as it's what was paid
+When merging:
+- Use FROM/TO from the TICKET document (not the payment)
+- Use DEPARTURE DATE from the TICKET document
+- Use AMOUNT from the PAYMENT document (if ticket has no price)
+- Link BOTH documents to the same travel item
+- Do NOT create a separate "Unknown → Unknown" item for the payment
 
-ROUND-TRIP HANDLING:
-- If a document has isRoundTrip=true, it contains BOTH outbound AND return flights in ONE booking
-- Create ONE travel item with the TOTAL price (do NOT split into two items)
-- Set isRoundTrip to true on the travel item
-- The fromLocation/toLocation should be the OUTBOUND journey (home country to project country)
-- Do NOT add a warning for round-trips (the UI already shows this information on the travel item)
-- Keep priceAllocation at 1.0 (full price)
+RULE 2: BANK TRANSACTIONS ARE NOT TRAVEL ITEMS
+For documents with type "BANK_TRANSACTION":
+- The date is a PURCHASE date, NOT a travel date
+- Do NOT create a standalone travel item unless you can match it to a ticket
+- If no matching ticket exists AND the merchant clearly implies a route, only then create an item
+- Example: "PLESO PRIJEVOZ" = Zagreb Airport shuttle - look for a matching bus ticket first
 
-MULTI-PASSENGER HANDLING:
-- If numberOfPassengers > 1, this booking covers multiple people
-- Set numberOfPassengers on the travel item
-- The amount stays as the TOTAL (don't divide) - participant will specify their portion later
-- Add a warning like "Multi-passenger booking (X passengers) - participant needs to specify their portion"
+RULE 3: USE ITINERARY DOCUMENTS FOR PRICES
+For flights:
+- Search booking confirmations for total price (e.g., "Total price of your trip: 66.99 EUR")
+- If found, use this price for the travel item
+- Boarding passes alone don't have prices - don't warn about missing price if an itinerary exists
+- Only warn about missing price if NO document has the price
+
+RULE 4: ROUND-TRIP BOOKING HANDLING (CRITICAL)
+When a booking is marked isRoundTrip=true:
+- Create ONE travel item (not two) with the COMBINED total price
+- Set isRoundTrip: true on the travel item
+- fromLocation/toLocation should be the OUTBOUND journey
+- Store outboundDepartureDate and returnDepartureDate if available
+- ALL boarding passes for ALL legs must be present for full confirmation
+- If only one boarding pass exists, warn: "Missing boarding pass for return flight"
+
+RULE 5: JOURNEY TIMELINE CONSISTENCY
+- Only create travel items for REAL documented journeys
+- Do NOT infer or guess legs that don't exist in documents
+- If documents show "Brussels (Charleroi) → Zagreb" for return, use that - don't assume "Eindhoven → Zagreb"
+- Each travel item represents one actual leg of the journey
+
+RULE 6: AMOUNT HANDLING
+- Use null for unknown amounts, NOT 0
+- 0 means the actual price was zero (rare)
+- null means price is unknown/not found
+
+=== DATE PARSING ===
+- European format: DD/MM/YYYY or DD.MM.YYYY - day comes FIRST!
+- Abbreviated months: Croatian: sij=Jan, velj=Feb, ozu=Mar, tra=Apr, svi=May, lip=Jun, srp=Jul, kol=Aug, ruj=Sep, lis=Oct, stu=Nov, pro=Dec
+- Always output in YYYY-MM-DD format
+
+=== WARNING RULES ===
+Only warn about ACTIONABLE problems:
+- Name mismatch between ticket and participant
+- Multi-passenger booking needs portion specified
+- Missing boarding pass for a flight (but NOT for round-trip bookings - UI handles this)
+- Amount is truly missing (not on any linked document)
+- Location is "Unknown"
+
+Do NOT warn about:
+- Travel dates before/after project (normal for travel to/from event)
+- Round-trip bookings (UI shows this)
+- Explanatory messages ("appears to be returning home")
 
 Respond with ONLY a JSON object:
 {
-  "journey_summary": "Brief description of the understood journey",
-  "detected_home_country": "Country name (e.g., 'Hungary', 'Netherlands') - the country where the participant's journey truly starts and ends",
+  "journey_summary": "Brief description: e.g., 'Elena traveled from Zagreb to Dordrecht via Charleroi, returning the same route'",
+  "detected_home_country": "Country name where journey starts and ends",
   "home_country_confidence": 0.0-1.0,
-  "home_country_reasoning": "Brief explanation of how you determined the home country (e.g., 'Return flight ends in Budapest, Hungary' or 'Round-trip booking originates from Warsaw, Poland')",
+  "home_country_reasoning": "Brief explanation",
   "travel_items": [
     {
       "modeOfTransport": "PLANE" | "TRAIN" | "BUS" | "CAR" | "FERRY" | "OTHER",
@@ -491,29 +534,29 @@ Respond with ONLY a JSON object:
       "arrivalDate": "YYYY-MM-DD or null",
       "bookingReference": "Reference or null",
       "flightNumber": "Flight number or null",
-      "amount": 123.45,
+      "amount": 123.45 or null (use null if unknown, NOT 0),
       "currency": "EUR",
       "purchaseDate": "YYYY-MM-DD or null",
       "linkedDocumentIds": ["doc-id-1", "doc-id-2"],
-      "notes": "Any relevant notes about this leg",
+      "notes": "Any relevant notes",
       "isRoundTrip": false,
-      "numberOfPassengers": 1
+      "numberOfPassengers": 1,
+      "outboundDepartureDate": "YYYY-MM-DD or null (for round-trips)",
+      "returnDepartureDate": "YYYY-MM-DD or null (for round-trips)"
     }
   ],
   "document_links": [
     {
-      "invoiceDocId": "doc-id-for-invoice",
-      "boardingPassDocId": "doc-id-for-boarding-pass",
-      "reason": "Why these are linked (e.g., same booking reference)"
+      "ticketDocId": "doc-id-for-ticket",
+      "paymentDocId": "doc-id-for-payment",
+      "reason": "Why these are linked"
     }
   ],
-  "warnings": [
-    "List any issues found (name mismatches, missing boarding passes, etc.)"
-  ],
+  "warnings": ["Only actionable issues"],
   "missing_documents": [
     {
       "type": "FLIGHT_BOARDING_PASS",
-      "description": "Missing boarding pass for flight on YYYY-MM-DD from X to Y"
+      "description": "Missing boarding pass for return flight on YYYY-MM-DD"
     }
   ]
 }`;
@@ -709,6 +752,7 @@ Respond with ONLY a JSON object:
       BUS_TICKET: 'BUS_TICKET',
       FUEL_RECEIPT: 'FUEL_RECEIPT',
       GREEN_TRAVEL_DECLARATION: 'GREEN_TRAVEL_DECLARATION',
+      BANK_TRANSACTION: 'BANK_TRANSACTION',
     };
     return (mapping[type] || 'OTHER') as DocumentType;
   }

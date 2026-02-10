@@ -13,6 +13,7 @@ export const DocumentType = {
   FUEL_RECEIPT: 'FUEL_RECEIPT',
   GREEN_TRAVEL_DECLARATION: 'GREEN_TRAVEL_DECLARATION',
   HOTEL_INVOICE: 'HOTEL_INVOICE',
+  BANK_TRANSACTION: 'BANK_TRANSACTION',
   OTHER: 'OTHER',
 } as const;
 export type DocumentType = typeof DocumentType[keyof typeof DocumentType];

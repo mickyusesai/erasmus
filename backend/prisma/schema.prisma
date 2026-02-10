@@ -138,6 +138,9 @@ model DocumentExtraction {
   trainNumber           String?
   busCompany            String?
 
+  // Bank transaction / payment specific
+  merchantName          String?      // Merchant name from bank transactions (e.g., "PLESO PRIJEVOZ", "WIZZAIR")
+
   // Pricing
   amount                Float?
   currency              String?
@@ -168,6 +171,7 @@ enum DocumentType {
   FUEL_RECEIPT
   GREEN_TRAVEL_DECLARATION
   HOTEL_INVOICE
+  BANK_TRANSACTION
   OTHER
 }
 
