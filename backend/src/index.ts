@@ -9,12 +9,16 @@ import { prisma } from './utils/prisma.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import adminRoutes from './routes/admin/index.js';
 import participantRoutes from './routes/participant/index.js';
+import { getStorageService } from './services/storage/index.js';
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Trust proxy (required for Railway/Heroku/etc to get correct client IP)
+app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet({
@@ -46,6 +50,49 @@ if (process.env.NODE_ENV === 'development') {
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Storage health check
+app.get('/api/health/storage', async (_req, res) => {
+  try {
+    const storage = getStorageService();
+    const testPath = `_health-check/${Date.now()}.txt`;
+    const testContent = `Storage health check at ${new Date().toISOString()}`;
+
+    // Test write
+    await storage.store(
+      {
+        buffer: Buffer.from(testContent),
+        originalname: 'health-check.txt',
+        mimetype: 'text/plain',
+        size: testContent.length,
+      },
+      testPath
+    );
+
+    // Test exists
+    const exists = await storage.exists(testPath);
+    if (!exists) {
+      throw new Error('File was stored but exists check failed');
+    }
+
+    // Test delete
+    await storage.delete(testPath);
+
+    res.json({
+      status: 'ok',
+      storageType: process.env.STORAGE_TYPE || 'local',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[Health] Storage check failed:', error);
+    res.status(500).json({
+      status: 'error',
+      storageType: process.env.STORAGE_TYPE || 'local',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 // Routes

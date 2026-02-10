@@ -360,6 +360,13 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  toggleTravelItemChecked: async (token: string, itemId: string) => {
+    const res = await fetch(`${API_BASE}/participant/travel-items/${itemId}/toggle-checked?token=${token}`, {
+      method: 'PATCH',
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
   createTravelItem: async (token: string, data: CreateTravelItemData & { documentId?: string }) => {
     const res = await fetch(`${API_BASE}/participant/travel-items?token=${token}`, {
       method: 'POST',
@@ -447,6 +454,15 @@ export const participantApi = {
       body: JSON.stringify({ amount, currency, purchaseDate }),
     });
     return handleResponse<CurrencyConversionResponse>(res);
+  },
+
+  /**
+   * Validate if a city is in a given country using geocoding
+   */
+  validateCityCountry: async (token: string, city: string, country: string) => {
+    const params = new URLSearchParams({ city, country });
+    const res = await fetch(`${API_BASE}/participant/validate-city-country?token=${token}&${params}`);
+    return handleResponse<CityCountryValidationResponse>(res);
   },
 
   // Document linking
@@ -743,6 +759,7 @@ export interface TravelItem {
   id: string;
   participantId: string;
   documentId?: string;
+  additionalDocumentIds?: string;  // JSON array of additional document IDs
   modeOfTransport: TransportMode;
   fromLocation: string;
   toLocation: string;
@@ -760,6 +777,7 @@ export interface TravelItem {
   tripGroupId?: string;  // Legacy
   priceAllocation?: number;  // Legacy
   totalGroupPrice?: number;  // Legacy
+  amountIncludedInRoundTrip?: boolean;  // True if this leg's amount is included in another leg's round-trip price
   // Multi-passenger bookings
   numberOfPassengers?: number;
   participantPortion?: number;
@@ -769,6 +787,10 @@ export interface TravelItem {
   // Validation
   routeMatchesCountry?: boolean;
   validationWarnings?: string;
+  // User confirmation
+  checked?: boolean;
+  // Exclusion from reimbursement
+  excludedFromReimbursement?: boolean;
 }
 
 export type TransportMode = 'PLANE' | 'TRAIN' | 'BUS' | 'CAR' | 'FERRY' | 'OTHER';
@@ -786,6 +808,9 @@ export interface CreateTravelItemData {
   purchaseDate?: string;
   amountEur: number;
   comment?: string;
+  // Document linking (for updates)
+  documentId?: string | null;
+  additionalDocumentIds?: string | null;  // JSON array string
 }
 
 export interface Declaration {
@@ -865,6 +890,9 @@ export interface ParticipantAuthResponse {
     bankAccountHolderName?: string;
     bankAccountBic?: string;
     participantNote?: string;
+    detectedHomeCountry?: string | null;
+    homeCountryConfidence?: number | null;
+    homeCountryReasoning?: string | null;
   };
   project: {
     id: string;
@@ -914,6 +942,13 @@ export interface CurrencyConversionResponse {
   purchaseDate: string;
   year: number;
   month: number;
+}
+
+export interface CityCountryValidationResponse {
+  city: string;
+  expectedCountry: string;
+  detectedCountry: string | null;
+  matches: boolean;
 }
 
 // Declaration of Travel types

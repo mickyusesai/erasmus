@@ -67,10 +67,14 @@ model Participant {
   participantNote           String?                 // Note from participant explaining travel situations (e.g., missed bus, lost ticket)
   lastMagicLinkSentAt       DateTime?
   journeyConsolidatedAt     DateTime?               // When the AI last consolidated all documents
+  detectedHomeCountry       String?                 // AI-detected home country based on travel patterns
+  homeCountryConfidence     Float?                  // Confidence score (0-1) for detected home country
+  homeCountryReasoning      String?                 // AI reasoning for the detected home country
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   documents                 Document[]
   travelItems               TravelItem[]
+  travelBookings            TravelBooking[]
   reimbursementSummary      ReimbursementSummary?
   changeLogEntries          ChangeLogEntry[]
   declarationsOnHonor       DeclarationOnHonor[]
@@ -135,6 +139,9 @@ model DocumentExtraction {
   trainNumber           String?
   busCompany            String?
 
+  // Bank transaction / payment specific
+  merchantName          String?      // Merchant name from bank transactions (e.g., "PLESO PRIJEVOZ", "WIZZAIR")
+
   // Pricing
   amount                Float?
   currency              String?
@@ -146,7 +153,11 @@ model DocumentExtraction {
   outboundFlightNumber  String?                   // For round-trips: outbound flight number
   returnFlightNumber    String?                   // For round-trips: return flight number
 
-  // Raw AI response for debugging
+  // Multi-ticket support (for documents containing multiple journey segments)
+  additionalTickets     String?      // JSON array of additional tickets found in this document
+
+  // AI reasoning for debugging
+  extractionReasoning   String?      // Brief explanation of how the AI extracted data
   rawAiResponse         String?
 
   // Processing status
@@ -165,7 +176,30 @@ enum DocumentType {
   FUEL_RECEIPT
   GREEN_TRAVEL_DECLARATION
   HOTEL_INVOICE
+  BANK_TRANSACTION
   OTHER
+}
+
+// TravelBooking - represents a booking that may contain multiple travel legs (e.g., round-trip flights)
+model TravelBooking {
+  id                    String                @id @default(uuid())
+  participantId         String
+  participant           Participant           @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  bookingReference      String?
+  isRoundTrip           Boolean               @default(false)
+  totalAmount           Float?                // Total booking price (may be null if unknown)
+  currency              String                @default("EUR")
+  totalAmountEur        Float?                // Converted to EUR
+  numberOfPassengers    Int?                  // If booking covers multiple passengers
+  documentIds           String?               // JSON array of document IDs that evidence this booking
+
+  // Price editability
+  hasPerLegPrices       Boolean               @default(false)  // True if per-leg prices were found in documents
+  priceSource           String?               // Description of where the price came from (e.g., "Itinerary doc #3")
+
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  travelItems           TravelItem[]          // The individual legs in this booking
 }
 
 // TravelItem - a travel segment extracted from documents
@@ -175,6 +209,12 @@ model TravelItem {
   participant           Participant           @relation(fields: [participantId], references: [id], onDelete: Cascade)
   documentId            String?
   document              Document?             @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  additionalDocumentIds String?               // JSON array of additional document IDs linked to this travel item
+
+  // Link to booking (for round-trips and multi-leg journeys)
+  bookingId             String?
+  booking               TravelBooking?        @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
   modeOfTransport       TransportMode
   fromLocation          String
   toLocation            String
@@ -182,19 +222,26 @@ model TravelItem {
   arrivalDate           DateTime?
   bookingReference      String?
   flightNumber          String?
-  amountOriginal        Float
+  amountOriginal        Float?                // Nullable: null if price unknown or part of booking
   currencyOriginal      String                @default("EUR")
   purchaseDate          DateTime?
-  amountEur             Float
+  amountEur             Float?                // Nullable: null if price unknown or part of booking
   comment               String?
   manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
+  checked               Boolean               @default(false)  // User confirmed this travel item is correct
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
 
-  // Round-trip bookings
-  isRoundTrip           Boolean               @default(false)  // True if this is a round-trip booking (requires 2 boarding passes)
-  tripGroupId           String?               // Groups related travel items (legacy, kept for compatibility)
-  priceAllocation       Float                 @default(1.0)  // Portion of total price (legacy, kept for compatibility)
-  totalGroupPrice       Float?                // Total price before allocation (legacy, kept for compatibility)
+  // Price editability for this leg
+  priceEditable             Boolean               @default(true)   // False if part of booking with only total price
+  priceMissing              Boolean               @default(false)  // True if no price found in any document
+  priceSourceDocId          String?               // Document ID where this price was found
+  amountIncludedInRoundTrip Boolean               @default(false)  // True if this is return leg with price on outbound
+
+  // Legacy round-trip fields (kept for compatibility, prefer using TravelBooking)
+  isRoundTrip           Boolean               @default(false)
+  tripGroupId           String?
+  priceAllocation       Float                 @default(1.0)
+  totalGroupPrice       Float?
 
   // Multi-passenger bookings
   numberOfPassengers    Int?                  // If this booking was for multiple people
@@ -207,6 +254,9 @@ model TravelItem {
   // Validation flags
   routeMatchesCountry   Boolean?              // Whether from/to matches participant's country
   validationWarnings    String?               // JSON array of warning messages
+
+  // Exclusion from reimbursement
+  excludedFromReimbursement Boolean           @default(false)  // User marked this item to be excluded from reimbursement (e.g., personal trip)
 
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt

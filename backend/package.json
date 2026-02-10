@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -16,7 +19,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
-    "@prisma/client": "^5.10.0",
+    "@aws-sdk/client-s3": "^3.981.0",
+    "@aws-sdk/s3-request-presigner": "^3.981.0",
+    "@prisma/client": "^6.19.2",
     "@types/pdfkit": "^0.17.4",
     "archiver": "^6.0.1",
     "cors": "^2.8.5",
@@ -26,6 +31,9 @@
     "express-rate-limit": "^7.1.5",
     "helmet": "^7.1.0",
     "multer": "^1.4.5-lts.1",
+    "openai": "^6.19.0",
+    "pdf-parse": "^2.4.5",
+    "pdf2pic": "^3.2.0",
     "pdfkit": "^0.17.2",
     "sharp": "^0.33.2",
     "uuid": "^9.0.1",
@@ -38,7 +46,7 @@
     "@types/multer": "^1.4.11",
     "@types/node": "^20.11.16",
     "@types/uuid": "^9.0.8",
-    "prisma": "^5.10.0",
+    "prisma": "^6.19.2",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "vitest": "^1.2.2"

@@ -125,6 +125,7 @@ export class MockAiService implements TravelDocumentAiService {
       FUEL_RECEIPT: 'fuel receipt',
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
       HOTEL_INVOICE: 'hotel invoice',
+      BANK_TRANSACTION: 'bank transaction',
       OTHER: 'document',
     };
 
@@ -281,10 +282,12 @@ export class MockAiService implements TravelDocumentAiService {
       throw new Error('Participant not found');
     }
 
-    // Calculate total EUR
+    // Calculate total EUR (only count items with known amounts, exclude items marked as excluded)
     let totalEur = 0;
     for (const item of participant.travelItems) {
-      totalEur += item.amountEur;
+      if (!item.excludedFromReimbursement && item.amountEur !== null) {
+        totalEur += item.amountEur;
+      }
     }
 
     // Get max reimbursement for participant's country

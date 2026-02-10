@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -209,6 +209,7 @@ export default function ReimbursementPage() {
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
   const [activeTab, setActiveTab] = useState<ActiveTab>('reimbursement');
+  const [aiConsolidationWarnings, setAiConsolidationWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     if (!token) {
@@ -217,7 +218,7 @@ export default function ReimbursementPage() {
   }, [token, navigate]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['participant-auth', token],
+    queryKey: ['participant-auth'],
     queryFn: () => participantApi.authenticate(token!),
     enabled: !!token,
     retry: false,
@@ -345,6 +346,7 @@ export default function ReimbursementPage() {
                 data={data}
                 token={token}
                 onNext={() => setCurrentStep(2)}
+                onAiWarnings={setAiConsolidationWarnings}
               />
             )}
             {currentStep === 2 && (
@@ -353,6 +355,7 @@ export default function ReimbursementPage() {
                 token={token}
                 onBack={() => setCurrentStep(1)}
                 onNext={() => setCurrentStep(3)}
+                aiWarnings={aiConsolidationWarnings}
               />
             )}
             {currentStep === 3 && (
@@ -453,20 +456,24 @@ function Step1Upload({
   data,
   token,
   onNext,
+  onAiWarnings,
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onNext: () => void;
+  onAiWarnings: (warnings: string[]) => void;
 }) {
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, filename: '' });
   const [consolidating, setConsolidating] = useState(false);
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => participantApi.uploadDocument(token, file),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
-      toast.success('Document uploaded and analyzed');
+    onSuccess: async () => {
+      // Use refetchQueries to immediately show the uploaded file
+      // (invalidateQueries only marks stale, doesn't wait for refetch)
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
     },
     onError: () => {
       toast.error('Failed to upload document');
@@ -482,39 +489,63 @@ function Step1Upload({
   });
 
   // Consolidation: AI analyzes all documents together to build the journey
+  const consolidatingRef = useRef(false);
   const handleContinue = async () => {
+    // Guard against double-clicks / race conditions
+    if (consolidatingRef.current || consolidating) {
+      console.log('[UI] Consolidation already in progress, ignoring');
+      return;
+    }
+    consolidatingRef.current = true;
     setConsolidating(true);
     try {
       const result = await participantApi.consolidateJourney(token);
 
+      // Store AI warnings to display on the next step as persistent banners
       if (result.warnings && result.warnings.length > 0) {
-        // Show warnings but still proceed
-        result.warnings.forEach((warning: string) => {
-          toast(warning, { icon: '⚠️', duration: 5000 });
-        });
-      }
-
-      if (result.success) {
-        toast.success(result.message || 'Journey analyzed successfully');
+        onAiWarnings(result.warnings);
+      } else {
+        onAiWarnings([]);
       }
 
       // Refresh data and move to next step
-      await queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      // Use refetchQueries instead of invalidateQueries to ensure fresh data is loaded
+      // before advancing to step 2 (invalidateQueries only marks as stale, doesn't wait for refetch)
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
       onNext();
     } catch (error) {
       console.error('Consolidation error:', error);
       toast.error('Failed to analyze journey. Please try again.');
+    } finally {
+      setConsolidating(false);
+      consolidatingRef.current = false;
     }
-    setConsolidating(false);
   };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    if (acceptedFiles.length === 0) return;
+
     setUploading(true);
-    for (const file of acceptedFiles) {
-      await uploadMutation.mutateAsync(file);
+    setUploadProgress({ current: 0, total: acceptedFiles.length, filename: '' });
+
+    for (let i = 0; i < acceptedFiles.length; i++) {
+      const file = acceptedFiles[i];
+      setUploadProgress({ current: i + 1, total: acceptedFiles.length, filename: file.name });
+      try {
+        await uploadMutation.mutateAsync(file);
+      } catch {
+        // Error already handled by mutation
+      }
     }
+
     setUploading(false);
-  }, []);
+    setUploadProgress({ current: 0, total: 0, filename: '' });
+    if (acceptedFiles.length > 1) {
+      toast.success(`${acceptedFiles.length} documents uploaded`);
+    } else {
+      toast.success('Document uploaded');
+    }
+  }, [uploadMutation]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -540,6 +571,17 @@ function Step1Upload({
 
   const isGreenTravel = data.greenTravel || false;
 
+  // Handler to view document using signed URL
+  const handleViewDocument = async (docId: string) => {
+    try {
+      const result = await participantApi.getDocumentUrl(token, docId);
+      window.open(result.url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      console.error('Failed to get document URL:', error);
+      toast.error('Failed to open document');
+    }
+  };
+
   return (
     <>
       {/* Show loading screen with Erasmus quotes during consolidation */}
@@ -550,9 +592,9 @@ function Step1Upload({
           <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
         <p className="text-gray-500 mt-1">
           {isGreenTravel ? (
-            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). We'll automatically extract the information.</>
+            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). For best results, upload everything at once so our AI can understand your complete journey and link related documents together.</>
           ) : (
-            'Upload all your travel tickets, invoices, and boarding passes. We\'ll automatically extract the information.'
+            'Upload all your travel tickets, invoices, and boarding passes. For best results, upload everything at once so our AI can understand your complete journey and link related documents together.'
           )}
         </p>
         {isGreenTravel && (
@@ -571,10 +613,27 @@ function Step1Upload({
         >
           <input {...getInputProps()} />
           {uploading ? (
-            <>
+            <div className="text-center">
               <Loader2 className="w-12 h-12 text-primary-400 animate-spin mx-auto mb-4" />
-              <p className="text-gray-600">Uploading and analyzing document...</p>
-            </>
+              {uploadProgress.total > 1 ? (
+                <>
+                  <p className="text-gray-600 font-medium">
+                    Uploading {uploadProgress.current} of {uploadProgress.total}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1 truncate max-w-xs mx-auto">
+                    {uploadProgress.filename}
+                  </p>
+                  <div className="w-48 h-2 bg-gray-200 rounded-full mx-auto mt-3">
+                    <div
+                      className="h-2 bg-primary-500 rounded-full transition-all duration-300"
+                      style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-gray-600">Uploading document...</p>
+              )}
+            </div>
           ) : (
             <>
               <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
@@ -596,46 +655,29 @@ function Step1Upload({
             <h3 className="font-semibold text-gray-900 mb-4">Uploaded Documents</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {data.documents.map((doc) => {
-                const isUnclear = doc.documentType === 'OTHER';
                 return (
-                  <div key={doc.id} className={clsx(
-                    "p-4 rounded-xl",
-                    isUnclear ? "bg-amber-50 border border-amber-200" : "bg-gray-50"
-                  )}>
+                  <div key={doc.id} className="p-4 rounded-xl bg-gray-50">
                     <div className="flex items-start gap-3">
-                      <div className={clsx(
-                        "w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0",
-                        isUnclear ? "bg-amber-100 border-amber-300" : "bg-white border-gray-200"
-                      )}>
-                        <FileText className={clsx("w-5 h-5", isUnclear ? "text-amber-600" : "text-gray-400")} />
+                      <div className="w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0 bg-white border-gray-200">
+                        <FileText className="w-5 h-5 text-gray-400" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-gray-900 truncate text-sm">
                           {doc.renamedFilename}
                         </p>
-                        <p className={clsx("text-xs", isUnclear ? "text-amber-600" : "text-gray-500")}>
-                          {docTypeLabels[doc.documentType]}
+                        <p className="text-xs text-gray-500">
+                          {docTypeLabels[doc.documentType] || 'Document'}
                         </p>
                       </div>
                     </div>
-                    {isUnclear && (
-                      <div className="mt-2 p-2 bg-amber-100 rounded-lg">
-                        <p className="text-xs text-amber-800">
-                          <strong>Note:</strong> This document couldn't be fully analyzed (image may be unclear).
-                          You can add the travel details manually in the next step.
-                        </p>
-                      </div>
-                    )}
                     <div className="flex gap-3 mt-3">
-                      <a
-                        href={`/api/uploads/${doc.storedFilePath}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        onClick={() => handleViewDocument(doc.id)}
                         className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
                       >
                         <ExternalLink className="w-3 h-3" />
                         View
-                      </a>
+                      </button>
                       <button
                         onClick={() => deleteMutation.mutate(doc.id)}
                         className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
@@ -671,7 +713,7 @@ function Step1Upload({
 // Warning type for the persistent warnings system
 interface PersistentWarning {
   id: string;
-  type: 'error' | 'warning' | 'info';
+  type: 'error' | 'warning' | 'info' | 'notification' | 'success';
   message: string;
   dismissible: boolean;
 }
@@ -681,11 +723,13 @@ function Step2CheckData({
   token,
   onBack,
   onNext,
+  aiWarnings = [],
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onBack: () => void;
   onNext: () => void;
+  aiWarnings?: string[];
 }) {
   const queryClient = useQueryClient();
   const [showAddTravelModal, setShowAddTravelModal] = useState(false);
@@ -695,6 +739,29 @@ function Step2CheckData({
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
   const [missingBoardingPassItem, setMissingBoardingPassItem] = useState<TravelItem | null>(null);
+
+  // Calculate unlinked documents (uploaded but not connected to any travel item)
+  // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
+  // Include both primary documentId and additionalDocumentIds in the linked set
+  const linkedDocIds = useMemo(() => {
+    const ids = new Set<string>();
+    data.travelItems.forEach(t => {
+      if (t.documentId) ids.add(t.documentId);
+      if (t.additionalDocumentIds) {
+        try {
+          const additionalIds = JSON.parse(t.additionalDocumentIds) as string[];
+          additionalIds.forEach(id => ids.add(id));
+        } catch {
+          // Ignore invalid JSON
+        }
+      }
+    });
+    return ids;
+  }, [data.travelItems]);
+  const unlinkedDocs = data.documents.filter(d =>
+    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+  );
+  const hasUnlinkedDocs = unlinkedDocs.length > 0;
 
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
@@ -708,23 +775,137 @@ function Step2CheckData({
   const updateMutation = useMutation({
     mutationFn: ({ id, updates }: { id: string; updates: Partial<TravelItem> }) =>
       participantApi.updateTravelItem(token, id, updates),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+    // Optimistic update for instant UI feedback
+    onMutate: async ({ id, updates }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
+      // Snapshot the previous value
+      const previousData = queryClient.getQueryData(['participant-auth']);
+      // Optimistically update the cache
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.map((item: TravelItem) =>
+            item.id === id ? { ...item, ...updates } : item
+          ),
+        };
+      });
+      return { previousData };
     },
+    onError: (_err, _variables, context) => {
+      // Revert to previous data on error
+      if (context?.previousData) {
+        queryClient.setQueryData(['participant-auth'], context.previousData);
+      }
+      toast.error('Failed to update travel item');
+    },
+    // No onSettled refetch - optimistic update is sufficient
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => participantApi.deleteTravelItem(token, id),
+    // Optimistic delete for instant UI feedback
+    onMutate: async (id) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
+      // Snapshot the previous value
+      const previousData = queryClient.getQueryData(['participant-auth']);
+      // Optimistically remove from the cache
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.filter((item: TravelItem) => item.id !== id),
+        };
+      });
+      return { previousData };
+    },
+    onError: (_err, _variables, context) => {
+      // Revert to previous data on error
+      if (context?.previousData) {
+        queryClient.setQueryData(['participant-auth'], context.previousData);
+      }
+      toast.error('Failed to remove travel item');
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
       toast.success('Travel item removed');
+    },
+    // No onSettled refetch - optimistic update is sufficient
+  });
+
+  const toggleCheckedMutation = useMutation({
+    mutationFn: (id: string) => {
+      console.log('[Mutation] toggleCheckedMutation called with id:', id, 'token:', token ? 'present' : 'missing');
+      return participantApi.toggleTravelItemChecked(token, id);
+    },
+    // Optimistic update for instant UI feedback
+    onMutate: async (id) => {
+      console.log('[Mutation] onMutate called for id:', id);
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
+      // Snapshot the previous value
+      const previousData = queryClient.getQueryData(['participant-auth']) as ParticipantAuthResponse | undefined;
+      // Optimistically toggle the checked state
+      queryClient.setQueryData(['participant-auth'], (old: ParticipantAuthResponse | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.map((item: TravelItem) =>
+            item.id === id ? { ...item, checked: !item.checked } : item
+          ),
+        };
+      });
+      return { previousData };
+    },
+    onError: (_err, _id, context) => {
+      // Revert to previous data on error
+      if (context?.previousData) {
+        queryClient.setQueryData(['participant-auth'], context.previousData);
+      }
+      toast.error('Failed to update confirmation status');
+    },
+    onSuccess: (updatedItem) => {
+      // Update the cache with the server response to ensure consistency
+      queryClient.setQueryData(['participant-auth'], (old: ParticipantAuthResponse | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.map((item: TravelItem) =>
+            item.id === updatedItem.id ? { ...item, checked: updatedItem.checked } : item
+          ),
+        };
+      });
     },
   });
 
   // Generate persistent warnings based on data analysis
   const warnings = useMemo((): PersistentWarning[] => {
     const w: PersistentWarning[] = [];
-    const participantCountry = data.participant.country?.toLowerCase();
+
+    // Add confirmation guidance notification if there are unconfirmed items
+    const unconfirmedCount = data.travelItems.filter(item => !item.checked).length;
+    if (data.travelItems.length > 0 && unconfirmedCount > 0) {
+      w.push({
+        id: 'confirmation-guidance',
+        type: 'success',
+        message: `Please review each travel item below and click "Confirm" when the information is correct. (${data.travelItems.length - unconfirmedCount}/${data.travelItems.length} confirmed)`,
+        dismissible: true,
+      });
+    }
+
+    // Add AI consolidation warnings as notifications (friendlier style)
+    // Filter out round-trip warnings as they're shown at the travel item level
+    aiWarnings
+      .filter(warning => !warning.toLowerCase().includes('round-trip') && !warning.toLowerCase().includes('round trip'))
+      .forEach((warning, index) => {
+        w.push({
+          id: `ai-warning-${index}`,
+          type: 'notification',
+          message: warning,
+          dismissible: true,
+        });
+      });
 
     // Check for missing boarding passes for flights
     const hasFlights = data.travelItems.some(t => t.modeOfTransport === 'PLANE');
@@ -749,65 +930,16 @@ function Step2CheckData({
       });
     }
 
-    // Check if participant traveled from their registered country
-    if (participantCountry && data.travelItems.length > 0) {
-      // Find the first outbound travel item (earliest departure)
-      const sortedItems = [...data.travelItems].sort(
-        (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
-      );
-      const firstTravelItem = sortedItems[0];
-
-      if (firstTravelItem) {
-        const originLocation = firstTravelItem.fromLocation?.toLowerCase() || '';
-        // Check if the origin doesn't match the participant's country
-        const countryDoesNotMatch = !originLocation.includes(participantCountry) &&
-          !participantCountry.includes(originLocation.split(',')[0]?.trim() || '');
-
-        // List of common city-to-country mappings for better matching
-        const cityCountryMap: Record<string, string[]> = {
-          'poland': ['warsaw', 'krakow', 'poznan', 'gdansk', 'wroclaw', 'lodz', 'katowice'],
-          'germany': ['berlin', 'munich', 'frankfurt', 'hamburg', 'cologne', 'dusseldorf', 'stuttgart'],
-          'spain': ['madrid', 'barcelona', 'valencia', 'seville', 'malaga', 'bilbao'],
-          'italy': ['rome', 'milan', 'naples', 'turin', 'florence', 'venice', 'bologna'],
-          'france': ['paris', 'lyon', 'marseille', 'toulouse', 'nice', 'bordeaux'],
-          'netherlands': ['amsterdam', 'rotterdam', 'the hague', 'utrecht', 'eindhoven'],
-          'czech republic': ['prague', 'brno', 'ostrava', 'plzen'],
-          'czechia': ['prague', 'brno', 'ostrava', 'plzen'],
-          'hungary': ['budapest', 'debrecen', 'szeged', 'miskolc'],
-          'romania': ['bucharest', 'cluj', 'timisoara', 'iasi', 'brasov'],
-          'bulgaria': ['sofia', 'plovdiv', 'varna', 'burgas'],
-          'greece': ['athens', 'thessaloniki', 'patras', 'heraklion'],
-          'portugal': ['lisbon', 'porto', 'faro', 'braga'],
-          'croatia': ['zagreb', 'split', 'dubrovnik', 'rijeka'],
-          'slovenia': ['ljubljana', 'maribor'],
-          'slovakia': ['bratislava', 'kosice'],
-          'austria': ['vienna', 'salzburg', 'graz', 'linz', 'innsbruck'],
-          'belgium': ['brussels', 'antwerp', 'ghent', 'bruges', 'liege'],
-          'sweden': ['stockholm', 'gothenburg', 'malmo', 'uppsala'],
-          'denmark': ['copenhagen', 'aarhus', 'odense'],
-          'finland': ['helsinki', 'tampere', 'turku', 'oulu'],
-          'norway': ['oslo', 'bergen', 'trondheim', 'stavanger'],
-          'ireland': ['dublin', 'cork', 'galway', 'limerick'],
-          'uk': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
-          'united kingdom': ['london', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'edinburgh'],
-        };
-
-        // Check if origin city matches participant's country
-        const countryKey = Object.keys(cityCountryMap).find(
-          k => participantCountry.includes(k) || k.includes(participantCountry)
-        );
-        const matchingCities = countryKey ? cityCountryMap[countryKey] : [];
-        const originMatchesCountry = matchingCities.some(city => originLocation.includes(city));
-
-        if (countryDoesNotMatch && !originMatchesCountry) {
-          w.push({
-            id: 'country-mismatch',
-            type: 'warning',
-            message: `Your first travel origin (${firstTravelItem.fromLocation}) appears to be different from your registered country (${data.participant.country}). Please verify this is correct.`,
-            dismissible: true,
-          });
-        }
-      }
+    // Check if AI-detected home country differs from registered country
+    // This uses AI reasoning based on travel patterns (return flights, round-trip origins, etc.)
+    if (data.participant.detectedHomeCountry &&
+        data.participant.detectedHomeCountry.toLowerCase() !== data.participant.country?.toLowerCase()) {
+      w.push({
+        id: 'country-mismatch',
+        type: 'warning',
+        message: `Based on your travel documents, it appears you traveled from ${data.participant.detectedHomeCountry}, but your registered country is ${data.participant.country}. ${data.participant.homeCountryReasoning ? `(${data.participant.homeCountryReasoning})` : ''} Please verify this is correct.`,
+        dismissible: true,
+      });
     }
 
     // Check for non-EUR currencies without purchase date
@@ -824,7 +956,7 @@ function Step2CheckData({
     }
 
     return w;
-  }, [data]);
+  }, [data, aiWarnings]);
 
   // Filter out dismissed warnings
   const visibleWarnings = warnings.filter(w => !dismissedWarnings.has(w.id));
@@ -833,57 +965,101 @@ function Step2CheckData({
     setDismissedWarnings(prev => new Set([...prev, id]));
   };
 
+  // Auto-dismiss AI warnings when issues are fixed
+  useEffect(() => {
+    // Check if there are any "Unknown" locations or 0 amounts left
+    const hasUnknownLocations = data.travelItems.some(
+      t => t.fromLocation?.toLowerCase() === 'unknown' || t.toLocation?.toLowerCase() === 'unknown'
+    );
+    const hasZeroAmounts = data.travelItems.some(t => t.amountOriginal === 0);
+
+    // Auto-dismiss AI warnings about unknown locations if all are filled
+    if (!hasUnknownLocations) {
+      aiWarnings.forEach((warning, index) => {
+        const warningLower = warning.toLowerCase();
+        if (warningLower.includes('unknown') || warningLower.includes('location') || warningLower.includes('could not determine')) {
+          dismissWarning(`ai-warning-${index}`);
+        }
+      });
+    }
+
+    // Auto-dismiss AI warnings about amounts if all are filled
+    if (!hasZeroAmounts) {
+      aiWarnings.forEach((warning, index) => {
+        const warningLower = warning.toLowerCase();
+        if (warningLower.includes('amount') || warningLower.includes('price') || warningLower.includes('€0') || warningLower.includes('0 eur')) {
+          dismissWarning(`ai-warning-${index}`);
+        }
+      });
+    }
+  }, [data.travelItems, aiWarnings]);
+
   return (
     <div className="space-y-6">
       {/* Persistent Warnings Section */}
       {visibleWarnings.length > 0 && (
         <div className="space-y-3">
-          {visibleWarnings.map((warning) => (
-            <div
-              key={warning.id}
-              className={clsx(
-                'p-4 rounded-xl flex items-start gap-3 border',
-                warning.type === 'error' && 'bg-red-50 border-red-200',
-                warning.type === 'warning' && 'bg-amber-50 border-amber-200',
-                warning.type === 'info' && 'bg-blue-50 border-blue-200'
-              )}
-            >
-              <AlertTriangle
+          {visibleWarnings.map((warning) => {
+            // Use different icons based on type
+            const IconComponent = warning.type === 'success' ? CheckCircle
+              : warning.type === 'notification' ? Info
+              : AlertTriangle;
+
+            return (
+              <div
+                key={warning.id}
                 className={clsx(
-                  'w-5 h-5 flex-shrink-0 mt-0.5',
-                  warning.type === 'error' && 'text-red-500',
-                  warning.type === 'warning' && 'text-amber-500',
-                  warning.type === 'info' && 'text-blue-500'
+                  'p-4 rounded-xl flex items-start gap-3 border',
+                  warning.type === 'error' && 'bg-red-50 border-red-200',
+                  warning.type === 'warning' && 'bg-amber-50 border-amber-200',
+                  warning.type === 'info' && 'bg-blue-50 border-blue-200',
+                  warning.type === 'notification' && 'bg-indigo-50 border-indigo-200',
+                  warning.type === 'success' && 'bg-emerald-50 border-emerald-200'
                 )}
-              />
-              <div className="flex-1">
-                <p
+              >
+                <IconComponent
                   className={clsx(
-                    'text-sm font-medium',
-                    warning.type === 'error' && 'text-red-800',
-                    warning.type === 'warning' && 'text-amber-800',
-                    warning.type === 'info' && 'text-blue-800'
+                    'w-5 h-5 flex-shrink-0 mt-0.5',
+                    warning.type === 'error' && 'text-red-500',
+                    warning.type === 'warning' && 'text-amber-500',
+                    warning.type === 'info' && 'text-blue-500',
+                    warning.type === 'notification' && 'text-indigo-500',
+                    warning.type === 'success' && 'text-emerald-500'
                   )}
-                >
-                  {warning.message}
-                </p>
+                />
+                <div className="flex-1">
+                  <p
+                    className={clsx(
+                      'text-sm font-medium',
+                      warning.type === 'error' && 'text-red-800',
+                      warning.type === 'warning' && 'text-amber-800',
+                      warning.type === 'info' && 'text-blue-800',
+                      warning.type === 'notification' && 'text-indigo-800',
+                      warning.type === 'success' && 'text-emerald-800'
+                    )}
+                  >
+                    {warning.message}
+                  </p>
+                </div>
+                {warning.dismissible && (
+                  <button
+                    onClick={() => dismissWarning(warning.id)}
+                    className={clsx(
+                      'p-1 rounded-full hover:bg-white/50 transition-colors',
+                      warning.type === 'error' && 'text-red-400 hover:text-red-600',
+                      warning.type === 'warning' && 'text-amber-400 hover:text-amber-600',
+                      warning.type === 'info' && 'text-blue-400 hover:text-blue-600',
+                      warning.type === 'notification' && 'text-indigo-400 hover:text-indigo-600',
+                      warning.type === 'success' && 'text-emerald-400 hover:text-emerald-600'
+                    )}
+                    title="Dismiss"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
-              {warning.dismissible && (
-                <button
-                  onClick={() => dismissWarning(warning.id)}
-                  className={clsx(
-                    'p-1 rounded-full hover:bg-white/50 transition-colors',
-                    warning.type === 'error' && 'text-red-400 hover:text-red-600',
-                    warning.type === 'warning' && 'text-amber-400 hover:text-amber-600',
-                    warning.type === 'info' && 'text-blue-400 hover:text-blue-600'
-                  )}
-                  title="Dismiss"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -914,15 +1090,28 @@ function Step2CheckData({
               </p>
             </div>
             <Button
-              variant="secondary"
+              variant={hasUnlinkedDocs ? "primary" : "secondary"}
               onClick={() => setShowAddTravelModal(true)}
+              className={hasUnlinkedDocs ? "ring-2 ring-amber-400 ring-offset-2 animate-pulse" : ""}
             >
               <Plus className="w-4 h-4 mr-2" />
               Add Travel
+              {hasUnlinkedDocs && (
+                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs rounded-full">
+                  {unlinkedDocs.length}
+                </span>
+              )}
             </Button>
           </div>
         </CardHeader>
         <CardContent>
+          {/* Eligibility guidance */}
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-sm text-blue-800">
+              <strong>Important:</strong> Please only add travel items that are eligible for Erasmus+ reimbursement. This includes travel from your home country to the project location and back, within the approved project and travel dates. Do not add trips to other destinations, extra days, or personal travel. If a travel item is not eligible for reimbursement, it should not be added here.
+            </p>
+          </div>
+
           {data.travelItems.length > 0 ? (
             <div className="space-y-6">
               {data.travelItems.map((item) => (
@@ -936,6 +1125,7 @@ function Step2CheckData({
                     updateMutation.mutate({ id: item.id, updates })
                   }
                   onDelete={() => deleteMutation.mutate(item.id)}
+                  onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
                   onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
                   onViewDocument={setViewingDocument}
                   onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
@@ -995,13 +1185,18 @@ function Step2CheckData({
             {/* Itemized List */}
             <div className="space-y-2 mb-4">
               {data.travelItems.map((item) => (
-                <div key={item.id} className="flex justify-between text-sm">
+                <div
+                  key={item.id}
+                  className="flex justify-between text-sm"
+                >
                   <span className="text-gray-600">
                     {item.fromLocation} → {item.toLocation}
                     <span className="text-gray-400 ml-2">({item.modeOfTransport.toLowerCase()})</span>
                     {item.comment && <span className="text-gray-400 ml-1">*</span>}
                   </span>
-                  <span className="text-gray-900 font-medium">{formatCurrency(item.amountEur)}</span>
+                  <span className="font-medium text-gray-900">
+                    {formatCurrency(item.amountEur)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -1010,45 +1205,71 @@ function Step2CheckData({
             <div className="border-t border-gray-300 my-4" />
 
             {/* Total with max reimbursement inline */}
-            <div className="flex items-baseline justify-between">
-              <div className="flex items-baseline gap-3">
-                <div>
-                  <p className="text-sm text-gray-500">Total Travel Costs</p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {formatCurrency(data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0))}
-                  </p>
+            {(() => {
+              const total = data.travelItems.reduce((sum, item) => sum + item.amountEur, 0);
+
+              return (
+                <div className="flex items-baseline justify-between">
+                  <div className="flex items-baseline gap-3">
+                    <div>
+                      <p className="text-sm text-gray-500">Total Travel Costs</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {formatCurrency(total)}
+                      </p>
+                    </div>
+                    {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
+                      <span className="text-sm text-blue-600 font-medium">
+                        (max: {formatCurrency(data.maxReimbursementForCountry)})
+                      </span>
+                    )}
+                  </div>
+                  {/* Show actual amount to receive if over limit */}
+                  {data.maxReimbursementForCountry && total > data.maxReimbursementForCountry && (
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">You will receive</p>
+                      <p className="text-lg font-bold text-emerald-600">
+                        {formatCurrency(data.maxReimbursementForCountry)}
+                      </p>
+                    </div>
+                  )}
                 </div>
-                {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
-                  <span className="text-sm text-blue-600 font-medium">
-                    (max: {formatCurrency(data.maxReimbursementForCountry)})
-                  </span>
-                )}
-              </div>
-              {/* Show actual amount to receive if over limit */}
-              {data.maxReimbursementForCountry &&
-               (data.reimbursementSummary?.totalEur || data.travelItems.reduce((sum, item) => sum + item.amountEur, 0)) > data.maxReimbursementForCountry && (
-                <div className="text-right">
-                  <p className="text-xs text-gray-500">You will receive</p>
-                  <p className="text-lg font-bold text-emerald-600">
-                    {formatCurrency(data.maxReimbursementForCountry)}
-                  </p>
-                </div>
-              )}
-            </div>
+              );
+            })()}
             <p className="text-xs text-gray-400 mt-3">
               Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
             </p>
           </div>
 
           {/* Navigation */}
-          <div className="mt-8 flex justify-between">
-            <Button variant="secondary" onClick={onBack}>
-              Back to Upload
-            </Button>
-            <Button onClick={onNext} disabled={data.travelItems.length === 0}>
-              Continue to Confirm
-              <ChevronRight className="w-4 h-4 ml-2" />
-            </Button>
+          <div className="mt-8">
+            {/* Check if all travel items are confirmed */}
+            {data.travelItems.length > 0 && !data.travelItems.every(item => item.checked) && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                <span className="text-sm text-amber-700">
+                  Please check all travel items to confirm they are correct before continuing.
+                  ({data.travelItems.filter(item => item.checked).length} of {data.travelItems.length} confirmed)
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <Button variant="secondary" onClick={onBack}>
+                Back to Upload
+              </Button>
+              <Button
+                onClick={() => {
+                  if (data.travelItems.length > 0 && !data.travelItems.every(item => item.checked)) {
+                    toast.error('Please confirm all travel items by checking the checkbox on each one.');
+                    return;
+                  }
+                  onNext();
+                }}
+                disabled={data.travelItems.length === 0}
+              >
+                Continue to Confirm
+                <ChevronRight className="w-4 h-4 ml-2" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1058,6 +1279,9 @@ function Step2CheckData({
         isOpen={showAddTravelModal}
         onClose={() => setShowAddTravelModal(false)}
         token={token}
+        documents={data.documents}
+        travelItems={data.travelItems}
+        onViewDocument={setViewingDocument}
       />
 
       {/* Boarding Pass Upload Modal */}
@@ -1070,6 +1294,7 @@ function Step2CheckData({
       {/* Document View Modal */}
       <DocumentViewModal
         document={viewingDocument}
+        token={token}
         onClose={() => setViewingDocument(null)}
       />
 
@@ -1257,6 +1482,7 @@ function TravelItemCard({
   token,
   onUpdate,
   onDelete,
+  onToggleChecked,
   onUploadBoardingPass,
   onViewDocument,
   onMissingBoardingPass,
@@ -1267,18 +1493,74 @@ function TravelItemCard({
   token: string;
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
+  onToggleChecked: () => void;
   onUploadBoardingPass: () => void;
   onViewDocument: (doc: Document) => void;
   onMissingBoardingPass: () => void;
 }) {
   const Icon = transportIcons[item.modeOfTransport];
   const isPlane = item.modeOfTransport === 'PLANE';
-  const hasBoardingPass = documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
   const hasDeclaration = declarationsOfTravel.some(dec => dec.travelItemId === item.id);
   const linkedDocument = documents.find(d => d.id === item.documentId);
   const isNonEurCurrency = item.currencyOriginal !== 'EUR';
+
+  // Get additional linked documents
+  const additionalDocuments = useMemo(() => {
+    if (!item.additionalDocumentIds) return [];
+    try {
+      const ids = JSON.parse(item.additionalDocumentIds) as string[];
+      return documents.filter(d => ids.includes(d.id));
+    } catch {
+      return [];
+    }
+  }, [item.additionalDocumentIds, documents]);
+
+  // All linked documents (primary + additional)
+  const allLinkedDocuments = useMemo(() => {
+    const docs: Document[] = [];
+    if (linkedDocument) docs.push(linkedDocument);
+    docs.push(...additionalDocuments);
+    return docs;
+  }, [linkedDocument, additionalDocuments]);
+
+  // Check if THIS travel item has a boarding pass linked (not just any boarding pass in all documents)
+  const hasBoardingPass = useMemo(() => {
+    return allLinkedDocuments.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+  }, [allLinkedDocuments]);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
+
+  // Local state for text inputs - prevents re-renders on every keystroke
+  const [localFrom, setLocalFrom] = useState(item.fromLocation);
+  const [localTo, setLocalTo] = useState(item.toLocation);
+  const [localFlightNumber, setLocalFlightNumber] = useState(item.flightNumber || '');
+  const [localBookingRef, setLocalBookingRef] = useState(item.bookingReference || '');
+  const [localAmount, setLocalAmount] = useState(String(item.amountOriginal || ''));
+  const [localDistanceKm, setLocalDistanceKm] = useState(String(item.distanceKm || ''));
+  const [localParticipantPortion, setLocalParticipantPortion] = useState(String(item.participantPortion || ''));
+
+  // Sync local state when item changes from external source
+  useEffect(() => {
+    setLocalFrom(item.fromLocation);
+    setLocalTo(item.toLocation);
+    setLocalFlightNumber(item.flightNumber || '');
+    setLocalBookingRef(item.bookingReference || '');
+    setLocalAmount(String(item.amountOriginal || ''));
+    setLocalDistanceKm(String(item.distanceKm || ''));
+    setLocalParticipantPortion(String(item.participantPortion || ''));
+  }, [item.id]); // Only sync when switching to a different item
+
+  // Helper to check if a value needs attention (unknown or empty)
+  const needsAttention = (value: string) => {
+    const v = value?.toLowerCase().trim() || '';
+    return v === 'unknown' || v === '' || v === 'n/a' || v === '-';
+  };
+
+  // Check if amount needs attention (0 or very low, but NOT if it's part of a round-trip where amount is on the other leg)
+  const amountNeedsAttention = (item.amountOriginal === 0 || item.amountOriginal === null) && !item.amountIncludedInRoundTrip;
+
+  // Highlight style for fields that need attention
+  const attentionInputClass = 'ring-2 ring-amber-400 bg-amber-50';
 
   // Auto-convert when currency, amount, or purchase date changes for non-EUR currencies
   const handleCurrencyConversion = useCallback(async () => {
@@ -1311,15 +1593,19 @@ function TravelItemCard({
     setIsConverting(false);
   }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate, isNonEurCurrency, token, onUpdate, item.amountEur]);
 
-  // Trigger conversion when relevant fields change
+  // Trigger conversion when relevant fields change or on mount
   useEffect(() => {
     if (isNonEurCurrency && item.purchaseDate && item.amountOriginal) {
       handleCurrencyConversion();
     }
-  }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate]);
+  }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, handleCurrencyConversion]);
 
   return (
-    <div className="p-6 bg-gray-50 rounded-2xl">
+    <div className={clsx(
+      'bg-gray-50 rounded-2xl relative overflow-hidden',
+      item.checked && 'ring-2 ring-emerald-500'
+    )}>
+      <div className="p-6">
       {/* Boarding Pass / Declaration Status Bar for Flights */}
       {isPlane && (
         <div className={clsx(
@@ -1390,8 +1676,14 @@ function TravelItemCard({
                   step="0.01"
                   min="0"
                   max={item.amountOriginal}
-                  value={item.participantPortion || ''}
-                  onChange={(e) => onUpdate({ participantPortion: parseFloat(e.target.value) || 0 })}
+                  value={localParticipantPortion}
+                  onChange={(e) => setLocalParticipantPortion(e.target.value)}
+                  onBlur={() => {
+                    const parsed = parseFloat(localParticipantPortion);
+                    if (!isNaN(parsed) && parsed !== item.participantPortion) {
+                      onUpdate({ participantPortion: parsed });
+                    }
+                  }}
                   className="w-28"
                   placeholder={`Max: ${item.amountOriginal}`}
                 />
@@ -1452,21 +1744,31 @@ function TravelItemCard({
         </button>
       </div>
 
-      {/* Linked Document */}
-      {linkedDocument && (
-        <div className="mb-4 p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3">
-          <FileText className="w-4 h-4 text-gray-400" />
-          <span className="text-sm text-gray-600 flex-1 truncate">{linkedDocument.renamedFilename}</span>
-          <button
-            onClick={() => onViewDocument(linkedDocument)}
-            className="text-xs text-primary-600 hover:text-primary-700 font-medium"
-          >
-            View
-          </button>
+      {/* Linked Documents */}
+      {allLinkedDocuments.length > 0 ? (
+        <div className="mb-4 space-y-2">
+          {allLinkedDocuments.map((doc, index) => (
+            <div
+              key={doc.id}
+              className="p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3"
+            >
+              <FileText className="w-4 h-4 text-gray-400" />
+              <div className="flex-1 min-w-0">
+                <span className="text-sm text-gray-600 truncate block">{doc.renamedFilename}</span>
+                {index > 0 && (
+                  <span className="text-xs text-gray-400">Additional document</span>
+                )}
+              </div>
+              <button
+                onClick={() => onViewDocument(doc)}
+                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+              >
+                View
+              </button>
+            </div>
+          ))}
         </div>
-      )}
-
-      {!linkedDocument && (
+      ) : (
         <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200 flex items-center gap-3">
           <AlertTriangle className="w-4 h-4 text-amber-500" />
           <span className="text-sm text-amber-700">No document linked to this travel item</span>
@@ -1482,14 +1784,18 @@ function TravelItemCard({
           onChange={(e) => onUpdate({ modeOfTransport: e.target.value as TransportMode })}
         />
         <Input
-          label="From"
-          value={item.fromLocation}
-          onChange={(e) => onUpdate({ fromLocation: e.target.value })}
+          label={<span className="flex items-center gap-1">From {needsAttention(localFrom) && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
+          value={localFrom}
+          onChange={(e) => setLocalFrom(e.target.value)}
+          onBlur={() => localFrom !== item.fromLocation && onUpdate({ fromLocation: localFrom })}
+          className={needsAttention(localFrom) ? attentionInputClass : ''}
         />
         <Input
-          label="To"
-          value={item.toLocation}
-          onChange={(e) => onUpdate({ toLocation: e.target.value })}
+          label={<span className="flex items-center gap-1">To {needsAttention(localTo) && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
+          value={localTo}
+          onChange={(e) => setLocalTo(e.target.value)}
+          onBlur={() => localTo !== item.toLocation && onUpdate({ toLocation: localTo })}
+          className={needsAttention(localTo) ? attentionInputClass : ''}
         />
         <Input
           label="Departure Date"
@@ -1498,11 +1804,18 @@ function TravelItemCard({
           onChange={(e) => onUpdate({ departureDate: e.target.value })}
         />
         <Input
-          label="Amount"
+          label={<span className="flex items-center gap-1">Amount {amountNeedsAttention && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
           type="number"
           step="0.01"
-          value={item.amountOriginal}
-          onChange={(e) => onUpdate({ amountOriginal: parseFloat(e.target.value) })}
+          value={localAmount}
+          onChange={(e) => setLocalAmount(e.target.value)}
+          onBlur={() => {
+            const parsed = parseFloat(localAmount);
+            if (!isNaN(parsed) && parsed !== item.amountOriginal) {
+              onUpdate({ amountOriginal: parsed });
+            }
+          }}
+          className={amountNeedsAttention ? attentionInputClass : ''}
         />
         <Select
           label="Currency"
@@ -1548,13 +1861,15 @@ function TravelItemCard({
           <>
             <Input
               label="Flight Number"
-              value={item.flightNumber || ''}
-              onChange={(e) => onUpdate({ flightNumber: e.target.value })}
+              value={localFlightNumber}
+              onChange={(e) => setLocalFlightNumber(e.target.value)}
+              onBlur={() => localFlightNumber !== (item.flightNumber || '') && onUpdate({ flightNumber: localFlightNumber })}
             />
             <Input
               label="Booking Reference"
-              value={item.bookingReference || ''}
-              onChange={(e) => onUpdate({ bookingReference: e.target.value })}
+              value={localBookingRef}
+              onChange={(e) => setLocalBookingRef(e.target.value)}
+              onBlur={() => localBookingRef !== (item.bookingReference || '') && onUpdate({ bookingReference: localBookingRef })}
             />
           </>
         )}
@@ -1572,8 +1887,14 @@ function TravelItemCard({
                 type="number"
                 step="1"
                 min="0"
-                value={item.distanceKm || ''}
-                onChange={(e) => onUpdate({ distanceKm: parseFloat(e.target.value) || 0 })}
+                value={localDistanceKm}
+                onChange={(e) => setLocalDistanceKm(e.target.value)}
+                onBlur={() => {
+                  const parsed = parseFloat(localDistanceKm);
+                  if (!isNaN(parsed) && parsed !== item.distanceKm) {
+                    onUpdate({ distanceKm: parsed });
+                  }
+                }}
                 placeholder="e.g., 350"
               />
               <p className="text-xs text-gray-500 mt-1">
@@ -1597,6 +1918,49 @@ function TravelItemCard({
           </>
         )}
       </div>
+
+      </div>
+
+      {/* Confirmation Bottom Bar */}
+      <div className={clsx(
+        'px-6 py-4 flex items-center justify-between border-t transition-colors',
+        item.checked
+          ? 'bg-emerald-50 border-emerald-200'
+          : 'bg-white border-gray-200'
+      )}>
+        <div className="flex items-center gap-3">
+          {item.checked ? (
+            <>
+              <CheckCircle className="w-5 h-5 text-emerald-600" />
+              <span className="text-sm font-medium text-emerald-700">
+                This travel item is confirmed
+              </span>
+            </>
+          ) : (
+            <>
+              <AlertCircle className="w-5 h-5 text-amber-500" />
+              <span className="text-sm text-gray-600">
+                Please verify the information above is correct
+              </span>
+            </>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            console.log('[Confirm] Button clicked for item:', item.id);
+            onToggleChecked();
+          }}
+          className={clsx(
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            item.checked
+              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+              : 'bg-emerald-600 text-white hover:bg-emerald-700'
+          )}
+        >
+          {item.checked ? 'Edit' : 'Confirm'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1606,12 +1970,19 @@ function AddTravelModal({
   isOpen,
   onClose,
   token,
+  documents,
+  travelItems,
+  onViewDocument,
 }: {
   isOpen: boolean;
   onClose: () => void;
   token: string;
+  documents: Document[];
+  travelItems: TravelItem[];
+  onViewDocument: (doc: Document) => void;
 }) {
   const queryClient = useQueryClient();
+  const [mode, setMode] = useState<'create' | 'link'>('create');
   const [formData, setFormData] = useState({
     modeOfTransport: 'PLANE' as TransportMode,
     fromLocation: '',
@@ -1623,12 +1994,40 @@ function AddTravelModal({
     bookingReference: '',
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>('');
+  const [selectedTravelItemId, setSelectedTravelItemId] = useState<string>('');
+
+  // Find documents that are not linked to any travel item
+  // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
+  // Include both primary documentId and additionalDocumentIds in the linked set
+  const linkedDocIds = useMemo(() => {
+    const ids = new Set<string>();
+    travelItems.forEach(t => {
+      if (t.documentId) ids.add(t.documentId);
+      if (t.additionalDocumentIds) {
+        try {
+          const additionalIds = JSON.parse(t.additionalDocumentIds) as string[];
+          additionalIds.forEach(id => ids.add(id));
+        } catch {
+          // Ignore invalid JSON
+        }
+      }
+    });
+    return ids;
+  }, [travelItems]);
+  const unlinkedDocs = documents.filter(d =>
+    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+  );
 
   const uploadAndCreateMutation = useMutation({
     mutationFn: async () => {
-      // First upload document if selected
       let documentId: string | undefined;
-      if (selectedFile) {
+
+      // Use existing document if selected
+      if (selectedExistingDocId) {
+        documentId = selectedExistingDocId;
+      } else if (selectedFile) {
+        // Upload new document if file selected
         const uploadResult = await participantApi.uploadDocument(token, selectedFile);
         documentId = uploadResult.document.id;
       }
@@ -1656,143 +2055,383 @@ function AddTravelModal({
         bookingReference: '',
       });
       setSelectedFile(null);
+      setSelectedExistingDocId('');
     },
     onError: () => {
       toast.error('Failed to add travel item');
     },
   });
 
+  // Mutation to link a document to an existing travel item
+  const linkDocumentMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedExistingDocId || !selectedTravelItemId) {
+        throw new Error('Please select both a document and a travel item');
+      }
+
+      const targetItem = travelItems.find(t => t.id === selectedTravelItemId);
+      if (!targetItem) throw new Error('Travel item not found');
+
+      // Get existing additional document IDs
+      let additionalIds: string[] = [];
+      if (targetItem.additionalDocumentIds) {
+        try {
+          additionalIds = JSON.parse(targetItem.additionalDocumentIds) as string[];
+        } catch {
+          additionalIds = [];
+        }
+      }
+
+      // Add new document ID (avoid duplicates)
+      if (!additionalIds.includes(selectedExistingDocId) && targetItem.documentId !== selectedExistingDocId) {
+        additionalIds.push(selectedExistingDocId);
+      }
+
+      // Update the travel item with new additional documents
+      return participantApi.updateTravelItem(token, selectedTravelItemId, {
+        additionalDocumentIds: additionalIds.length > 0 ? JSON.stringify(additionalIds) : null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      toast.success('Document linked to travel item');
+      onClose();
+      setSelectedExistingDocId('');
+      setSelectedTravelItemId('');
+      setMode('create');
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'Failed to link document');
+    },
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    uploadAndCreateMutation.mutate();
+    if (mode === 'link') {
+      linkDocumentMutation.mutate();
+    } else {
+      uploadAndCreateMutation.mutate();
+    }
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add Travel Manually" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={unlinkedDocs.length > 0 ? "Manage Documents" : "Add Travel Manually"} size="lg">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="p-4 bg-blue-50 rounded-xl">
-          <p className="text-sm text-blue-800">
-            Please upload a supporting document (ticket, invoice, receipt) for this travel item.
-            If you don't have a document, you'll need to provide a declaration later.
-          </p>
-        </div>
-
-        {/* File Upload */}
-        <div>
-          <label className="label">Supporting Document</label>
-          <div className="border-2 border-dashed border-gray-200 rounded-xl p-4">
-            {selectedFile ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-gray-400" />
-                  <span className="text-sm text-gray-700">{selectedFile.name}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedFile(null)}
-                  className="text-red-500 hover:text-red-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <label className="cursor-pointer flex flex-col items-center">
-                <Upload className="w-8 h-8 text-gray-400 mb-2" />
-                <span className="text-sm text-gray-600">Click to upload document</span>
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                />
-              </label>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Select
-            label="Mode of Transport"
-            value={formData.modeOfTransport}
-            options={transportOptions}
-            onChange={(e) => setFormData({ ...formData, modeOfTransport: e.target.value as TransportMode })}
-          />
-          <Input
-            label="Departure Date"
-            type="date"
-            value={formData.departureDate}
-            onChange={(e) => setFormData({ ...formData, departureDate: e.target.value })}
-            required
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="From"
-            value={formData.fromLocation}
-            onChange={(e) => setFormData({ ...formData, fromLocation: e.target.value })}
-            placeholder="e.g., Amsterdam"
-            required
-          />
-          <Input
-            label="To"
-            value={formData.toLocation}
-            onChange={(e) => setFormData({ ...formData, toLocation: e.target.value })}
-            placeholder="e.g., Barcelona"
-            required
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="Amount"
-            type="number"
-            step="0.01"
-            value={formData.amountOriginal || ''}
-            onChange={(e) => setFormData({ ...formData, amountOriginal: parseFloat(e.target.value) || 0 })}
-            required
-          />
-          <Select
-            label="Currency"
-            value={formData.currencyOriginal}
-            options={[
-              { value: 'EUR', label: 'EUR' },
-              { value: 'USD', label: 'USD' },
-              { value: 'GBP', label: 'GBP' },
-              { value: 'PLN', label: 'PLN' },
-              { value: 'CZK', label: 'CZK' },
-              { value: 'HUF', label: 'HUF' },
-              { value: 'RON', label: 'RON' },
-            ]}
-            onChange={(e) => setFormData({ ...formData, currencyOriginal: e.target.value })}
-          />
-        </div>
-
-        {formData.modeOfTransport === 'PLANE' && (
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Flight Number"
-              value={formData.flightNumber}
-              onChange={(e) => setFormData({ ...formData, flightNumber: e.target.value })}
-              placeholder="e.g., KL1234"
-            />
-            <Input
-              label="Booking Reference"
-              value={formData.bookingReference}
-              onChange={(e) => setFormData({ ...formData, bookingReference: e.target.value })}
-              placeholder="e.g., ABC123"
-            />
+        {/* Mode tabs - only show if there are unlinked documents */}
+        {unlinkedDocs.length > 0 && (
+          <div className="flex border-b border-gray-200">
+            <button
+              type="button"
+              onClick={() => setMode('create')}
+              className={clsx(
+                'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                mode === 'create'
+                  ? 'border-emerald-500 text-emerald-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              )}
+            >
+              Create New Travel Item
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('link')}
+              className={clsx(
+                'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                mode === 'link'
+                  ? 'border-emerald-500 text-emerald-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              )}
+            >
+              Link to Existing Travel Item
+            </button>
           </div>
         )}
 
-        <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
-          <Button type="button" variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={uploadAndCreateMutation.isPending}>
-            Add Travel Item
-          </Button>
-        </div>
+        {mode === 'link' ? (
+          /* Link mode - connect document to existing travel item */
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 rounded-xl">
+              <p className="text-sm text-blue-800">
+                Select a document and an existing travel item to link them together.
+              </p>
+            </div>
+
+            {/* Document selection */}
+            <div>
+              <label className="label">Select Document</label>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {unlinkedDocs.map(doc => (
+                  <div
+                    key={doc.id}
+                    className={clsx(
+                      'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                      selectedExistingDocId === doc.id
+                        ? 'border-emerald-500 bg-emerald-50'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    )}
+                    onClick={() => setSelectedExistingDocId(selectedExistingDocId === doc.id ? '' : doc.id)}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="text-sm text-gray-700 truncate">{doc.originalFilename}</span>
+                      {selectedExistingDocId === doc.id && (
+                        <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewDocument(doc);
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium ml-2"
+                    >
+                      View
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Travel item selection */}
+            <div>
+              <label className="label">Select Travel Item to Link</label>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {travelItems.map(item => (
+                  <div
+                    key={item.id}
+                    className={clsx(
+                      'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                      selectedTravelItemId === item.id
+                        ? 'border-emerald-500 bg-emerald-50'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    )}
+                    onClick={() => setSelectedTravelItemId(selectedTravelItemId === item.id ? '' : item.id)}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {React.createElement(transportIcons[item.modeOfTransport] || HelpCircle, {
+                        className: 'w-5 h-5 text-gray-500 flex-shrink-0',
+                      })}
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-gray-900 truncate">
+                          {item.fromLocation} → {item.toLocation}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {formatDate(item.departureDate)}
+                          {item.flightNumber && ` • ${item.flightNumber}`}
+                        </div>
+                      </div>
+                    </div>
+                    {selectedTravelItemId === item.id && (
+                      <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                loading={linkDocumentMutation.isPending}
+                disabled={!selectedExistingDocId || !selectedTravelItemId}
+              >
+                Link Document
+              </Button>
+            </div>
+          </div>
+        ) : (
+          /* Create mode - existing functionality */
+          <>
+            <div className="p-4 bg-blue-50 rounded-xl">
+              <p className="text-sm text-blue-800">
+                Please upload a supporting document (ticket, invoice, receipt) for this travel item.
+                If you don't have a document, you'll need to provide a declaration later.
+              </p>
+            </div>
+
+            {/* Document Selection - Existing or New Upload */}
+            <div>
+              <label className="label">Supporting Document</label>
+
+              {/* Option to link existing unlinked document */}
+              {unlinkedDocs.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-sm text-amber-700 mb-2 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    You have {unlinkedDocs.length} uploaded document(s) not linked to any travel item
+                  </p>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {unlinkedDocs.map(doc => (
+                      <div
+                        key={doc.id}
+                        className={clsx(
+                          'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                          selectedExistingDocId === doc.id
+                            ? 'border-emerald-500 bg-emerald-50'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        )}
+                        onClick={() => {
+                          setSelectedExistingDocId(selectedExistingDocId === doc.id ? '' : doc.id);
+                          if (selectedExistingDocId !== doc.id) setSelectedFile(null);
+                        }}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                          <span className="text-sm text-gray-700 truncate">{doc.originalFilename}</span>
+                          {selectedExistingDocId === doc.id && (
+                            <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewDocument(doc);
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium ml-2"
+                    >
+                      View
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Or upload new file */}
+          {!selectedExistingDocId && (
+            <div className="border-2 border-dashed border-gray-200 rounded-xl p-4">
+              {selectedFile ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-gray-400" />
+                    <span className="text-sm text-gray-700">{selectedFile.name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFile(null)}
+                    className="text-red-500 hover:text-red-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <label className="cursor-pointer flex flex-col items-center">
+                  <Upload className="w-8 h-8 text-gray-400 mb-2" />
+                  <span className="text-sm text-gray-600">
+                    {unlinkedDocs.length > 0 ? 'Or upload a new document' : 'Click to upload document'}
+                  </span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+              {selectedExistingDocId && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedExistingDocId('')}
+                  className="text-sm text-blue-600 hover:text-blue-700 mt-2"
+                >
+                  Clear selection and upload new instead
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Select
+                label="Mode of Transport"
+                value={formData.modeOfTransport}
+                options={transportOptions}
+                onChange={(e) => setFormData({ ...formData, modeOfTransport: e.target.value as TransportMode })}
+              />
+              <Input
+                label="Departure Date"
+                type="date"
+                value={formData.departureDate}
+                onChange={(e) => setFormData({ ...formData, departureDate: e.target.value })}
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="From"
+                value={formData.fromLocation}
+                onChange={(e) => setFormData({ ...formData, fromLocation: e.target.value })}
+                placeholder="e.g., Amsterdam"
+                required
+              />
+              <Input
+                label="To"
+                value={formData.toLocation}
+                onChange={(e) => setFormData({ ...formData, toLocation: e.target.value })}
+                placeholder="e.g., Barcelona"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Amount"
+                type="number"
+                step="0.01"
+                value={formData.amountOriginal || ''}
+                onChange={(e) => setFormData({ ...formData, amountOriginal: parseFloat(e.target.value) || 0 })}
+                required
+              />
+              <Select
+                label="Currency"
+                value={formData.currencyOriginal}
+                options={[
+                  { value: 'EUR', label: 'EUR' },
+                  { value: 'USD', label: 'USD' },
+                  { value: 'GBP', label: 'GBP' },
+                  { value: 'PLN', label: 'PLN' },
+                  { value: 'CZK', label: 'CZK' },
+                  { value: 'HUF', label: 'HUF' },
+                  { value: 'RON', label: 'RON' },
+                ]}
+                onChange={(e) => setFormData({ ...formData, currencyOriginal: e.target.value })}
+              />
+            </div>
+
+            {formData.modeOfTransport === 'PLANE' && (
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  label="Flight Number"
+                  value={formData.flightNumber}
+                  onChange={(e) => setFormData({ ...formData, flightNumber: e.target.value })}
+                  placeholder="e.g., KL1234"
+                />
+                <Input
+                  label="Booking Reference"
+                  value={formData.bookingReference}
+                  onChange={(e) => setFormData({ ...formData, bookingReference: e.target.value })}
+                  placeholder="e.g., ABC123"
+                />
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" loading={uploadAndCreateMutation.isPending}>
+                Add Travel Item
+              </Button>
+            </div>
+          </>
+        )}
       </form>
     </Modal>
   );
@@ -2179,49 +2818,105 @@ function Step3Confirm({
 // Document View Modal - shows document in a popup
 function DocumentViewModal({
   document,
+  token,
   onClose,
 }: {
   document: Document | null;
+  token: string;
   onClose: () => void;
 }) {
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch signed URL when document changes
+  useEffect(() => {
+    if (!document) {
+      setFileUrl(null);
+      setError(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    participantApi.getDocumentUrl(token, document.id)
+      .then((result) => {
+        setFileUrl(result.url);
+      })
+      .catch((err) => {
+        console.error('Failed to get document URL:', err);
+        setError('Failed to load document. Please try again.');
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
+  }, [document?.id, token]);
+
   if (!document) return null;
 
   const isImage = document.mimeType.startsWith('image/');
   const isPdf = document.mimeType === 'application/pdf';
-  const fileUrl = `/api/uploads/${document.storedFilePath}`;
 
   return (
     <Modal isOpen={!!document} onClose={onClose} title={document.renamedFilename}>
       <div className="max-h-[70vh] overflow-auto">
-        {isImage && (
-          <img
-            src={fileUrl}
-            alt={document.renamedFilename}
-            className="w-full h-auto rounded-lg"
-          />
-        )}
-        {isPdf && (
-          <iframe
-            src={fileUrl}
-            title={document.renamedFilename}
-            className="w-full h-[60vh] rounded-lg border border-gray-200"
-          />
-        )}
-        {!isImage && !isPdf && (
-          <div className="text-center py-8">
-            <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-600">This file type cannot be previewed.</p>
-            <a
-              href={fileUrl}
-              download={document.originalFilename}
-              className="text-primary-600 hover:text-primary-700 mt-2 inline-block"
-            >
-              Download File
-            </a>
+        {isLoading && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 text-primary-600 animate-spin" />
+            <span className="ml-3 text-gray-600">Loading document...</span>
           </div>
         )}
+        {error && (
+          <div className="text-center py-8">
+            <AlertCircle className="w-16 h-16 text-red-300 mx-auto mb-4" />
+            <p className="text-red-600">{error}</p>
+          </div>
+        )}
+        {!isLoading && !error && fileUrl && (
+          <>
+            {isImage && (
+              <img
+                src={fileUrl}
+                alt={document.renamedFilename}
+                className="w-full h-auto rounded-lg"
+              />
+            )}
+            {isPdf && (
+              <iframe
+                src={fileUrl}
+                title={document.renamedFilename}
+                className="w-full h-[60vh] rounded-lg border border-gray-200"
+              />
+            )}
+            {!isImage && !isPdf && (
+              <div className="text-center py-8">
+                <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-600">This file type cannot be previewed.</p>
+                <a
+                  href={fileUrl}
+                  download={document.originalFilename}
+                  className="text-primary-600 hover:text-primary-700 mt-2 inline-block"
+                >
+                  Download File
+                </a>
+              </div>
+            )}
+          </>
+        )}
       </div>
-      <div className="mt-4 flex justify-end">
+      <div className="mt-4 flex justify-end gap-2">
+        {isPdf && fileUrl && (
+          <a
+            href={fileUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+          >
+            <ExternalLink className="w-4 h-4 mr-2" />
+            Open in New Tab
+          </a>
+        )}
         <Button variant="secondary" onClick={onClose}>
           Close
         </Button>

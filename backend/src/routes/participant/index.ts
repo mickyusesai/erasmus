@@ -12,6 +12,7 @@ import { JourneyConsolidationService } from '../../services/ai/journeyConsolidat
 import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
+import { validateCityCountry } from '../../services/geocoding/index.js';
 import disseminationRoutes from './dissemination.js';
 
 // Initialize the consolidation service
@@ -56,6 +57,9 @@ const updateTravelItemSchema = z.object({
   purchaseDate: z.string().transform((s) => new Date(s)).nullable().optional(),
   amountEur: z.number().optional(),
   comment: z.string().nullable().optional(),
+  // Document linking
+  documentId: z.string().nullable().optional(),
+  additionalDocumentIds: z.string().nullable().optional(), // JSON array of additional document IDs
   // Multi-passenger bookings
   participantPortion: z.number().nullable().optional(),
   // Car travel specific
@@ -191,6 +195,9 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       bankAccountHolderName: data?.bankAccountHolderName,
       bankAccountBic: data?.bankAccountBic,
       participantNote: data?.participantNote,
+      detectedHomeCountry: data?.detectedHomeCountry,
+      homeCountryConfidence: data?.homeCountryConfidence,
+      homeCountryReasoning: data?.homeCountryReasoning,
     },
     project: {
       ...data?.project,
@@ -246,31 +253,17 @@ router.post(
       storagePath
     );
 
-    // Create document record (with default type, will be updated by extraction)
+    // Create document record (type will be determined during consolidation)
     const document = await prisma.document.create({
       data: {
         participantId: participant.id,
         storedFilePath: storagePath,
         originalFilename: req.file.originalname,
-        renamedFilename: req.file.originalname, // Will be updated after analysis
+        renamedFilename: req.file.originalname,
         mimeType: req.file.mimetype,
         fileSize: req.file.size,
-        documentType: 'OTHER', // Will be updated by extraction
+        documentType: 'OTHER', // Will be updated during consolidation
       },
-    });
-
-    // Extract and store document data using the consolidation service
-    // This stores the extraction but does NOT create travel items
-    await consolidationService.extractAndStoreDocumentData(
-      document.id,
-      req.file.buffer,
-      req.file.mimetype
-    );
-
-    // Fetch the updated document with extraction
-    const updatedDocument = await prisma.document.findUnique({
-      where: { id: document.id },
-      include: { extraction: true },
     });
 
     // Clear the consolidation flag since we have new documents
@@ -279,10 +272,19 @@ router.post(
       data: { journeyConsolidatedAt: null },
     });
 
+    // Extract document data in the background (don't block the response)
+    // This enables the AI to analyze the document so consolidation works later
+    consolidationService.extractAndStoreDocumentData(
+      document.id,
+      req.file.buffer,
+      req.file.mimetype
+    ).catch((error) => {
+      console.error(`[Upload] Background extraction failed for document ${document.id}:`, error);
+    });
+
     res.status(201).json({
-      document: updatedDocument,
-      extraction: updatedDocument?.extraction,
-      message: 'Document uploaded and analyzed. Travel items will be created when you proceed to review.',
+      document,
+      message: 'Document uploaded successfully.',
     });
   })
 );
@@ -458,6 +460,7 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
       currencyOriginal: result.data.currencyOriginal,
       purchaseDate: result.data.purchaseDate || null,
       amountEur: amountEur || result.data.amountOriginal,
+      checked: true, // Manually created items are checked by default
     },
   });
 
@@ -509,6 +512,16 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
     // Store original AI amount if not already set
     if (!current.originalAmountFromAi) {
       updateData.originalAmountFromAi = current.amountOriginal;
+    }
+  }
+
+  // Recalculate amountEur when amountOriginal changes
+  // For EUR currency, amountEur equals amountOriginal
+  // For non-EUR, keep existing amountEur (will be recalculated by currency conversion)
+  if (result.data.amountOriginal !== undefined) {
+    const currency = result.data.currencyOriginal || current.currencyOriginal;
+    if (currency === 'EUR') {
+      updateData.amountEur = result.data.amountOriginal;
     }
   }
 
@@ -587,6 +600,38 @@ router.delete('/travel-items/:id', participantAuth, asyncHandler(async (req: Req
   await aiService.recalculateParticipantSummary(participant.id);
 
   res.json({ success: true });
+}));
+
+/**
+ * PATCH /api/participant/travel-items/:id/toggle-checked
+ * Toggle the checked status of a travel item
+ */
+router.patch('/travel-items/:id/toggle-checked', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot modify travel items after approval');
+  }
+
+  // Verify ownership
+  const travelItem = await prisma.travelItem.findFirst({
+    where: {
+      id: req.params.id,
+      participantId: participant.id,
+    },
+  });
+
+  if (!travelItem) {
+    throw new NotFoundError('Travel item not found');
+  }
+
+  // Toggle the checked status
+  const updated = await prisma.travelItem.update({
+    where: { id: req.params.id },
+    data: { checked: !travelItem.checked },
+  });
+
+  res.json(updated);
 }));
 
 /**
@@ -1140,6 +1185,31 @@ router.post('/convert-currency', participantAuth, asyncHandler(async (req: Reque
     purchaseDate: date.toISOString(),
     year: date.getFullYear(),
     month: date.getMonth() + 1,
+  });
+}));
+
+/**
+ * GET /api/participant/validate-city-country
+ * Validate if a city is in a given country using geocoding API
+ */
+router.get('/validate-city-country', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { city, country } = req.query;
+
+  if (!city || typeof city !== 'string') {
+    throw new ValidationError('City is required');
+  }
+
+  if (!country || typeof country !== 'string') {
+    throw new ValidationError('Country is required');
+  }
+
+  const result = await validateCityCountry(city, country);
+
+  res.json({
+    city,
+    expectedCountry: country,
+    detectedCountry: result.detectedCountry,
+    matches: result.matches,
   });
 }));
 

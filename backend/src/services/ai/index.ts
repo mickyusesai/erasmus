@@ -18,7 +18,7 @@ export function createAiService(): TravelDocumentAiService {
   // Auto-detect: use Claude if API key is available
   if (aiProvider === 'auto') {
     if (process.env.ANTHROPIC_API_KEY) {
-      console.log('[AI Service] Using Claude Vision API for document analysis');
+      console.log('[AI Service] Using Claude API for validation and summary calculations');
       return new ClaudeAiService();
     } else {
       console.log('[AI Service] No ANTHROPIC_API_KEY found, using mock service');
@@ -32,7 +32,7 @@ export function createAiService(): TravelDocumentAiService {
         console.warn('[AI Service] ANTHROPIC_API_KEY not set, falling back to mock');
         return new MockAiService();
       }
-      console.log('[AI Service] Using Claude Vision API for document analysis');
+      console.log('[AI Service] Using Claude API for validation and summary calculations');
       return new ClaudeAiService();
 
     case 'mock':
