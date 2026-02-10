@@ -1240,6 +1240,7 @@ function Step2CheckData({
         token={token}
         documents={data.documents}
         travelItems={data.travelItems}
+        onViewDocument={setViewingDocument}
       />
 
       {/* Boarding Pass Upload Modal */}
@@ -1514,8 +1515,8 @@ function TravelItemCard({
     return v === 'unknown' || v === '' || v === 'n/a' || v === '-';
   };
 
-  // Check if amount needs attention (0 or very low)
-  const amountNeedsAttention = item.amountOriginal === 0 || item.amountOriginal === null;
+  // Check if amount needs attention (0 or very low, but NOT if it's part of a round-trip where amount is on the other leg)
+  const amountNeedsAttention = (item.amountOriginal === 0 || item.amountOriginal === null) && !item.amountIncludedInRoundTrip;
 
   // Highlight style for fields that need attention
   const attentionInputClass = 'ring-2 ring-amber-400 bg-amber-50';
@@ -1551,12 +1552,12 @@ function TravelItemCard({
     setIsConverting(false);
   }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate, isNonEurCurrency, token, onUpdate, item.amountEur]);
 
-  // Trigger conversion when relevant fields change
+  // Trigger conversion when relevant fields change or on mount
   useEffect(() => {
     if (isNonEurCurrency && item.purchaseDate && item.amountOriginal) {
       handleCurrencyConversion();
     }
-  }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate]);
+  }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, handleCurrencyConversion]);
 
   return (
     <div className={clsx(
@@ -1926,12 +1927,14 @@ function AddTravelModal({
   token,
   documents,
   travelItems,
+  onViewDocument,
 }: {
   isOpen: boolean;
   onClose: () => void;
   token: string;
   documents: Document[];
   travelItems: TravelItem[];
+  onViewDocument: (doc: Document) => void;
 }) {
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
@@ -2038,21 +2041,41 @@ function AddTravelModal({
                 <AlertTriangle className="w-4 h-4" />
                 You have {unlinkedDocs.length} uploaded document(s) not linked to any travel item
               </p>
-              <Select
-                label=""
-                value={selectedExistingDocId}
-                options={[
-                  { value: '', label: '-- Select an existing document --' },
-                  ...unlinkedDocs.map(d => ({
-                    value: d.id,
-                    label: d.originalFilename,
-                  })),
-                ]}
-                onChange={(e) => {
-                  setSelectedExistingDocId(e.target.value);
-                  if (e.target.value) setSelectedFile(null); // Clear file if existing doc selected
-                }}
-              />
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {unlinkedDocs.map(doc => (
+                  <div
+                    key={doc.id}
+                    className={clsx(
+                      'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                      selectedExistingDocId === doc.id
+                        ? 'border-emerald-500 bg-emerald-50'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    )}
+                    onClick={() => {
+                      setSelectedExistingDocId(selectedExistingDocId === doc.id ? '' : doc.id);
+                      if (selectedExistingDocId !== doc.id) setSelectedFile(null);
+                    }}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="text-sm text-gray-700 truncate">{doc.originalFilename}</span>
+                      {selectedExistingDocId === doc.id && (
+                        <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewDocument(doc);
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium ml-2"
+                    >
+                      View
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

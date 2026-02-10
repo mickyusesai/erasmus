@@ -777,6 +777,7 @@ export interface TravelItem {
   tripGroupId?: string;  // Legacy
   priceAllocation?: number;  // Legacy
   totalGroupPrice?: number;  // Legacy
+  amountIncludedInRoundTrip?: boolean;  // True if this leg's amount is included in another leg's round-trip price
   // Multi-passenger bookings
   numberOfPassengers?: number;
   participantPortion?: number;
