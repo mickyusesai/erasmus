@@ -391,14 +391,15 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       throw new Error('Participant not found');
     }
 
-    const extractions = participant.documents
-      .filter((d: { extraction: unknown }) => d.extraction)
-      .map((d: { id: string; extraction: unknown }) => ({
-        ...(d.extraction as Record<string, unknown>),
-        documentId: d.id,
-      }));
+    // Build extraction map for quick lookup by document ID
+    const extractionMap = new Map<string, Record<string, unknown>>();
+    for (const doc of participant.documents) {
+      if ((doc as { extraction: unknown }).extraction) {
+        extractionMap.set(doc.id, (doc as { extraction: unknown }).extraction as Record<string, unknown>);
+      }
+    }
 
-    if (extractions.length === 0) {
+    if (extractionMap.size === 0) {
       console.log('[Consolidation] No extractions found, nothing to consolidate');
       return {
         success: false,
@@ -408,10 +409,21 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       };
     }
 
-    // Build a summary for the AI to analyze
-    const extractionSummary = extractions.map((e: Record<string, unknown>, i: number) => {
-      const ext = e as {
-        documentId: string;
+    // Build a summary for the AI to analyze - MUST match visual document order!
+    // We iterate over ALL documents to keep numbering consistent with visual content
+    const extractionSummary = participant.documents.map((doc: { id: string; extraction: unknown }, i: number) => {
+      const extraction = extractionMap.get(doc.id);
+      if (!extraction) {
+        // Document has no extraction - include minimal info so AI knows it exists
+        return {
+          docIndex: i + 1,
+          documentId: doc.id,
+          type: 'UNKNOWN',
+          note: 'No extraction available - analyze from visual content above',
+        };
+      }
+
+      const ext = extraction as {
         detectedDocumentType: string;
         passengerName?: string;
         fromLocation?: string;
@@ -443,13 +455,13 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       }
       return {
         docIndex: i + 1,
-        documentId: ext.documentId,
+        documentId: doc.id,
         type: ext.detectedDocumentType,
         passenger: ext.passengerName,
         from: ext.fromLocation,
         to: ext.toLocation,
-        departureDate: ext.departureDate?.toISOString().split('T')[0],
-        purchaseDate: ext.purchaseDate?.toISOString().split('T')[0],
+        departureDate: ext.departureDate ? new Date(ext.departureDate).toISOString().split('T')[0] : null,
+        purchaseDate: ext.purchaseDate ? new Date(ext.purchaseDate).toISOString().split('T')[0] : null,
         flightNumber: ext.flightNumber,
         bookingRef: ext.bookingReference,
         amount: ext.amount,
@@ -466,6 +478,16 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
     });
 
     const prompt = `You are an expert travel document analyst for Erasmus+ reimbursements.
+
+=== DOCUMENT IDENTIFICATION - CRITICAL ===
+The documents shown above are labeled: [Document 1 - ID: xxx], [Document 2 - ID: yyy], etc.
+The extraction summary below has matching numbers:
+- docIndex: 1 corresponds to Document 1 above
+- docIndex: 2 corresponds to Document 2 above
+- etc.
+
+WHEN RETURNING linkedDocumentIds, YOU MUST USE THE documentId (UUID) FROM THE EXTRACTION SUMMARY.
+Example: If Document 3 has documentId "abc-123-def", use "abc-123-def" in linkedDocumentIds, NOT "3" or "Document 3".
 
 THINK STEP BY STEP - Before generating output, reason through:
 1. What is the participant's home country based on travel patterns?
@@ -484,7 +506,7 @@ PARTICIPANT INFO:
 - Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
 - Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
 
-EXTRACTED DOCUMENT DATA (for reference - verify against actual documents above):
+DOCUMENT REFERENCE TABLE (docIndex matches visual Document number above):
 ${JSON.stringify(extractionSummary, null, 2)}
 
 === CRITICAL RULES - DO NOT VIOLATE ===
