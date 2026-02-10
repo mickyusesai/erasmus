@@ -809,14 +809,14 @@ function Step2CheckData({
 
   const toggleCheckedMutation = useMutation({
     mutationFn: (id: string) => participantApi.toggleTravelItemChecked(token, id),
-    // Optimistic update for instant UI feedback - no refetch needed
+    // Optimistic update for instant UI feedback
     onMutate: async (id) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
       // Snapshot the previous value
-      const previousData = queryClient.getQueryData(['participant-auth']);
+      const previousData = queryClient.getQueryData(['participant-auth']) as ParticipantAuthResponse | undefined;
       // Optimistically toggle the checked state
-      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+      queryClient.setQueryData(['participant-auth'], (old: ParticipantAuthResponse | undefined) => {
         if (!old) return old;
         return {
           ...old,
@@ -834,8 +834,18 @@ function Step2CheckData({
       }
       toast.error('Failed to update confirmation status');
     },
-    // No onSettled refetch - optimistic update is sufficient
-    // This prevents order changes and makes confirm instant
+    onSuccess: (updatedItem) => {
+      // Update the cache with the server response to ensure consistency
+      queryClient.setQueryData(['participant-auth'], (old: ParticipantAuthResponse | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.map((item: TravelItem) =>
+            item.id === updatedItem.id ? { ...item, checked: updatedItem.checked } : item
+          ),
+        };
+      });
+    },
   });
 
   // Generate persistent warnings based on data analysis
@@ -1905,6 +1915,7 @@ function TravelItemCard({
           )}
         </div>
         <button
+          type="button"
           onClick={onToggleChecked}
           className={clsx(
             'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
