@@ -1,15 +1,37 @@
 import { PrismaClient, ParticipantStatus, DocumentType, TransportMode } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
+import bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log('Seeding database...');
 
-  // Create organisation
+  // Create super admin
+  const superAdminPassword = 'admin123!';
+  const superAdminHash = await bcrypt.hash(superAdminPassword, 10);
+
+  const superAdmin = await prisma.superAdmin.create({
+    data: {
+      email: 'admin@easyreimburse.com',
+      passwordHash: superAdminHash,
+      name: 'Super Admin',
+    },
+  });
+  console.log('Created super admin:', superAdmin.email);
+
+  // Create demo organisation with credentials
+  const orgPassword = 'demo123!';
+  const orgPasswordHash = await bcrypt.hash(orgPassword, 10);
+
   const org = await prisma.organisation.create({
     data: {
       name: 'Youth Exchange Network',
+      email: 'demo@youthexchange.org',
+      passwordHash: orgPasswordHash,
+      projectCredits: 5,  // Give some credits for testing
+      foundingCreditClaimed: true,
+      foundingCreditUsed: true,
     },
   });
   console.log('Created organisation:', org.name);
@@ -169,6 +191,15 @@ async function main() {
   }
 
   console.log('\nSeeding completed!');
+
+  console.log('\n=== LOGIN CREDENTIALS ===');
+  console.log('\nSuper Admin:');
+  console.log('  Email: admin@easyreimburse.com');
+  console.log('  Password: admin123!');
+  console.log('\nDemo Organisation:');
+  console.log('  Email: demo@youthexchange.org');
+  console.log('  Password: demo123!');
+
   console.log('\nDemo magic link tokens:');
 
   const demoParticipants = await prisma.participant.findMany({
