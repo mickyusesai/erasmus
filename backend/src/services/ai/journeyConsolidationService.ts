@@ -1,9 +1,13 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import sharp from 'sharp';
+import { fromPath } from 'pdf2pic';
+import { writeFileSync, unlinkSync, mkdirSync, existsSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
 
-// Maximum image size for Claude API (5MB)
+// Maximum image size for OpenAI API (20MB, but we'll keep it smaller for efficiency)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 /**
@@ -17,12 +21,12 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
  * - The full journey story: home → event location → home
  */
 export class JourneyConsolidationService {
-  private client: Anthropic;
-  private model: string = 'claude-sonnet-4-20250514'; // Use Sonnet for all - more capable
+  private client: OpenAI;
+  private model: string = 'gpt-4o'; // Use GPT-4o for vision capabilities (change to gpt-5.2 when available)
 
   constructor() {
-    this.client = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
+    this.client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
     });
   }
 
@@ -77,6 +81,78 @@ export class JourneyConsolidationService {
   }
 
   /**
+   * Convert PDF to images for OpenAI vision API
+   */
+  private async convertPdfToImages(buffer: Buffer): Promise<Buffer[]> {
+    const images: Buffer[] = [];
+    const tempDir = join(tmpdir(), 'erasmus-pdf-' + Date.now());
+    const tempPdfPath = join(tempDir, 'input.pdf');
+
+    try {
+      // Create temp directory
+      if (!existsSync(tempDir)) {
+        mkdirSync(tempDir, { recursive: true });
+      }
+
+      // Write PDF to temp file
+      writeFileSync(tempPdfPath, buffer);
+
+      // Convert PDF to images
+      const converter = fromPath(tempPdfPath, {
+        density: 150,
+        saveFilename: 'page',
+        savePath: tempDir,
+        format: 'jpeg',
+        width: 1600,
+        height: 2000,
+      });
+
+      // Convert first 5 pages max (to avoid huge documents)
+      const pageLimit = 5;
+      for (let page = 1; page <= pageLimit; page++) {
+        try {
+          const result = await converter(page);
+          if (result.path) {
+            const imageBuffer = await sharp(result.path).jpeg({ quality: 80 }).toBuffer();
+            images.push(imageBuffer);
+            // Clean up the page image
+            try {
+              unlinkSync(result.path);
+            } catch {
+              // Ignore cleanup errors
+            }
+          }
+        } catch {
+          // No more pages or error - stop
+          break;
+        }
+      }
+
+      console.log(`[Consolidation] Converted PDF to ${images.length} images`);
+    } catch (error) {
+      console.error('[Consolidation] PDF conversion error:', error);
+      // Return empty array - will fall back to text extraction or skip
+    } finally {
+      // Clean up temp files
+      try {
+        unlinkSync(tempPdfPath);
+      } catch {
+        // Ignore
+      }
+      try {
+        if (existsSync(tempDir)) {
+          const { rmSync } = await import('fs');
+          rmSync(tempDir, { recursive: true, force: true });
+        }
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+
+    return images;
+  }
+
+  /**
    * Extract and store raw data from a single document
    * This is called during upload - we store the extraction but don't create travel items yet
    */
@@ -85,26 +161,47 @@ export class JourneyConsolidationService {
     fileBuffer: Buffer,
     mimeType: string
   ): Promise<void> {
-    console.log(`[Consolidation] Extracting data from document ${documentId}`);
+    console.log(`[Consolidation] Extracting data from document ${documentId} using OpenAI`);
 
     const isPdf = mimeType.includes('pdf');
-    let base64Data: string;
-    let mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
+    const imageContents: OpenAI.Chat.Completions.ChatCompletionContentPartImage[] = [];
 
-    if (!isPdf) {
-      // Resize image if needed - resizing always outputs JPEG
-      const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, mimeType);
-      base64Data = processedBuffer.toString('base64');
-      // If image was resized, it's now JPEG; otherwise keep original type
-      if (processedBuffer !== fileBuffer) {
-        mediaType = 'image/jpeg';
-      } else {
-        if (mimeType.includes('png')) mediaType = 'image/png';
-        else if (mimeType.includes('gif')) mediaType = 'image/gif';
-        else if (mimeType.includes('webp')) mediaType = 'image/webp';
+    if (isPdf) {
+      // Convert PDF to images
+      const pdfImages = await this.convertPdfToImages(fileBuffer);
+      if (pdfImages.length === 0) {
+        console.log('[Consolidation] Could not convert PDF to images, storing as failed extraction');
+        await this.storeFailedExtraction(documentId, 'Could not process PDF');
+        return;
+      }
+
+      for (const imgBuffer of pdfImages) {
+        const resized = await this.resizeImageIfNeeded(imgBuffer, 'image/jpeg');
+        const base64Data = resized.toString('base64');
+        imageContents.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:image/jpeg;base64,${base64Data}`,
+            detail: 'high',
+          },
+        });
       }
     } else {
-      base64Data = fileBuffer.toString('base64');
+      // Process image directly
+      const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, mimeType);
+      const base64Data = processedBuffer.toString('base64');
+      let mediaType = 'image/jpeg';
+      if (mimeType.includes('png')) mediaType = 'image/png';
+      else if (mimeType.includes('gif')) mediaType = 'image/gif';
+      else if (mimeType.includes('webp')) mediaType = 'image/webp';
+
+      imageContents.push({
+        type: 'image_url',
+        image_url: {
+          url: `data:${mediaType};base64,${base64Data}`,
+          detail: 'high',
+        },
+      });
     }
 
     const prompt = `You are analyzing a travel document for Erasmus+ reimbursement.
@@ -194,61 +291,28 @@ For "Instaphalte: Airport" type entries, use the actual location (e.g., Eindhove
 REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
     try {
-      let response;
+      console.log(`[Consolidation] Using OpenAI ${this.model} for document extraction`);
 
-      if (isPdf) {
-        // PDFs require beta header
-        console.log('[Consolidation] Using Sonnet for PDF document');
-        response = await this.client.messages.create(
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        max_tokens: 1500,
+        messages: [
           {
-            model: this.model,
-            max_tokens: 1500,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'document',
-                    source: {
-                      type: 'base64',
-                      media_type: 'application/pdf',
-                      data: base64Data,
-                    },
-                  } as unknown as Anthropic.Messages.ContentBlockParam,
-                  { type: 'text', text: prompt },
-                ],
-              },
+            role: 'user',
+            content: [
+              ...imageContents,
+              { type: 'text', text: prompt },
             ],
           },
-          { headers: { 'anthropic-beta': 'pdfs-2024-09-25' } }
-        );
-      } else {
-        // Use Sonnet for images too - more accurate extraction
-        console.log('[Consolidation] Using Sonnet for image document');
-        response = await this.client.messages.create({
-          model: this.model,
-          max_tokens: 1500,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'image',
-                  source: { type: 'base64', media_type: mediaType, data: base64Data },
-                },
-                { type: 'text', text: prompt },
-              ],
-            },
-          ],
-        });
+        ],
+      });
+
+      const responseText = response.choices[0]?.message?.content;
+      if (!responseText) {
+        throw new Error('No response from OpenAI');
       }
 
-      const textBlock = response.content.find((b) => b.type === 'text');
-      if (!textBlock || textBlock.type !== 'text') {
-        throw new Error('No text response from Claude');
-      }
-
-      const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error('Could not parse JSON from response');
       }
@@ -282,7 +346,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           allPassengerNames: parsed.allPassengerNames || null,
           outboundFlightNumber: parsed.outboundFlightNumber || null,
           returnFlightNumber: parsed.returnFlightNumber || null,
-          rawAiResponse: textBlock.text,
+          rawAiResponse: responseText,
         },
         update: {
           detectedDocumentType: this.mapDocumentType(parsed.documentType),
@@ -307,7 +371,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           allPassengerNames: parsed.allPassengerNames || null,
           outboundFlightNumber: parsed.outboundFlightNumber || null,
           returnFlightNumber: parsed.returnFlightNumber || null,
-          rawAiResponse: textBlock.text,
+          rawAiResponse: responseText,
           consolidated: false,
         },
       });
@@ -321,23 +385,25 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       console.log(`[Consolidation] Stored extraction for document ${documentId}: ${parsed.documentType}`);
     } catch (error) {
       console.error(`[Consolidation] Error extracting document ${documentId}:`, error);
-
-      // Store a failed extraction
-      await prisma.documentExtraction.upsert({
-        where: { documentId },
-        create: {
-          documentId,
-          detectedDocumentType: 'OTHER',
-          confidence: 0.1,
-          rawAiResponse: error instanceof Error ? error.message : 'Unknown error',
-        },
-        update: {
-          detectedDocumentType: 'OTHER',
-          confidence: 0.1,
-          rawAiResponse: error instanceof Error ? error.message : 'Unknown error',
-        },
-      });
+      await this.storeFailedExtraction(documentId, error instanceof Error ? error.message : 'Unknown error');
     }
+  }
+
+  private async storeFailedExtraction(documentId: string, errorMessage: string): Promise<void> {
+    await prisma.documentExtraction.upsert({
+      where: { documentId },
+      create: {
+        documentId,
+        detectedDocumentType: 'OTHER',
+        confidence: 0.1,
+        rawAiResponse: errorMessage,
+      },
+      update: {
+        detectedDocumentType: 'OTHER',
+        confidence: 0.1,
+        rawAiResponse: errorMessage,
+      },
+    });
   }
 
   /**
@@ -536,19 +602,20 @@ Respond with ONLY a JSON object:
     const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
 
     try {
-      // Text-only consolidation uses Sonnet for better reasoning
-      const response = await this.client.messages.create({
+      console.log(`[Consolidation] Using OpenAI ${this.model} for journey consolidation`);
+
+      const response = await this.client.chat.completions.create({
         model: this.model,
         max_tokens: 3000,
         messages: [{ role: 'user', content: prompt }],
       });
 
-      const textBlock = response.content.find((b) => b.type === 'text');
-      if (!textBlock || textBlock.type !== 'text') {
-        throw new Error('No text response from Claude');
+      const responseText = response.choices[0]?.message?.content;
+      if (!responseText) {
+        throw new Error('No response from OpenAI');
       }
 
-      const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error('Could not parse consolidation response');
       }
