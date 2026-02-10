@@ -731,15 +731,6 @@ function Step2CheckData({
   );
   const hasUnlinkedDocs = unlinkedDocs.length > 0;
 
-  // Get the first travel item's origin for country validation
-  const firstTravelItem = useMemo(() => {
-    if (data.travelItems.length === 0) return null;
-    const sorted = [...data.travelItems].sort(
-      (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
-    );
-    return sorted[0];
-  }, [data.travelItems]);
-
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
     onSuccess: () => {

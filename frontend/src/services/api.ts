@@ -886,6 +886,9 @@ export interface ParticipantAuthResponse {
     bankAccountHolderName?: string;
     bankAccountBic?: string;
     participantNote?: string;
+    detectedHomeCountry?: string | null;
+    homeCountryConfidence?: number | null;
+    homeCountryReasoning?: string | null;
   };
   project: {
     id: string;
