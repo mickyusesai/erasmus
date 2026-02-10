@@ -136,18 +136,26 @@ router.post('/', async (req: Request, res: Response) => {
 
   const data = result.data;
 
-  // Ensure we have an organisation (create default if needed)
-  let organisation = await prisma.organisation.findFirst();
-  if (!organisation) {
-    organisation = await prisma.organisation.create({
-      data: { name: 'Default Organisation' },
-    });
+  // Projects must be associated with an organisation
+  // In the new multi-tenant model, organisations create their own projects
+  // For super admin, require organisationId to be specified
+  let organisationId = req.body.organisationId;
+
+  if (!organisationId) {
+    // If no organisationId specified, try to find a default organisation
+    const organisation = await prisma.organisation.findFirst();
+    if (!organisation) {
+      return res.status(400).json({
+        error: 'No organisation found. Projects must be created through an organisation dashboard.',
+      });
+    }
+    organisationId = organisation.id;
   }
 
   const project = await prisma.project.create({
     data: {
       ...data,
-      organisationId: organisation.id,
+      organisationId,
     },
   });
 
