@@ -773,4 +773,7 @@ export interface ConsolidationResult {
   warnings: string[];
   missingDocuments?: { type: string; description: string }[];
   documentLinks?: { invoiceDocId: string; boardingPassDocId: string; reason: string }[];
+  detectedHomeCountry?: string | null;
+  homeCountryConfidence?: number | null;
+  homeCountryReasoning?: string | null;
 }

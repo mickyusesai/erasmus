@@ -740,18 +740,6 @@ function Step2CheckData({
     return sorted[0];
   }, [data.travelItems]);
 
-  // Validate city-country using geocoding API
-  const cityCountryValidation = useQuery({
-    queryKey: ['city-country-validation', firstTravelItem?.fromLocation, data.participant.country],
-    queryFn: () => participantApi.validateCityCountry(
-      token,
-      firstTravelItem!.fromLocation,
-      data.participant.country!
-    ),
-    enabled: !!firstTravelItem?.fromLocation && !!data.participant.country,
-    staleTime: 24 * 60 * 60 * 1000, // Cache for 24 hours
-  });
-
   const noteMutation = useMutation({
     mutationFn: (note: string) => participantApi.updateNote(token, note),
     onSuccess: () => {
@@ -887,13 +875,14 @@ function Step2CheckData({
       });
     }
 
-    // Check if participant traveled from their registered country (using geocoding API)
-    // Only show warning if validation completed and city doesn't match country
-    if (cityCountryValidation.data && !cityCountryValidation.data.matches && firstTravelItem) {
+    // Check if AI-detected home country differs from registered country
+    // This uses AI reasoning based on travel patterns (return flights, round-trip origins, etc.)
+    if (data.participant.detectedHomeCountry &&
+        data.participant.detectedHomeCountry.toLowerCase() !== data.participant.country?.toLowerCase()) {
       w.push({
         id: 'country-mismatch',
         type: 'warning',
-        message: `Your first travel origin (${firstTravelItem.fromLocation}) appears to be different from your registered country (${data.participant.country}). Please verify this is correct.`,
+        message: `Based on your travel documents, it appears you traveled from ${data.participant.detectedHomeCountry}, but your registered country is ${data.participant.country}. ${data.participant.homeCountryReasoning ? `(${data.participant.homeCountryReasoning})` : ''} Please verify this is correct.`,
         dismissible: true,
       });
     }
@@ -912,7 +901,7 @@ function Step2CheckData({
     }
 
     return w;
-  }, [data, aiWarnings, cityCountryValidation.data, firstTravelItem]);
+  }, [data, aiWarnings]);
 
   // Filter out dismissed warnings
   const visibleWarnings = warnings.filter(w => !dismissedWarnings.has(w.id));

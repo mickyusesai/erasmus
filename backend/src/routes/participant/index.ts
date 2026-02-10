@@ -192,6 +192,9 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       bankAccountHolderName: data?.bankAccountHolderName,
       bankAccountBic: data?.bankAccountBic,
       participantNote: data?.participantNote,
+      detectedHomeCountry: data?.detectedHomeCountry,
+      homeCountryConfidence: data?.homeCountryConfidence,
+      homeCountryReasoning: data?.homeCountryReasoning,
     },
     project: {
       ...data?.project,
