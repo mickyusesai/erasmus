@@ -585,6 +585,223 @@ export const participantApi = {
   },
 };
 
+// =============================================================================
+// Organisation API (for organisation dashboard)
+// =============================================================================
+
+function getOrgAuthHeaders(): HeadersInit {
+  const token = localStorage.getItem('org-token');
+  if (token) {
+    return {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    };
+  }
+  return { 'Content-Type': 'application/json' };
+}
+
+export const organisationApi = {
+  // Auth
+  register: async (data: { name: string; email: string; password: string; oid?: string }) => {
+    const res = await fetch(`${API_BASE}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ message: string; token: string; organisation: OrganisationInfo }>(res);
+  },
+
+  login: async (email: string, password: string) => {
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    return handleResponse<{ message: string; token: string; organisation: OrganisationInfo }>(res);
+  },
+
+  claimFoundingCredit: async (data: { name: string; email: string; password: string; oid: string }) => {
+    const res = await fetch(`${API_BASE}/auth/claim-founding-credit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ message: string; token: string; organisation: OrganisationInfo }>(res);
+  },
+
+  getMe: async () => {
+    const res = await fetch(`${API_BASE}/auth/me`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ organisation: OrganisationInfo; stats: { projectCount: number; participantCount: number } }>(res);
+  },
+
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const res = await fetch(`${API_BASE}/auth/change-password`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  updateProfile: async (data: { name?: string; email?: string }) => {
+    const res = await fetch(`${API_BASE}/auth/profile`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ message: string; organisation: { id: string; name: string; email: string } }>(res);
+  },
+
+  // Dashboard
+  getDashboard: async () => {
+    const res = await fetch(`${API_BASE}/organisation/dashboard`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<OrgDashboardData>(res);
+  },
+
+  // Projects
+  getProjects: async () => {
+    const res = await fetch(`${API_BASE}/organisation/projects`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ projects: OrgProject[] }>(res);
+  },
+
+  getProject: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ project: OrgProjectDetail }>(res);
+  },
+
+  createProject: async (data: CreateOrgProjectData) => {
+    const res = await fetch(`${API_BASE}/organisation/projects`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ message: string; project: OrgProject; creditUsed: string }>(res);
+  },
+
+  updateProject: async (id: string, data: Partial<CreateOrgProjectData>) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ message: string; project: OrgProject }>(res);
+  },
+
+  deleteProject: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  // Billing
+  getBilling: async () => {
+    const res = await fetch(`${API_BASE}/organisation/billing`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<OrgBillingData>(res);
+  },
+
+  // Settings
+  getSettings: async () => {
+    const res = await fetch(`${API_BASE}/organisation/settings`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ organisation: OrganisationInfo }>(res);
+  },
+};
+
+// Organisation Types
+export interface OrganisationInfo {
+  id: string;
+  name: string;
+  email: string;
+  oid?: string;
+  projectCredits: number;
+  hasAnnualLicense: boolean;
+  annualLicenseExpiresAt?: string;
+  annualLicenseStartedAt?: string;
+  foundingCreditClaimed: boolean;
+  foundingCreditUsed: boolean;
+  foundingCreditExpiresAt?: string;
+  createdAt?: string;
+}
+
+export interface OrgCreditStatus {
+  available: number;
+  canCreateProject: boolean;
+  reason?: string;
+  hasFoundingCredit: boolean;
+  foundingCreditExpired: boolean;
+  foundingCreditExpiresAt?: string;
+  hasAnnualLicense: boolean;
+  annualLicenseExpired: boolean;
+  annualLicenseExpiresAt?: string;
+}
+
+export interface OrgProject {
+  id: string;
+  name: string;
+  description?: string;
+  country: string;
+  startDate: string;
+  endDate: string;
+  disseminationEnabled: boolean;
+  carRatePerKm: number;
+  participantCount: number;
+  creditSource?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface OrgProjectDetail extends OrgProject {
+  countryLimits: { id: string; country: string; maxReimbursementAmount: number; currency: string; greenTravel: boolean }[];
+  participants: { id: string; firstName: string; lastName: string; email: string; country: string; status: string; createdAt: string }[];
+}
+
+export interface OrgDashboardData {
+  organisation: { id: string; name: string; email: string };
+  credits: OrgCreditStatus;
+  stats: { projectCount: number; totalParticipants: number };
+  projects: OrgProject[];
+  recentPurchases: OrgPurchase[];
+}
+
+export interface OrgPurchase {
+  id: string;
+  type: string;
+  amountCents: number;
+  currency: string;
+  creditsGranted: number;
+  status?: string;
+  stripeInvoiceUrl?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface OrgBillingData {
+  credits: OrgCreditStatus & { projectCredits: number };
+  purchases: OrgPurchase[];
+}
+
+export interface CreateOrgProjectData {
+  name: string;
+  description?: string;
+  country: string;
+  startDate: string;
+  endDate: string;
+  carRatePerKm?: number;
+}
+
 export interface ConsolidationResult {
   success: boolean;
   message: string;

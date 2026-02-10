@@ -9,6 +9,16 @@ import Projects from './pages/admin/Projects';
 import ProjectDetail from './pages/admin/ProjectDetail';
 import ParticipantDetail from './pages/admin/ParticipantDetail';
 
+// Organisation pages
+import OrgLogin from './pages/organisation/Login';
+import OrgRegister from './pages/organisation/Register';
+import OrgDashboard from './pages/organisation/Dashboard';
+import OrgProjectCreate from './pages/organisation/ProjectCreate';
+import OrgProjectDetail from './pages/organisation/ProjectDetail';
+import OrgBilling from './pages/organisation/Billing';
+import OrgSettings from './pages/organisation/Settings';
+import FoundingAccess from './pages/organisation/FoundingAccess';
+
 // Participant pages
 import ParticipantLayout from './components/participant/ParticipantLayout';
 import ReimbursementPage from './pages/participant/ReimbursementPage';
@@ -44,6 +54,16 @@ function App() {
         <Route path="participants/:id" element={<ParticipantDetail />} />
       </Route>
 
+      {/* Organisation routes */}
+      <Route path="/org/login" element={<OrgLogin />} />
+      <Route path="/org/register" element={<OrgRegister />} />
+      <Route path="/org/dashboard" element={<OrgDashboard />} />
+      <Route path="/org/projects/new" element={<OrgProjectCreate />} />
+      <Route path="/org/projects/:id" element={<OrgProjectDetail />} />
+      <Route path="/org/billing" element={<OrgBilling />} />
+      <Route path="/org/settings" element={<OrgSettings />} />
+      <Route path="/founding-access" element={<FoundingAccess />} />
+
       {/* Participant routes */}
       <Route path="/reimbursement" element={<ParticipantLayout />}>
         <Route index element={<ReimbursementPage />} />
@@ -51,8 +71,8 @@ function App() {
       <Route path="/invalid-link" element={<InvalidLink />} />
 
       {/* Default redirect */}
-      <Route path="/" element={<Navigate to="/admin" replace />} />
-      <Route path="*" element={<Navigate to="/admin" replace />} />
+      <Route path="/" element={<Navigate to="/org/login" replace />} />
+      <Route path="*" element={<Navigate to="/org/login" replace />} />
     </Routes>
   );
 }
