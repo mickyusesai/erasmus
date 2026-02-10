@@ -584,6 +584,23 @@ RULE 9: AMOUNT HANDLING
 - 0 = price is explicitly zero (free) OR included in round-trip (with amountIncludedInRoundTrip: true)
 - NEVER use 0 as a substitute for null
 
+RULE 10: CONFLICTING PRICES - USE HIGHEST
+When multiple documents for the same travel leg show different prices:
+- USE THE HIGHEST price as it likely includes booking fees, service charges, or taxes
+- Example: If invoice shows €50 but bank statement shows €53.50, use €53.50
+- Document your choice in the "priceSourceDocId" field
+
+RULE 11: JOURNEY COHERENCE - SELF-VALIDATE
+Before finalizing, verify your journey makes logical sense:
+- Each leg's departure city should match the previous leg's arrival city
+- The journey should form a sensible path: Home → Project Location → Home
+- Check for impossible sequences (e.g., Amsterdam → Zagreb then Split → Rotterdam makes no sense)
+- If the journey doesn't connect logically, RE-EXAMINE the documents:
+  * Maybe dates were misread
+  * Maybe some legs are missing from documents
+  * Maybe documents from different trips were uploaded
+- In "journey_issues" array, list any problems found during validation
+
 === OUTPUT FORMAT ===
 
 Respond with ONLY a JSON object:
@@ -664,6 +681,11 @@ Respond with ONLY a JSON object:
       "type": "FLIGHT_BOARDING_PASS",
       "description": "Missing boarding pass for return flight Zagreb→Charleroi on 2025-11-30"
     }
+  ],
+
+  "journey_issues": [
+    "Leg 3 starts from Split but Leg 2 ended in Zagreb - these don't connect",
+    "Journey doesn't return to starting country"
   ]
 }
 

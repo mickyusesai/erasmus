@@ -253,31 +253,17 @@ router.post(
       storagePath
     );
 
-    // Create document record (with default type, will be updated by extraction)
+    // Create document record (type will be determined during consolidation)
     const document = await prisma.document.create({
       data: {
         participantId: participant.id,
         storedFilePath: storagePath,
         originalFilename: req.file.originalname,
-        renamedFilename: req.file.originalname, // Will be updated after analysis
+        renamedFilename: req.file.originalname,
         mimeType: req.file.mimetype,
         fileSize: req.file.size,
-        documentType: 'OTHER', // Will be updated by extraction
+        documentType: 'OTHER', // Will be updated during consolidation
       },
-    });
-
-    // Extract and store document data using the consolidation service
-    // This stores the extraction but does NOT create travel items
-    await consolidationService.extractAndStoreDocumentData(
-      document.id,
-      req.file.buffer,
-      req.file.mimetype
-    );
-
-    // Fetch the updated document with extraction
-    const updatedDocument = await prisma.document.findUnique({
-      where: { id: document.id },
-      include: { extraction: true },
     });
 
     // Clear the consolidation flag since we have new documents
@@ -287,9 +273,8 @@ router.post(
     });
 
     res.status(201).json({
-      document: updatedDocument,
-      extraction: updatedDocument?.extraction,
-      message: 'Document uploaded and analyzed. Travel items will be created when you proceed to review.',
+      document,
+      message: 'Document uploaded successfully.',
     });
   })
 );

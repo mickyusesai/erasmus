@@ -218,7 +218,7 @@ export default function ReimbursementPage() {
   }, [token, navigate]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['participant-auth', token],
+    queryKey: ['participant-auth'],
     queryFn: () => participantApi.authenticate(token!),
     enabled: !!token,
     retry: false,
@@ -808,9 +808,13 @@ function Step2CheckData({
   });
 
   const toggleCheckedMutation = useMutation({
-    mutationFn: (id: string) => participantApi.toggleTravelItemChecked(token, id),
+    mutationFn: (id: string) => {
+      console.log('[Mutation] toggleCheckedMutation called with id:', id, 'token:', token ? 'present' : 'missing');
+      return participantApi.toggleTravelItemChecked(token, id);
+    },
     // Optimistic update for instant UI feedback
     onMutate: async (id) => {
+      console.log('[Mutation] onMutate called for id:', id);
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
       // Snapshot the previous value
@@ -1916,7 +1920,10 @@ function TravelItemCard({
         </div>
         <button
           type="button"
-          onClick={onToggleChecked}
+          onClick={() => {
+            console.log('[Confirm] Button clicked for item:', item.id);
+            onToggleChecked();
+          }}
           className={clsx(
             'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
             item.checked
