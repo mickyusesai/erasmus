@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
+import { getStorageService } from '../storage/index.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -24,20 +25,6 @@ export class JourneyConsolidationService {
     this.client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
-  }
-
-  /**
-   * Get reasoning effort based on task complexity
-   * - "none": Fast, no extended thinking (default, but we don't use it)
-   * - "low": Light reasoning
-   * - "medium": Balanced reasoning for most tasks
-   * - "high": Deep reasoning for complex analysis
-   * - "xhigh": Maximum reasoning (GPT-5.2 pro only)
-   */
-  private getReasoningEffort(task: 'extraction' | 'consolidation'): 'none' | 'low' | 'medium' | 'high' {
-    // Extraction needs medium reasoning to handle poor quality images, date formats, multi-language
-    // Consolidation needs high reasoning to understand the full journey and match documents
-    return task === 'consolidation' ? 'high' : 'medium';
   }
 
   /**
@@ -142,14 +129,10 @@ export class JourneyConsolidationService {
       });
     }
 
-    const prompt = `You are an expert document analyst for Erasmus+ travel reimbursement.
-
-THINK STEP BY STEP:
-1. First, identify what TYPE of document this is (ticket, bank statement, receipt, etc.)
-2. Then, carefully examine ALL text, especially dates, prices, and locations
-3. For dates, explicitly identify the format before converting (e.g., "21.11.25 uses DD.MM.YY format")
-4. For multi-ticket documents, identify EACH separate ticket/segment
-5. Finally, structure your findings into the JSON format
+    // LIGHT EXTRACTION: Quick analysis for immediate UI feedback
+    // The heavy lifting is done in consolidation where AI sees ALL documents together
+    const prompt = `You are analyzing a travel document for Erasmus+ reimbursement.
+Quick extraction for UI feedback - a more thorough analysis will happen later.
 
 IMAGE QUALITY NOTE:
 This may be a PHOTO of a physical receipt or ticket (not a digital document). Photos can be blurry, tilted, low contrast, or show crumpled paper. TRY YOUR BEST to extract information even from poor quality images.
@@ -269,20 +252,18 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
     contentParts.push({ type: 'text', text: prompt });
 
     try {
-      const reasoningEffort = this.getReasoningEffort('extraction');
-      console.log(`[Consolidation] Using OpenAI ${this.model} for document extraction (reasoning: ${reasoningEffort})`);
+      console.log(`[Extraction] Quick extraction for UI feedback using ${this.model}`);
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_completion_tokens: 4000, // Increased to allow for reasoning tokens
-        reasoning: { effort: reasoningEffort },
+        max_completion_tokens: 2000, // Light extraction - keep it fast
         messages: [
           {
             role: 'user',
             content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
           },
         ],
-      } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+      });
 
       const responseText = response.choices[0]?.message?.content;
       if (!responseText) {
@@ -645,15 +626,88 @@ Do NOT warn about:
     const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
 
     try {
-      const reasoningEffort = this.getReasoningEffort('consolidation');
-      console.log(`[Consolidation] Using OpenAI ${this.model} for journey consolidation (reasoning: ${reasoningEffort})`);
+      console.log(`[Consolidation] Loading ${participant.documents.length} original documents for comprehensive analysis`);
+
+      // HYBRID APPROACH: Send ALL original documents to the AI for comprehensive analysis
+      // This gives the AI full visibility into the actual documents, not just JSON summaries
+      const storageService = getStorageService();
+
+      type ContentPart =
+        | { type: 'image_url'; image_url: { url: string; detail: 'high' | 'low' | 'auto' } }
+        | { type: 'file'; file: { file_data: string; filename: string } }
+        | { type: 'text'; text: string };
+
+      const contentParts: ContentPart[] = [];
+
+      // Load and add all document files
+      for (let i = 0; i < participant.documents.length; i++) {
+        const doc = participant.documents[i] as { id: string; storedFilePath: string; mimeType: string; originalFilename: string };
+        try {
+          const fileBuffer = await storageService.retrieve(doc.storedFilePath);
+          const isPdf = doc.mimeType.includes('pdf');
+
+          if (isPdf) {
+            // Send PDF directly
+            const base64Data = fileBuffer.toString('base64');
+            console.log(`[Consolidation] Adding document ${i + 1}: PDF (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
+            contentParts.push({
+              type: 'file',
+              file: {
+                file_data: `data:application/pdf;base64,${base64Data}`,
+                filename: `document_${i + 1}.pdf`,
+              },
+            });
+          } else {
+            // Process image - resize if needed
+            const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, doc.mimeType);
+            const base64Data = processedBuffer.toString('base64');
+            let mediaType = 'image/jpeg';
+            if (doc.mimeType.includes('png')) mediaType = 'image/png';
+            else if (doc.mimeType.includes('gif')) mediaType = 'image/gif';
+            else if (doc.mimeType.includes('webp')) mediaType = 'image/webp';
+
+            console.log(`[Consolidation] Adding document ${i + 1}: ${mediaType} (${(processedBuffer.length / 1024).toFixed(1)}KB)`);
+            contentParts.push({
+              type: 'image_url',
+              image_url: {
+                url: `data:${mediaType};base64,${base64Data}`,
+                detail: 'high',
+              },
+            });
+          }
+
+          // Add a text label for this document
+          contentParts.push({
+            type: 'text',
+            text: `[Document ${i + 1} - ID: ${doc.id}]`,
+          });
+        } catch (docError) {
+          console.error(`[Consolidation] Failed to load document ${doc.id}:`, docError);
+          contentParts.push({
+            type: 'text',
+            text: `[Document ${i + 1} - ID: ${doc.id} - FAILED TO LOAD]`,
+          });
+        }
+      }
+
+      // Add the analysis prompt with extraction summaries as additional context
+      contentParts.push({
+        type: 'text',
+        text: prompt + `\n\nPREVIOUS EXTRACTION SUMMARIES (for reference - verify against actual documents above):\n${JSON.stringify(extractionSummary, null, 2)}`,
+      });
+
+      console.log(`[Consolidation] Using OpenAI ${this.model} for journey consolidation with ${contentParts.length} content parts`);
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_completion_tokens: 8000, // Increased significantly for complex reasoning
-        reasoning: { effort: reasoningEffort },
-        messages: [{ role: 'user', content: prompt }],
-      } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+        max_completion_tokens: 8000,
+        messages: [
+          {
+            role: 'user',
+            content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
+          },
+        ],
+      });
 
       const responseText = response.choices[0]?.message?.content;
       if (!responseText) {
