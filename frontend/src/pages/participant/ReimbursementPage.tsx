@@ -465,13 +465,13 @@ function Step1Upload({
 }) {
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, filename: '' });
   const [consolidating, setConsolidating] = useState(false);
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => participantApi.uploadDocument(token, file),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
-      toast.success('Document uploaded and analyzed');
     },
     onError: () => {
       toast.error('Failed to upload document');
@@ -487,7 +487,14 @@ function Step1Upload({
   });
 
   // Consolidation: AI analyzes all documents together to build the journey
+  const consolidatingRef = React.useRef(false);
   const handleContinue = async () => {
+    // Guard against double-clicks / race conditions
+    if (consolidatingRef.current || consolidating) {
+      console.log('[UI] Consolidation already in progress, ignoring');
+      return;
+    }
+    consolidatingRef.current = true;
     setConsolidating(true);
     try {
       const result = await participantApi.consolidateJourney(token);
@@ -505,17 +512,36 @@ function Step1Upload({
     } catch (error) {
       console.error('Consolidation error:', error);
       toast.error('Failed to analyze journey. Please try again.');
+    } finally {
+      setConsolidating(false);
+      consolidatingRef.current = false;
     }
-    setConsolidating(false);
   };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    if (acceptedFiles.length === 0) return;
+
     setUploading(true);
-    for (const file of acceptedFiles) {
-      await uploadMutation.mutateAsync(file);
+    setUploadProgress({ current: 0, total: acceptedFiles.length, filename: '' });
+
+    for (let i = 0; i < acceptedFiles.length; i++) {
+      const file = acceptedFiles[i];
+      setUploadProgress({ current: i + 1, total: acceptedFiles.length, filename: file.name });
+      try {
+        await uploadMutation.mutateAsync(file);
+      } catch {
+        // Error already handled by mutation
+      }
     }
+
     setUploading(false);
-  }, []);
+    setUploadProgress({ current: 0, total: 0, filename: '' });
+    if (acceptedFiles.length > 1) {
+      toast.success(`${acceptedFiles.length} documents uploaded`);
+    } else {
+      toast.success('Document uploaded');
+    }
+  }, [uploadMutation]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -583,10 +609,27 @@ function Step1Upload({
         >
           <input {...getInputProps()} />
           {uploading ? (
-            <>
+            <div className="text-center">
               <Loader2 className="w-12 h-12 text-primary-400 animate-spin mx-auto mb-4" />
-              <p className="text-gray-600">Uploading and analyzing document...</p>
-            </>
+              {uploadProgress.total > 1 ? (
+                <>
+                  <p className="text-gray-600 font-medium">
+                    Uploading {uploadProgress.current} of {uploadProgress.total}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1 truncate max-w-xs mx-auto">
+                    {uploadProgress.filename}
+                  </p>
+                  <div className="w-48 h-2 bg-gray-200 rounded-full mx-auto mt-3">
+                    <div
+                      className="h-2 bg-primary-500 rounded-full transition-all duration-300"
+                      style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-gray-600">Uploading document...</p>
+              )}
+            </div>
           ) : (
             <>
               <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
@@ -608,36 +651,21 @@ function Step1Upload({
             <h3 className="font-semibold text-gray-900 mb-4">Uploaded Documents</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {data.documents.map((doc) => {
-                const isUnclear = doc.documentType === 'OTHER';
                 return (
-                  <div key={doc.id} className={clsx(
-                    "p-4 rounded-xl",
-                    isUnclear ? "bg-amber-50 border border-amber-200" : "bg-gray-50"
-                  )}>
+                  <div key={doc.id} className="p-4 rounded-xl bg-gray-50">
                     <div className="flex items-start gap-3">
-                      <div className={clsx(
-                        "w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0",
-                        isUnclear ? "bg-amber-100 border-amber-300" : "bg-white border-gray-200"
-                      )}>
-                        <FileText className={clsx("w-5 h-5", isUnclear ? "text-amber-600" : "text-gray-400")} />
+                      <div className="w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0 bg-white border-gray-200">
+                        <FileText className="w-5 h-5 text-gray-400" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-gray-900 truncate text-sm">
                           {doc.renamedFilename}
                         </p>
-                        <p className={clsx("text-xs", isUnclear ? "text-amber-600" : "text-gray-500")}>
-                          {docTypeLabels[doc.documentType]}
+                        <p className="text-xs text-gray-500">
+                          {docTypeLabels[doc.documentType] || 'Document'}
                         </p>
                       </div>
                     </div>
-                    {isUnclear && (
-                      <div className="mt-2 p-2 bg-amber-100 rounded-lg">
-                        <p className="text-xs text-amber-800">
-                          <strong>Note:</strong> This document couldn't be fully analyzed (image may be unclear).
-                          You can add the travel details manually in the next step.
-                        </p>
-                      </div>
-                    )}
                     <div className="flex gap-3 mt-3">
                       <button
                         onClick={() => handleViewDocument(doc.id)}
@@ -768,10 +796,7 @@ function Step2CheckData({
       }
       toast.error('Failed to update travel item');
     },
-    onSettled: () => {
-      // Always refetch after error or success to ensure consistency
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
-    },
+    // No onSettled refetch - optimistic update is sufficient
   });
 
   const deleteMutation = useMutation({
@@ -784,7 +809,7 @@ function Step2CheckData({
 
   const toggleCheckedMutation = useMutation({
     mutationFn: (id: string) => participantApi.toggleTravelItemChecked(token, id),
-    // Optimistic update for instant UI feedback
+    // Optimistic update for instant UI feedback - no refetch needed
     onMutate: async (id) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
@@ -809,10 +834,8 @@ function Step2CheckData({
       }
       toast.error('Failed to update confirmation status');
     },
-    onSettled: () => {
-      // Always refetch after error or success to ensure consistency
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
-    },
+    // No onSettled refetch - optimistic update is sufficient
+    // This prevents order changes and makes confirm instant
   });
 
   // Generate persistent warnings based on data analysis
@@ -1435,7 +1458,6 @@ function TravelItemCard({
 }) {
   const Icon = transportIcons[item.modeOfTransport];
   const isPlane = item.modeOfTransport === 'PLANE';
-  const hasBoardingPass = documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
   const hasDeclaration = declarationsOfTravel.some(dec => dec.travelItemId === item.id);
   const linkedDocument = documents.find(d => d.id === item.documentId);
   const isNonEurCurrency = item.currencyOriginal !== 'EUR';
@@ -1458,6 +1480,11 @@ function TravelItemCard({
     docs.push(...additionalDocuments);
     return docs;
   }, [linkedDocument, additionalDocuments]);
+
+  // Check if THIS travel item has a boarding pass linked (not just any boarding pass in all documents)
+  const hasBoardingPass = useMemo(() => {
+    return allLinkedDocuments.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+  }, [allLinkedDocuments]);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
 
