@@ -1,13 +1,9 @@
 import OpenAI from 'openai';
 import sharp from 'sharp';
-import { fromPath } from 'pdf2pic';
-import { writeFileSync, unlinkSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
 
-// Maximum image size for OpenAI API (20MB, but we'll keep it smaller for efficiency)
+// Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 /**
@@ -22,7 +18,7 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
  */
 export class JourneyConsolidationService {
   private client: OpenAI;
-  private model: string = 'gpt-4o'; // Use GPT-4o for vision capabilities (change to gpt-5.2 when available)
+  private model: string = 'gpt-5.2'; // GPT-5.2 with native PDF and vision support
 
   constructor() {
     this.client = new OpenAI({
@@ -81,78 +77,6 @@ export class JourneyConsolidationService {
   }
 
   /**
-   * Convert PDF to images for OpenAI vision API
-   */
-  private async convertPdfToImages(buffer: Buffer): Promise<Buffer[]> {
-    const images: Buffer[] = [];
-    const tempDir = join(tmpdir(), 'erasmus-pdf-' + Date.now());
-    const tempPdfPath = join(tempDir, 'input.pdf');
-
-    try {
-      // Create temp directory
-      if (!existsSync(tempDir)) {
-        mkdirSync(tempDir, { recursive: true });
-      }
-
-      // Write PDF to temp file
-      writeFileSync(tempPdfPath, buffer);
-
-      // Convert PDF to images
-      const converter = fromPath(tempPdfPath, {
-        density: 150,
-        saveFilename: 'page',
-        savePath: tempDir,
-        format: 'jpeg',
-        width: 1600,
-        height: 2000,
-      });
-
-      // Convert first 5 pages max (to avoid huge documents)
-      const pageLimit = 5;
-      for (let page = 1; page <= pageLimit; page++) {
-        try {
-          const result = await converter(page);
-          if (result.path) {
-            const imageBuffer = await sharp(result.path).jpeg({ quality: 80 }).toBuffer();
-            images.push(imageBuffer);
-            // Clean up the page image
-            try {
-              unlinkSync(result.path);
-            } catch {
-              // Ignore cleanup errors
-            }
-          }
-        } catch {
-          // No more pages or error - stop
-          break;
-        }
-      }
-
-      console.log(`[Consolidation] Converted PDF to ${images.length} images`);
-    } catch (error) {
-      console.error('[Consolidation] PDF conversion error:', error);
-      // Return empty array - will fall back to text extraction or skip
-    } finally {
-      // Clean up temp files
-      try {
-        unlinkSync(tempPdfPath);
-      } catch {
-        // Ignore
-      }
-      try {
-        if (existsSync(tempDir)) {
-          const { rmSync } = await import('fs');
-          rmSync(tempDir, { recursive: true, force: true });
-        }
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-
-    return images;
-  }
-
-  /**
    * Extract and store raw data from a single document
    * This is called during upload - we store the extraction but don't create travel items yet
    */
@@ -161,33 +85,33 @@ export class JourneyConsolidationService {
     fileBuffer: Buffer,
     mimeType: string
   ): Promise<void> {
-    console.log(`[Consolidation] Extracting data from document ${documentId} using OpenAI`);
+    console.log(`[Consolidation] Extracting data from document ${documentId} using OpenAI GPT-5.2`);
 
     const isPdf = mimeType.includes('pdf');
-    const imageContents: OpenAI.Chat.Completions.ChatCompletionContentPartImage[] = [];
+
+    // Build the content array for the API request
+    // GPT-5.2 supports both images and PDFs natively
+    type ContentPart =
+      | { type: 'image_url'; image_url: { url: string; detail: 'high' | 'low' | 'auto' } }
+      | { type: 'file'; file: { file_data: string; filename: string } }
+      | { type: 'text'; text: string };
+
+    const contentParts: ContentPart[] = [];
 
     if (isPdf) {
-      // Convert PDF to images
-      const pdfImages = await this.convertPdfToImages(fileBuffer);
-      if (pdfImages.length === 0) {
-        console.log('[Consolidation] Could not convert PDF to images, storing as failed extraction');
-        await this.storeFailedExtraction(documentId, 'Could not process PDF');
-        return;
-      }
+      // Send PDF directly - GPT-5.2 has native PDF support
+      const base64Data = fileBuffer.toString('base64');
+      console.log(`[Consolidation] Sending PDF directly (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
 
-      for (const imgBuffer of pdfImages) {
-        const resized = await this.resizeImageIfNeeded(imgBuffer, 'image/jpeg');
-        const base64Data = resized.toString('base64');
-        imageContents.push({
-          type: 'image_url',
-          image_url: {
-            url: `data:image/jpeg;base64,${base64Data}`,
-            detail: 'high',
-          },
-        });
-      }
+      contentParts.push({
+        type: 'file',
+        file: {
+          file_data: `data:application/pdf;base64,${base64Data}`,
+          filename: 'document.pdf',
+        },
+      });
     } else {
-      // Process image directly
+      // Process image - resize if needed
       const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, mimeType);
       const base64Data = processedBuffer.toString('base64');
       let mediaType = 'image/jpeg';
@@ -195,7 +119,7 @@ export class JourneyConsolidationService {
       else if (mimeType.includes('gif')) mediaType = 'image/gif';
       else if (mimeType.includes('webp')) mediaType = 'image/webp';
 
-      imageContents.push({
+      contentParts.push({
         type: 'image_url',
         image_url: {
           url: `data:${mediaType};base64,${base64Data}`,
@@ -227,7 +151,7 @@ Documents may show dates in various EUROPEAN formats. You MUST recognize and cor
 MONTH NAMES - Full AND ABBREVIATED forms (tickets often use abbreviations like "stu" for studeni/November!):
   * Croatian: siječanj, veljača, ožujak, travanj, svibanj, lipanj, srpanj, kolovoz, rujan, listopad, studeni, prosinac
   * Polish: styczeń, luty, marzec, kwiecień, maj, czerwiec, lipiec, sierpień, wrzesień, październik, listopad, grudzień
-  * Czech: leden, únor, březen, duben, květen, červen, červenec, srpen, září, říjen, listopad, prosinec
+  * Czech: leden, únor, březen, duben, květen, červen, červenec, srpen, září, říjen, listopad, prosinac
   * Hungarian: január, február, március, április, május, június, július, augusztus, szeptember, október, november, december
   * German: Januar, Februar, März, April, Mai, Juni, Juli, August, September, Oktober, November, Dezember
   * Dutch: januari, februari, maart, april, mei, juni, juli, augustus, september, oktober, november, december
@@ -290,6 +214,8 @@ For station names like "Rotterdam C." or "Eindhoven C." use just the city name (
 For "Instaphalte: Airport" type entries, use the actual location (e.g., Eindhoven Airport).
 REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
+    contentParts.push({ type: 'text', text: prompt });
+
     try {
       console.log(`[Consolidation] Using OpenAI ${this.model} for document extraction`);
 
@@ -299,10 +225,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         messages: [
           {
             role: 'user',
-            content: [
-              ...imageContents,
-              { type: 'text', text: prompt },
-            ],
+            content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
           },
         ],
       });
@@ -340,7 +263,6 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           busCompany: parsed.busCompany || null,
           amount: parsed.amount || null,
           currency: parsed.currency || null,
-          // Round-trip and multi-passenger detection
           isRoundTrip: parsed.isRoundTrip || false,
           numberOfPassengers: parsed.numberOfPassengers || null,
           allPassengerNames: parsed.allPassengerNames || null,
@@ -365,7 +287,6 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           busCompany: parsed.busCompany || null,
           amount: parsed.amount || null,
           currency: parsed.currency || null,
-          // Round-trip and multi-passenger detection
           isRoundTrip: parsed.isRoundTrip || false,
           numberOfPassengers: parsed.numberOfPassengers || null,
           allPassengerNames: parsed.allPassengerNames || null,
@@ -433,7 +354,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       .filter((d: { extraction: unknown }) => d.extraction)
       .map((d: { id: string; extraction: unknown }) => ({
         ...(d.extraction as Record<string, unknown>),
-        documentId: d.id, // Override with the actual document ID
+        documentId: d.id,
       }));
 
     if (extractions.length === 0) {
@@ -479,7 +400,6 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         bookingRef: ext.bookingReference,
         amount: ext.amount,
         currency: ext.currency,
-        // Round-trip and multi-passenger info
         isRoundTrip: ext.isRoundTrip || false,
         numberOfPassengers: ext.numberOfPassengers || 1,
         allPassengerNames: ext.allPassengerNames || null,
@@ -641,31 +561,27 @@ Respond with ONLY a JSON object:
         const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
         const existingMatch = existingSignatures.find(
           (existing: { signature: string; item: { fromLocation: string; toLocation: string } }) => existing.signature === itemSignature ||
-            // Fuzzy match: same locations but possibly different date format
             (existing.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
              existing.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
         );
 
         if (existingMatch) {
-          // Skip creating this item - we're preserving the existing version
           console.log(`[Consolidation] Preserving existing travel item: ${itemSignature}`);
           createdItems.push(existingMatch.item);
           continue;
         }
-        // Find valid documents to link - only use IDs that actually exist
+
+        // Find valid documents to link
         const linkedDocs = (item.linkedDocumentIds || []) as string[];
         const validLinkedDocs: string[] = [];
 
-        // Process all linked document references
         for (const docRef of linkedDocs) {
           if (validDocumentIds.has(docRef)) {
-            // It's a valid UUID directly
             validLinkedDocs.push(docRef);
           } else {
-            // Check if it's a numeric reference like "1" or "doc-1"
             const match = docRef.match(/(\d+)/);
             if (match) {
-              const index = parseInt(match[1], 10) - 1; // AI uses 1-based indexing
+              const index = parseInt(match[1], 10) - 1;
               if (index >= 0 && index < participant.documents.length) {
                 const resolvedId = participant.documents[index].id;
                 if (!validLinkedDocs.includes(resolvedId)) {
@@ -676,15 +592,12 @@ Respond with ONLY a JSON object:
           }
         }
 
-        // First valid doc is primary, rest are additional
         const primaryDocId: string | null = validLinkedDocs.length > 0 ? validLinkedDocs[0] : null;
         const additionalDocIds = validLinkedDocs.slice(1);
 
-        // Get currency - ALWAYS prefer document extraction's currency as source of truth
-        // The AI consolidation may incorrectly default to EUR
+        // Get currency from document extraction
         let currency: string | null = null;
         if (primaryDocId) {
-          // Look up the document's extraction to get the currency
           const docExtraction = await prisma.documentExtraction.findUnique({
             where: { documentId: primaryDocId },
           });
@@ -693,15 +606,11 @@ Respond with ONLY a JSON object:
             console.log(`[Consolidation] Using currency ${currency} from document extraction for ${item.fromLocation} -> ${item.toLocation}`);
           }
         }
-        // Fall back to AI response currency, then EUR
         if (!currency) {
           currency = (item.currency as string) || 'EUR';
         }
 
-        // Get the full amount (no price allocation splitting)
         const baseAmount = item.amount || 0;
-
-        // Convert currency to EUR
         let amountEur = baseAmount;
         if (currency !== 'EUR') {
           amountEur = this.convertToEur(baseAmount, currency);
@@ -710,7 +619,7 @@ Respond with ONLY a JSON object:
         const travelItem = await prisma.travelItem.create({
           data: {
             participantId,
-            documentId: primaryDocId, // Will be null if no valid document found
+            documentId: primaryDocId,
             additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
             modeOfTransport: this.mapTransportMode(item.modeOfTransport),
             fromLocation: item.fromLocation || 'Unknown',
@@ -720,15 +629,13 @@ Respond with ONLY a JSON object:
             bookingReference: item.bookingReference || null,
             flightNumber: item.flightNumber || null,
             amountOriginal: baseAmount,
-            currencyOriginal: currency, // Use currency from AI or document extraction
+            currencyOriginal: currency,
             purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
             amountEur,
             comment: item.notes || null,
             manuallyEdited: false,
-            originalAmountFromAi: baseAmount, // Store original AI-detected amount
-            // Round-trip flag
+            originalAmountFromAi: baseAmount,
             isRoundTrip: item.isRoundTrip || false,
-            // Multi-passenger bookings
             numberOfPassengers: item.numberOfPassengers || null,
           },
         });
@@ -736,7 +643,7 @@ Respond with ONLY a JSON object:
         createdItems.push(travelItem);
       }
 
-      // Include any existing items that weren't matched by AI (they're still in DB)
+      // Include any existing items that weren't matched by AI
       const createdItemIds = new Set(createdItems.map((item: { id: string }) => item.id));
       for (const existing of existingItems) {
         if (!createdItemIds.has(existing.id)) {
