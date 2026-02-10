@@ -470,8 +470,10 @@ function Step1Upload({
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => participantApi.uploadDocument(token, file),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+    onSuccess: async () => {
+      // Use refetchQueries to immediately show the uploaded file
+      // (invalidateQueries only marks stale, doesn't wait for refetch)
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
     },
     onError: () => {
       toast.error('Failed to upload document');

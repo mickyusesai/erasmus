@@ -25,6 +25,7 @@ export class JourneyConsolidationService {
     this.client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
+    console.log(`[Consolidation Service] Using OpenAI ${this.model} for document extraction and analysis`);
   }
 
   /**

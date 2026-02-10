@@ -272,6 +272,16 @@ router.post(
       data: { journeyConsolidatedAt: null },
     });
 
+    // Extract document data in the background (don't block the response)
+    // This enables the AI to analyze the document so consolidation works later
+    consolidationService.extractAndStoreDocumentData(
+      document.id,
+      req.file.buffer,
+      req.file.mimetype
+    ).catch((error) => {
+      console.error(`[Upload] Background extraction failed for document ${document.id}:`, error);
+    });
+
     res.status(201).json({
       document,
       message: 'Document uploaded successfully.',
