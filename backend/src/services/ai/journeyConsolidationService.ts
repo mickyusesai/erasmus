@@ -221,7 +221,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_tokens: 1500,
+        max_completion_tokens: 1500,
         messages: [
           {
             role: 'user',
@@ -526,7 +526,7 @@ Respond with ONLY a JSON object:
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_tokens: 3000,
+        max_completion_tokens: 3000,
         messages: [{ role: 'user', content: prompt }],
       });
 
