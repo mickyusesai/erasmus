@@ -153,7 +153,11 @@ model DocumentExtraction {
   outboundFlightNumber  String?                   // For round-trips: outbound flight number
   returnFlightNumber    String?                   // For round-trips: return flight number
 
-  // Raw AI response for debugging
+  // Multi-ticket support (for documents containing multiple journey segments)
+  additionalTickets     String?      // JSON array of additional tickets found in this document
+
+  // AI reasoning for debugging
+  extractionReasoning   String?      // Brief explanation of how the AI extracted data
   rawAiResponse         String?
 
   // Processing status

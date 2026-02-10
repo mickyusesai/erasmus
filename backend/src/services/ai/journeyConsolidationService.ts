@@ -27,6 +27,20 @@ export class JourneyConsolidationService {
   }
 
   /**
+   * Get reasoning effort based on task complexity
+   * - "none": Fast, no extended thinking (default, but we don't use it)
+   * - "low": Light reasoning
+   * - "medium": Balanced reasoning for most tasks
+   * - "high": Deep reasoning for complex analysis
+   * - "xhigh": Maximum reasoning (GPT-5.2 pro only)
+   */
+  private getReasoningEffort(task: 'extraction' | 'consolidation'): 'none' | 'low' | 'medium' | 'high' {
+    // Extraction needs medium reasoning to handle poor quality images, date formats, multi-language
+    // Consolidation needs high reasoning to understand the full journey and match documents
+    return task === 'consolidation' ? 'high' : 'medium';
+  }
+
+  /**
    * Resize image if it exceeds the maximum size
    * Uses iterative approach to ensure image is under limit
    */
@@ -128,7 +142,14 @@ export class JourneyConsolidationService {
       });
     }
 
-    const prompt = `You are analyzing a travel document for Erasmus+ reimbursement.
+    const prompt = `You are an expert document analyst for Erasmus+ travel reimbursement.
+
+THINK STEP BY STEP:
+1. First, identify what TYPE of document this is (ticket, bank statement, receipt, etc.)
+2. Then, carefully examine ALL text, especially dates, prices, and locations
+3. For dates, explicitly identify the format before converting (e.g., "21.11.25 uses DD.MM.YY format")
+4. For multi-ticket documents, identify EACH separate ticket/segment
+5. Finally, structure your findings into the JSON format
 
 IMAGE QUALITY NOTE:
 This may be a PHOTO of a physical receipt or ticket (not a digital document). Photos can be blurry, tilted, low contrast, or show crumpled paper. TRY YOUR BEST to extract information even from poor quality images.
@@ -198,6 +219,8 @@ Extract ALL information you can find. Respond with ONLY a JSON object:
 {
   "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "OTHER",
   "confidence": 0.0-1.0,
+  "reasoning": "Brief explanation of how you identified the document type and extracted key information",
+
   "passengerName": "Full name of passenger or null",
   "fromLocation": "Origin city/airport or null (null for bank transactions without explicit route)",
   "toLocation": "Destination city/airport or null (null for bank transactions without explicit route)",
@@ -219,7 +242,17 @@ Extract ALL information you can find. Respond with ONLY a JSON object:
   "outboundFlightNumber": "Flight number for outbound journey or null",
   "returnFlightNumber": "Flight number for return journey or null",
   "outboundDepartureDate": "YYYY-MM-DD for outbound flight or null",
-  "returnDepartureDate": "YYYY-MM-DD for return flight or null"
+  "returnDepartureDate": "YYYY-MM-DD for return flight or null",
+
+  "additionalTickets": [
+    {
+      "fromLocation": "...",
+      "toLocation": "...",
+      "departureDate": "YYYY-MM-DD",
+      "amount": 12.34 or null,
+      "trainNumber": "..." or null
+    }
+  ] // ONLY if this document contains MULTIPLE separate tickets/segments (e.g., multi-leg train journey)
 }
 
 IMPORTANT - Round-trip detection:
@@ -236,18 +269,20 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
     contentParts.push({ type: 'text', text: prompt });
 
     try {
-      console.log(`[Consolidation] Using OpenAI ${this.model} for document extraction`);
+      const reasoningEffort = this.getReasoningEffort('extraction');
+      console.log(`[Consolidation] Using OpenAI ${this.model} for document extraction (reasoning: ${reasoningEffort})`);
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_completion_tokens: 1500,
+        max_completion_tokens: 4000, // Increased to allow for reasoning tokens
+        reasoning: { effort: reasoningEffort },
         messages: [
           {
             role: 'user',
             content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
           },
         ],
-      });
+      } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
       const responseText = response.choices[0]?.message?.content;
       if (!responseText) {
@@ -288,6 +323,8 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           allPassengerNames: parsed.allPassengerNames || null,
           outboundFlightNumber: parsed.outboundFlightNumber || null,
           returnFlightNumber: parsed.returnFlightNumber || null,
+          additionalTickets: parsed.additionalTickets ? JSON.stringify(parsed.additionalTickets) : null,
+          extractionReasoning: parsed.reasoning || null,
           rawAiResponse: responseText,
         },
         update: {
@@ -313,6 +350,8 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           allPassengerNames: parsed.allPassengerNames || null,
           outboundFlightNumber: parsed.outboundFlightNumber || null,
           returnFlightNumber: parsed.returnFlightNumber || null,
+          additionalTickets: parsed.additionalTickets ? JSON.stringify(parsed.additionalTickets) : null,
+          extractionReasoning: parsed.reasoning || null,
           rawAiResponse: responseText,
           consolidated: false,
         },
@@ -409,7 +448,18 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         returnFlightNumber?: string;
         merchantName?: string;
         busCompany?: string;
+        additionalTickets?: string;
+        extractionReasoning?: string;
       };
+      // Parse additional tickets if present
+      let additionalTickets = null;
+      if (ext.additionalTickets) {
+        try {
+          additionalTickets = JSON.parse(ext.additionalTickets);
+        } catch {
+          // Ignore parse errors
+        }
+      }
       return {
         docIndex: i + 1,
         documentId: ext.documentId,
@@ -429,10 +479,22 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         outboundFlightNumber: ext.outboundFlightNumber || null,
         returnFlightNumber: ext.returnFlightNumber || null,
         merchantName: ext.merchantName || ext.busCompany || null,
+        additionalTickets: additionalTickets,
+        extractionReasoning: ext.extractionReasoning || null,
       };
     });
 
-    const prompt = `You are an AI agent helping to process Erasmus+ travel reimbursements.
+    const prompt = `You are an expert travel document analyst for Erasmus+ reimbursements.
+
+THINK STEP BY STEP - Before generating output, reason through:
+1. What is the participant's home country based on travel patterns?
+2. Which documents are tickets vs. payment receipts vs. bank transactions?
+3. For each ticket: what is the route, date, and price?
+4. Do any bank transactions match tickets by merchant name/amount/date?
+5. Are there round-trip bookings? If so, identify both legs.
+6. Are there multi-ticket documents? Check "additionalTickets" field.
+7. Is any price information missing that exists in other documents?
+8. What is the complete journey timeline from home → project → home?
 
 PARTICIPANT INFO:
 - Name: ${participant.firstName} ${participant.lastName}
@@ -583,13 +645,15 @@ Do NOT warn about:
     const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
 
     try {
-      console.log(`[Consolidation] Using OpenAI ${this.model} for journey consolidation`);
+      const reasoningEffort = this.getReasoningEffort('consolidation');
+      console.log(`[Consolidation] Using OpenAI ${this.model} for journey consolidation (reasoning: ${reasoningEffort})`);
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_completion_tokens: 3000,
+        max_completion_tokens: 8000, // Increased significantly for complex reasoning
+        reasoning: { effort: reasoningEffort },
         messages: [{ role: 'user', content: prompt }],
-      });
+      } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
 
       const responseText = response.choices[0]?.message?.content;
       if (!responseText) {
