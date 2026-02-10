@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
@@ -487,7 +487,7 @@ function Step1Upload({
   });
 
   // Consolidation: AI analyzes all documents together to build the journey
-  const consolidatingRef = React.useRef(false);
+  const consolidatingRef = useRef(false);
   const handleContinue = async () => {
     // Guard against double-clicks / race conditions
     if (consolidatingRef.current || consolidating) {
