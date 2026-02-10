@@ -829,21 +829,7 @@ Do NOT warn about:
       // Create new travel items based on consolidation
       const createdItems = [];
       for (const item of result.travel_items || []) {
-        // Check if this matches ANY existing item (same route and date)
-        const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
-        const existingMatch = existingSignatures.find(
-          (existing: { signature: string; item: { fromLocation: string; toLocation: string } }) => existing.signature === itemSignature ||
-            (existing.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
-             existing.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
-        );
-
-        if (existingMatch) {
-          console.log(`[Consolidation] Preserving existing travel item: ${itemSignature}`);
-          createdItems.push(existingMatch.item);
-          continue;
-        }
-
-        // Find valid documents to link
+        // Find valid documents to link FIRST (needed for both new and existing items)
         const linkedDocs = (item.linkedDocumentIds || []) as string[];
         const validLinkedDocs: string[] = [];
 
@@ -856,6 +842,40 @@ Do NOT warn about:
 
         const primaryDocId: string | null = validLinkedDocs.length > 0 ? validLinkedDocs[0] : null;
         const additionalDocIds = validLinkedDocs.slice(1);
+
+        // Check if this matches ANY existing item (same route and date)
+        const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
+        const existingMatch = existingSignatures.find(
+          (existing: { signature: string; item: { fromLocation: string; toLocation: string } }) => existing.signature === itemSignature ||
+            (existing.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
+             existing.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
+        );
+
+        if (existingMatch) {
+          // UPDATE existing item's document links if AI provides new ones
+          if (primaryDocId) {
+            const existingItem = existingMatch.item as { id: string; documentId: string | null };
+            const oldDocId = existingItem.documentId;
+
+            await prisma.travelItem.update({
+              where: { id: existingItem.id },
+              data: {
+                documentId: primaryDocId,
+                additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
+              },
+            });
+
+            if (oldDocId !== primaryDocId) {
+              console.log(`[Consolidation] Updated document link for existing item ${itemSignature}: ${oldDocId} -> ${primaryDocId}`);
+            } else {
+              console.log(`[Consolidation] Preserved existing travel item with same document: ${itemSignature}`);
+            }
+          } else {
+            console.log(`[Consolidation] Preserved existing travel item (no new document link): ${itemSignature}`);
+          }
+          createdItems.push(existingMatch.item);
+          continue;
+        }
 
         // Get currency from document extraction or item
         let currency: string | null = null;
