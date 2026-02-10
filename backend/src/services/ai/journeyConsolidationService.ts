@@ -767,7 +767,7 @@ Do NOT warn about:
       // Keep ALL existing travel items - don't delete any
       // Only add new items from AI that don't match existing items
       const existingItems = participant.travelItems || [];
-      const existingSignatures = existingItems.map((item: { id: string; fromLocation: string; toLocation: string; departureDate: Date }) => ({
+      const existingSignatures = existingItems.map((item: { id: string; fromLocation: string; toLocation: string; departureDate: Date; documentId: string | null }) => ({
         id: item.id,
         signature: `${item.fromLocation.toLowerCase()}-${item.toLocation.toLowerCase()}-${item.departureDate.toISOString().split('T')[0]}`,
         item,
@@ -846,7 +846,7 @@ Do NOT warn about:
         // Check if this matches ANY existing item (same route and date)
         const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
         const existingMatch = existingSignatures.find(
-          (existing: { signature: string; item: { fromLocation: string; toLocation: string } }) => existing.signature === itemSignature ||
+          (existing: { signature: string; item: { id: string; fromLocation: string; toLocation: string; documentId: string | null } }) => existing.signature === itemSignature ||
             (existing.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
              existing.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
         );
@@ -854,11 +854,10 @@ Do NOT warn about:
         if (existingMatch) {
           // UPDATE existing item's document links if AI provides new ones
           if (primaryDocId) {
-            const existingItem = existingMatch.item as { id: string; documentId: string | null };
-            const oldDocId = existingItem.documentId;
+            const oldDocId = existingMatch.item.documentId;
 
             await prisma.travelItem.update({
-              where: { id: existingItem.id },
+              where: { id: existingMatch.item.id },
               data: {
                 documentId: primaryDocId,
                 additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
