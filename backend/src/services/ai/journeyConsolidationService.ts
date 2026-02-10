@@ -444,62 +444,123 @@ PARTICIPANT INFO:
 EXTRACTED DOCUMENT DATA:
 ${JSON.stringify(extractionSummary, null, 2)}
 
-YOUR TASK:
-1. DETECT THE ACTUAL HOME COUNTRY: Analyze ALL travel documents to determine which country the participant actually traveled FROM.
-2. MERGE related documents into single travel items (see MERGING RULES below)
-3. Create a coherent journey timeline from home → project → home
-4. Flag only actionable warnings
+=== CRITICAL RULES - DO NOT VIOLATE ===
 
-=== CRITICAL MERGING RULES ===
+RULE 1: DO NOT INVENT ROUTES OR SEGMENTS
+- Each travel_item MUST correspond to exactly ONE ticket, boarding pass, or explicitly documented journey segment
+- NEVER create synthetic routes that don't appear on any document
+- NEVER combine multiple tickets into a new imaginary route
+- If a document contains multiple tickets (e.g., a train journey with 2 segments), create SEPARATE travel items for EACH segment
 
-RULE 1: MERGE TICKETS AND BANK TRANSACTIONS
-When a ticket document and a bank transaction/payment clearly belong to the same journey, MERGE them into ONE travel item:
+RULE 2: DO NOT INVENT PRICES
+- Only use prices that are EXPLICITLY stated in uploaded documents
+- If no price is found in ANY document for a travel item, set amount to null
+- NEVER use 0 as a placeholder for unknown prices (0 means actually free)
+- NEVER estimate or calculate prices that aren't documented
+- If summing prices, the sum must equal the exact total of documented individual prices
 
-Matching criteria:
-- Similar merchant/company name (e.g., "Pleso prijevoz" on ticket matches "PLESO PRIJEVOZ" on bank statement)
-- Compatible dates (purchase date may be before travel date)
-- Amount on payment matches expected ticket price
-
-When merging:
-- Use FROM/TO from the TICKET document (not the payment)
-- Use DEPARTURE DATE from the TICKET document
-- Use AMOUNT from the PAYMENT document (if ticket has no price)
-- Link BOTH documents to the same travel item
-- Do NOT create a separate "Unknown → Unknown" item for the payment
-
-RULE 2: BANK TRANSACTIONS ARE NOT TRAVEL ITEMS
-For documents with type "BANK_TRANSACTION":
-- The date is a PURCHASE date, NOT a travel date
-- Do NOT create a standalone travel item unless you can match it to a ticket
-- If no matching ticket exists AND the merchant clearly implies a route, only then create an item
-- Example: "PLESO PRIJEVOZ" = Zagreb Airport shuttle - look for a matching bus ticket first
-
-RULE 3: USE ITINERARY DOCUMENTS FOR PRICES
-For flights:
-- Search booking confirmations for total price (e.g., "Total price of your trip: 66.99 EUR")
-- If found, use this price for the travel item
-- Boarding passes alone don't have prices - don't warn about missing price if an itinerary exists
-- Only warn about missing price if NO document has the price
-
-RULE 4: ROUND-TRIP BOOKING HANDLING (CRITICAL)
+RULE 3: ROUND-TRIP BOOKINGS - SEPARATE LEGS
 When a booking is marked isRoundTrip=true:
-- Create ONE travel item (not two) with the COMBINED total price
-- Set isRoundTrip: true on the travel item
-- fromLocation/toLocation should be the OUTBOUND journey
-- Store outboundDepartureDate and returnDepartureDate if available
-- ALL boarding passes for ALL legs must be present for full confirmation
-- If only one boarding pass exists, warn: "Missing boarding pass for return flight"
+- Create TWO separate travel_items: one for outbound, one for return
+- Link both to the same booking object via bookingReference
+- For PRICE handling on round-trips:
+  * If only a TOTAL booking price is known (no per-leg prices): set amount=null on EACH leg, and create a booking entry
+  * If per-leg prices are explicitly documented: use those prices on each leg
+- Set priceEditable=false on legs if only total booking price exists
 
-RULE 5: JOURNEY TIMELINE CONSISTENCY
-- Only create travel items for REAL documented journeys
-- Do NOT infer or guess legs that don't exist in documents
-- If documents show "Brussels (Charleroi) → Zagreb" for return, use that - don't assume "Eindhoven → Zagreb"
-- Each travel item represents one actual leg of the journey
+RULE 4: PRICE RESOLUTION ACROSS DOCUMENTS
+For each travel item, search ALL documents for a matching price:
+- Match by: booking reference, flight number, or route+date
+- If a flight leg has no price but an itinerary/invoice has the total booking price, note this in the booking
+- If a ticket has a price on a separate bank transaction, link them and use that price
+- Record priceSourceDocId to show which document provided the price
 
-RULE 6: AMOUNT HANDLING
-- Use null for unknown amounts, NOT 0
-- 0 means the actual price was zero (rare)
-- null means price is unknown/not found
+RULE 5: BANK TRANSACTIONS ARE NOT TRAVEL ITEMS
+- BANK_TRANSACTION documents should ONLY provide price information
+- Link them to the corresponding ticket via document_links
+- NEVER create a travel item from a bank transaction alone
+- If a bank transaction cannot be matched to any ticket, note it in unmatched_payments
+
+RULE 6: MULTI-TICKET DOCUMENTS
+If one document (e.g., train booking) contains multiple ticket segments:
+- Create a SEPARATE travel_item for EACH segment
+- Each segment has its own from, to, date, and amount
+- If the document shows a total price and individual segment prices, use the individual prices
+- If only a total is shown, split proportionally OR set individual amounts to null and note the total
+
+RULE 7: AMOUNT HANDLING
+- null = price is unknown (could not find in any document)
+- 0 = price is explicitly zero (free travel, promo, etc.)
+- NEVER use 0 as a substitute for null
+
+=== OUTPUT FORMAT ===
+
+Respond with ONLY a JSON object:
+{
+  "journey_summary": "Brief description of the actual documented journey",
+  "detected_home_country": "Country name where journey starts and ends",
+  "home_country_confidence": 0.0-1.0,
+  "home_country_reasoning": "Brief explanation based on document evidence",
+
+  "bookings": [
+    {
+      "bookingReference": "ABC123",
+      "isRoundTrip": true,
+      "totalAmount": 66.99 or null,
+      "currency": "EUR",
+      "numberOfPassengers": 1,
+      "hasPerLegPrices": false,
+      "priceSource": "Document #3 (flight itinerary)",
+      "linkedDocumentIds": ["doc-id-1", "doc-id-3"]
+    }
+  ],
+
+  "travel_items": [
+    {
+      "modeOfTransport": "PLANE" | "TRAIN" | "BUS" | "CAR" | "FERRY" | "OTHER",
+      "fromLocation": "City name (exactly as documented)",
+      "toLocation": "City name (exactly as documented)",
+      "departureDate": "YYYY-MM-DD",
+      "arrivalDate": "YYYY-MM-DD or null",
+      "bookingReference": "Reference or null (links to bookings array)",
+      "flightNumber": "Flight number or null",
+      "amount": 123.45 or null (ONLY if explicitly documented, otherwise null),
+      "currency": "EUR",
+      "priceEditable": true or false (false if part of round-trip with only total price),
+      "priceMissing": true or false (true if no price found anywhere),
+      "priceSourceDocId": "doc-id that provided the price, or null",
+      "purchaseDate": "YYYY-MM-DD or null",
+      "linkedDocumentIds": ["doc-id-1"],
+      "numberOfPassengers": 1
+    }
+  ],
+
+  "document_links": [
+    {
+      "ticketDocId": "doc-id-for-ticket",
+      "paymentDocId": "doc-id-for-payment",
+      "reason": "Matching merchant name and date"
+    }
+  ],
+
+  "unmatched_payments": [
+    {
+      "docId": "doc-id",
+      "merchantName": "UNKNOWN MERCHANT",
+      "amount": 50.00,
+      "reason": "Could not match to any ticket"
+    }
+  ],
+
+  "warnings": ["Only actionable issues - missing boarding pass, name mismatch, etc."],
+
+  "missing_documents": [
+    {
+      "type": "FLIGHT_BOARDING_PASS",
+      "description": "Missing boarding pass for return flight Zagreb→Charleroi on 2025-11-30"
+    }
+  ]
+}
 
 === DATE PARSING ===
 - European format: DD/MM/YYYY or DD.MM.YYYY - day comes FIRST!
@@ -510,56 +571,13 @@ RULE 6: AMOUNT HANDLING
 Only warn about ACTIONABLE problems:
 - Name mismatch between ticket and participant
 - Multi-passenger booking needs portion specified
-- Missing boarding pass for a flight (but NOT for round-trip bookings - UI handles this)
-- Amount is truly missing (not on any linked document)
-- Location is "Unknown"
+- Missing boarding pass for a documented flight
+- Price truly missing (priceMissing=true)
 
 Do NOT warn about:
-- Travel dates before/after project (normal for travel to/from event)
-- Round-trip bookings (UI shows this)
-- Explanatory messages ("appears to be returning home")
-
-Respond with ONLY a JSON object:
-{
-  "journey_summary": "Brief description: e.g., 'Elena traveled from Zagreb to Dordrecht via Charleroi, returning the same route'",
-  "detected_home_country": "Country name where journey starts and ends",
-  "home_country_confidence": 0.0-1.0,
-  "home_country_reasoning": "Brief explanation",
-  "travel_items": [
-    {
-      "modeOfTransport": "PLANE" | "TRAIN" | "BUS" | "CAR" | "FERRY" | "OTHER",
-      "fromLocation": "City name",
-      "toLocation": "City name",
-      "departureDate": "YYYY-MM-DD",
-      "arrivalDate": "YYYY-MM-DD or null",
-      "bookingReference": "Reference or null",
-      "flightNumber": "Flight number or null",
-      "amount": 123.45 or null (use null if unknown, NOT 0),
-      "currency": "EUR",
-      "purchaseDate": "YYYY-MM-DD or null",
-      "linkedDocumentIds": ["doc-id-1", "doc-id-2"],
-      "notes": "Any relevant notes",
-      "isRoundTrip": false,
-      "numberOfPassengers": 1,
-      "outboundDepartureDate": "YYYY-MM-DD or null (for round-trips)",
-      "returnDepartureDate": "YYYY-MM-DD or null (for round-trips)"
-    }
-  ],
-  "document_links": [
-    {
-      "ticketDocId": "doc-id-for-ticket",
-      "paymentDocId": "doc-id-for-payment",
-      "reason": "Why these are linked"
-    }
-  ],
-  "warnings": ["Only actionable issues"],
-  "missing_documents": [
-    {
-      "type": "FLIGHT_BOARDING_PASS",
-      "description": "Missing boarding pass for return flight on YYYY-MM-DD"
-    }
-  ]
-}`;
+- Travel dates before/after project (normal for travel to/from)
+- Round-trip structure (UI handles this)
+- Explanatory messages`;
 
     // Build a set of valid document IDs for this participant
     const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
@@ -597,6 +615,57 @@ Respond with ONLY a JSON object:
 
       console.log(`[Consolidation] Found ${existingItems.length} existing travel items to preserve`);
 
+      // Helper to resolve document IDs (handles both actual IDs and index references like "doc-1")
+      const resolveDocumentId = (docRef: string): string | null => {
+        if (validDocumentIds.has(docRef)) {
+          return docRef;
+        }
+        const match = docRef.match(/(\d+)/);
+        if (match) {
+          const index = parseInt(match[1], 10) - 1;
+          if (index >= 0 && index < participant.documents.length) {
+            return participant.documents[index].id;
+          }
+        }
+        return null;
+      };
+
+      // Create TravelBooking objects for round-trip and multi-leg bookings
+      const bookingIdMap = new Map<string, string>(); // bookingReference -> TravelBooking.id
+      for (const booking of result.bookings || []) {
+        if (!booking.bookingReference) continue;
+
+        // Resolve linked document IDs
+        const linkedDocIds = (booking.linkedDocumentIds || [])
+          .map((ref: string) => resolveDocumentId(ref))
+          .filter((id: string | null): id is string => id !== null);
+
+        // Convert total amount to EUR if needed
+        const currency = booking.currency || 'EUR';
+        const totalAmount = booking.totalAmount ?? null;
+        const totalAmountEur = totalAmount !== null && currency !== 'EUR'
+          ? this.convertToEur(totalAmount, currency)
+          : totalAmount;
+
+        const travelBooking = await prisma.travelBooking.create({
+          data: {
+            participantId,
+            bookingReference: booking.bookingReference,
+            isRoundTrip: booking.isRoundTrip || false,
+            totalAmount: totalAmount,
+            currency: currency,
+            totalAmountEur: totalAmountEur,
+            numberOfPassengers: booking.numberOfPassengers || null,
+            documentIds: linkedDocIds.length > 0 ? JSON.stringify(linkedDocIds) : null,
+            hasPerLegPrices: booking.hasPerLegPrices || false,
+            priceSource: booking.priceSource || null,
+          },
+        });
+
+        bookingIdMap.set(booking.bookingReference, travelBooking.id);
+        console.log(`[Consolidation] Created booking ${booking.bookingReference} (round-trip: ${booking.isRoundTrip}, total: ${totalAmount} ${currency})`);
+      }
+
       // Create new travel items based on consolidation
       const createdItems = [];
       for (const item of result.travel_items || []) {
@@ -619,26 +688,16 @@ Respond with ONLY a JSON object:
         const validLinkedDocs: string[] = [];
 
         for (const docRef of linkedDocs) {
-          if (validDocumentIds.has(docRef)) {
-            validLinkedDocs.push(docRef);
-          } else {
-            const match = docRef.match(/(\d+)/);
-            if (match) {
-              const index = parseInt(match[1], 10) - 1;
-              if (index >= 0 && index < participant.documents.length) {
-                const resolvedId = participant.documents[index].id;
-                if (!validLinkedDocs.includes(resolvedId)) {
-                  validLinkedDocs.push(resolvedId);
-                }
-              }
-            }
+          const resolved = resolveDocumentId(docRef);
+          if (resolved && !validLinkedDocs.includes(resolved)) {
+            validLinkedDocs.push(resolved);
           }
         }
 
         const primaryDocId: string | null = validLinkedDocs.length > 0 ? validLinkedDocs[0] : null;
         const additionalDocIds = validLinkedDocs.slice(1);
 
-        // Get currency from document extraction
+        // Get currency from document extraction or item
         let currency: string | null = null;
         if (primaryDocId) {
           const docExtraction = await prisma.documentExtraction.findUnique({
@@ -653,17 +712,25 @@ Respond with ONLY a JSON object:
           currency = (item.currency as string) || 'EUR';
         }
 
-        const baseAmount = item.amount || 0;
-        let amountEur = baseAmount;
-        if (currency !== 'EUR') {
+        // CRITICAL: Handle amount - use null if not found, NEVER default to 0
+        const baseAmount: number | null = item.amount ?? null;  // Use nullish coalescing to preserve null
+        let amountEur: number | null = baseAmount;
+        if (baseAmount !== null && currency !== 'EUR') {
           amountEur = this.convertToEur(baseAmount, currency);
         }
+
+        // Resolve price source document ID
+        const priceSourceDocId = item.priceSourceDocId ? resolveDocumentId(item.priceSourceDocId) : null;
+
+        // Link to booking if bookingReference matches
+        const bookingId = item.bookingReference ? bookingIdMap.get(item.bookingReference) || null : null;
 
         const travelItem = await prisma.travelItem.create({
           data: {
             participantId,
             documentId: primaryDocId,
             additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
+            bookingId: bookingId,
             modeOfTransport: this.mapTransportMode(item.modeOfTransport),
             fromLocation: item.fromLocation || 'Unknown',
             toLocation: item.toLocation || 'Unknown',
@@ -674,15 +741,19 @@ Respond with ONLY a JSON object:
             amountOriginal: baseAmount,
             currencyOriginal: currency,
             purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
-            amountEur,
+            amountEur: amountEur,
             comment: item.notes || null,
             manuallyEdited: false,
             originalAmountFromAi: baseAmount,
-            isRoundTrip: item.isRoundTrip || false,
+            priceEditable: item.priceEditable !== false, // Default to true
+            priceMissing: item.priceMissing === true,
+            priceSourceDocId: priceSourceDocId,
+            isRoundTrip: false, // Individual legs are not round-trips; the booking is
             numberOfPassengers: item.numberOfPassengers || null,
           },
         });
 
+        console.log(`[Consolidation] Created travel item: ${item.fromLocation} -> ${item.toLocation}, amount: ${baseAmount ?? 'null'} ${currency}, priceMissing: ${item.priceMissing}`);
         createdItems.push(travelItem);
       }
 
@@ -726,9 +797,11 @@ Respond with ONLY a JSON object:
         success: true,
         message: result.journey_summary,
         travelItems: createdItems,
+        bookings: result.bookings || [],
         warnings: result.warnings || [],
         missingDocuments: result.missing_documents || [],
         documentLinks: result.document_links || [],
+        unmatchedPayments: result.unmatched_payments || [],
         detectedHomeCountry: result.detected_home_country || null,
         homeCountryConfidence: result.home_country_confidence || null,
         homeCountryReasoning: result.home_country_reasoning || null,
@@ -788,9 +861,11 @@ export interface ConsolidationResult {
   success: boolean;
   message: string;
   travelItems: unknown[];
+  bookings?: unknown[];
   warnings: string[];
   missingDocuments?: { type: string; description: string }[];
-  documentLinks?: { invoiceDocId: string; boardingPassDocId: string; reason: string }[];
+  documentLinks?: { ticketDocId: string; paymentDocId: string; reason: string }[];
+  unmatchedPayments?: { docId: string; merchantName: string; amount: number; reason: string }[];
   detectedHomeCountry?: string | null;
   homeCountryConfidence?: number | null;
   homeCountryReasoning?: string | null;
