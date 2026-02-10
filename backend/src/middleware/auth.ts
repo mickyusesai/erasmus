@@ -1,7 +1,23 @@
 import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
 import { UnauthorizedError, ForbiddenError } from './errorHandler.js';
 import prisma from '../utils/prisma.js';
-import { Participant } from '@prisma/client';
+import { Participant, Organisation, SuperAdmin } from '@prisma/client';
+
+// JWT token payload types
+export interface OrganisationTokenPayload {
+  type: 'organisation';
+  organisationId: string;
+  email: string;
+}
+
+export interface SuperAdminTokenPayload {
+  type: 'superadmin';
+  adminId: string;
+  email: string;
+}
+
+export type TokenPayload = OrganisationTokenPayload | SuperAdminTokenPayload;
 
 // Extend Express Request type
 declare global {
@@ -9,7 +25,47 @@ declare global {
     interface Request {
       admin?: boolean;
       participant?: Participant;
+      organisation?: Organisation;
+      superAdmin?: SuperAdmin;
+      tokenPayload?: TokenPayload;
     }
+  }
+}
+
+// JWT secret from environment
+const getJwtSecret = (): string => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET environment variable not set');
+  }
+  return secret;
+};
+
+// JWT token generation
+export function generateOrganisationToken(organisation: Organisation): string {
+  const payload: OrganisationTokenPayload = {
+    type: 'organisation',
+    organisationId: organisation.id,
+    email: organisation.email,
+  };
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' });
+}
+
+export function generateSuperAdminToken(admin: SuperAdmin): string {
+  const payload: SuperAdminTokenPayload = {
+    type: 'superadmin',
+    adminId: admin.id,
+    email: admin.email,
+  };
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' });
+}
+
+// Verify and decode JWT token
+export function verifyToken(token: string): TokenPayload {
+  try {
+    return jwt.verify(token, getJwtSecret()) as TokenPayload;
+  } catch {
+    throw new UnauthorizedError('Invalid or expired token');
   }
 }
 
@@ -99,5 +155,106 @@ export function ensureOwnParticipant(
     throw new ForbiddenError('You can only access your own data');
   }
 
+  next();
+}
+
+/**
+ * Organisation authentication middleware
+ * Validates JWT token from Authorization header
+ */
+export async function organisationAuth(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    throw new UnauthorizedError('No authorization header');
+  }
+
+  const [scheme, token] = authHeader.split(' ');
+
+  if (scheme !== 'Bearer' || !token) {
+    throw new UnauthorizedError('Invalid authorization format');
+  }
+
+  const payload = verifyToken(token);
+
+  if (payload.type !== 'organisation') {
+    throw new UnauthorizedError('Invalid token type');
+  }
+
+  const organisation = await prisma.organisation.findUnique({
+    where: { id: payload.organisationId },
+  });
+
+  if (!organisation) {
+    throw new UnauthorizedError('Organisation not found');
+  }
+
+  if (!organisation.isActive) {
+    throw new ForbiddenError('Organisation account is deactivated');
+  }
+
+  req.organisation = organisation;
+  req.tokenPayload = payload;
+  next();
+}
+
+/**
+ * Super Admin authentication middleware
+ * Validates JWT token from Authorization header
+ */
+export async function superAdminAuth(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    throw new UnauthorizedError('No authorization header');
+  }
+
+  const [scheme, token] = authHeader.split(' ');
+
+  if (scheme !== 'Bearer' || !token) {
+    throw new UnauthorizedError('Invalid authorization format');
+  }
+
+  const payload = verifyToken(token);
+
+  if (payload.type !== 'superadmin') {
+    throw new UnauthorizedError('Invalid token type');
+  }
+
+  const admin = await prisma.superAdmin.findUnique({
+    where: { id: payload.adminId },
+  });
+
+  if (!admin) {
+    throw new UnauthorizedError('Admin not found');
+  }
+
+  req.superAdmin = admin;
+  req.tokenPayload = payload;
+  next();
+}
+
+/**
+ * Ensure organisation can only access their own projects
+ */
+export function ensureOwnProject(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void {
+  if (!req.organisation) {
+    throw new UnauthorizedError('Not authenticated as organisation');
+  }
+
+  // The project check will be done in the route handler
+  // This middleware just ensures organisation is present
   next();
 }

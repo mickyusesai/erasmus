@@ -35,6 +35,23 @@ export class ValidationError extends AppError {
   }
 }
 
+export class ConflictError extends AppError {
+  constructor(message = 'Resource already exists') {
+    super(409, message);
+  }
+}
+
+/**
+ * Wrapper for async route handlers to properly catch and forward errors
+ */
+export const asyncHandler = (
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
+) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
 export function errorHandler(
   err: Error,
   _req: Request,

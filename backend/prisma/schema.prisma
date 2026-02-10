@@ -7,14 +7,97 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Organisation - supports multi-org later, but for now assume one
+// =============================================================================
+// AUTHENTICATION & ORGANIZATION
+// =============================================================================
+
+// Organisation - the paying customer (one account per organisation)
 model Organisation {
-  id        String    @id @default(uuid())
-  name      String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  projects  Project[]
+  id                      String    @id @default(uuid())
+  name                    String
+  email                   String    @unique  // Login email
+  passwordHash            String
+  oid                     String?   // Organisation ID (OID) - used for founding credit verification
+
+  // Credit tracking
+  projectCredits          Int       @default(0)
+
+  // Annual license
+  hasAnnualLicense        Boolean   @default(false)
+  annualLicenseStartedAt  DateTime?
+  annualLicenseExpiresAt  DateTime?
+
+  // Founding credit tracking
+  foundingCreditClaimed   Boolean   @default(false)
+  foundingCreditClaimedAt DateTime?
+  foundingCreditExpiresAt DateTime?  // Must start project within 1 month of claiming
+  foundingCreditUsed      Boolean   @default(false)
+
+  // Account status
+  isActive                Boolean   @default(true)
+
+  // Metadata
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  // Relations
+  projects                Project[]
+  purchases               Purchase[]
 }
+
+// Purchase history for audit trail and Stripe integration
+model Purchase {
+  id                String         @id @default(uuid())
+  organisationId    String
+  organisation      Organisation   @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  type              PurchaseType
+  amountCents       Int            // Amount in cents (e.g., 9500 = €95)
+  currency          String         @default("EUR")
+  creditsGranted    Int            // Number of credits added (0 for annual license)
+
+  // Stripe integration
+  stripeSessionId   String?        @unique
+  stripePaymentIntentId String?
+  stripeInvoiceUrl  String?
+
+  status            PurchaseStatus @default(PENDING)
+  createdAt         DateTime       @default(now())
+  completedAt       DateTime?
+
+  @@index([organisationId])
+  @@index([stripeSessionId])
+}
+
+enum PurchaseType {
+  SINGLE      // €95, 1 credit
+  PACK_5      // €395, 5 credits
+  PACK_10     // €595, 10 credits
+  ANNUAL      // €995, unlimited for 1 year
+  FOUNDING    // Free, 1 credit (invitation only)
+  MANUAL      // Manually added by super admin
+}
+
+enum PurchaseStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+// Super Admin - internal administrative access
+model SuperAdmin {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  name          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// =============================================================================
+// PROJECT & PARTICIPANTS
+// =============================================================================
 
 // Project - an Erasmus+ youth project
 model Project {
@@ -28,6 +111,10 @@ model Project {
   endDate                  DateTime
   disseminationEnabled     Boolean                 @default(false)  // Whether dissemination page is shown to participants
   carRatePerKm             Float                   @default(0.22)   // Rate per km for car travel reimbursement (EUR)
+
+  // Credit tracking - which credit was used to create this project
+  creditSource             PurchaseType?           // SINGLE, PACK_5, PACK_10, ANNUAL, FOUNDING, MANUAL
+
   createdAt                DateTime                @default(now())
   updatedAt                DateTime                @updatedAt
   countryLimits            ProjectCountryLimit[]

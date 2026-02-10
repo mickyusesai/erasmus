@@ -7,6 +7,8 @@ import path from 'path';
 
 import { prisma } from './utils/prisma.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import authRoutes from './routes/auth/index.js';
+import organisationRoutes from './routes/organisation/index.js';
 import adminRoutes from './routes/admin/index.js';
 import participantRoutes from './routes/participant/index.js';
 import { getStorageService } from './services/storage/index.js';
@@ -96,6 +98,8 @@ app.get('/api/health/storage', async (_req, res) => {
 });
 
 // Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/organisation', organisationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/participant', participantRoutes);
 
