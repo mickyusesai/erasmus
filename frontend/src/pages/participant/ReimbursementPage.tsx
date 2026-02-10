@@ -507,7 +507,9 @@ function Step1Upload({
       }
 
       // Refresh data and move to next step
-      await queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      // Use refetchQueries instead of invalidateQueries to ensure fresh data is loaded
+      // before advancing to step 2 (invalidateQueries only marks as stale, doesn't wait for refetch)
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
       onNext();
     } catch (error) {
       console.error('Consolidation error:', error);
