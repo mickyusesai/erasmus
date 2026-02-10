@@ -475,9 +475,11 @@ export const participantApi = {
     return handleResponse<TravelItem>(res);
   },
 
-  unlinkDocumentFromTravelItem: async (token: string, travelItemId: string) => {
+  unlinkDocumentFromTravelItem: async (token: string, travelItemId: string, documentId: string) => {
     const res = await fetch(`${API_BASE}/participant/travel-items/${travelItemId}/link-document?token=${token}`, {
       method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId }),
     });
     return handleResponse<TravelItem>(res);
   },

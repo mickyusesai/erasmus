@@ -879,6 +879,54 @@ function Step2CheckData({
     },
   });
 
+  const unlinkDocumentMutation = useMutation({
+    mutationFn: ({ travelItemId, documentId }: { travelItemId: string; documentId: string }) =>
+      participantApi.unlinkDocumentFromTravelItem(token, travelItemId, documentId),
+    // Optimistic update for instant UI feedback
+    onMutate: async ({ travelItemId, documentId }) => {
+      await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
+      const previousData = queryClient.getQueryData(['participant-auth']);
+      // Optimistically remove the document link from the travel item
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          travelItems: old.travelItems.map((item: TravelItem) => {
+            if (item.id !== travelItemId) return item;
+            // Check if it's the primary document
+            if (item.documentId === documentId) {
+              return { ...item, documentId: null };
+            }
+            // Check if it's an additional document
+            if (item.additionalDocumentIds) {
+              try {
+                const ids = JSON.parse(item.additionalDocumentIds) as string[];
+                const newIds = ids.filter(id => id !== documentId);
+                return {
+                  ...item,
+                  additionalDocumentIds: newIds.length > 0 ? JSON.stringify(newIds) : null,
+                };
+              } catch {
+                return item;
+              }
+            }
+            return item;
+          }),
+        };
+      });
+      return { previousData };
+    },
+    onError: (_err, _variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(['participant-auth'], context.previousData);
+      }
+      toast.error('Failed to unlink document');
+    },
+    onSuccess: () => {
+      toast.success('Document unlinked');
+    },
+  });
+
   // Generate persistent warnings based on data analysis
   const warnings = useMemo((): PersistentWarning[] => {
     const w: PersistentWarning[] = [];
@@ -1128,6 +1176,9 @@ function Step2CheckData({
                   onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
                   onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
                   onViewDocument={setViewingDocument}
+                  onUnlinkDocument={(docId) =>
+                    unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
+                  }
                   onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
                 />
               ))}
@@ -1485,6 +1536,7 @@ function TravelItemCard({
   onToggleChecked,
   onUploadBoardingPass,
   onViewDocument,
+  onUnlinkDocument,
   onMissingBoardingPass,
 }: {
   item: TravelItem;
@@ -1496,6 +1548,7 @@ function TravelItemCard({
   onToggleChecked: () => void;
   onUploadBoardingPass: () => void;
   onViewDocument: (doc: Document) => void;
+  onUnlinkDocument: (docId: string) => void;
   onMissingBoardingPass: () => void;
 }) {
   const Icon = transportIcons[item.modeOfTransport];
@@ -1764,6 +1817,12 @@ function TravelItemCard({
                 className="text-xs text-primary-600 hover:text-primary-700 font-medium"
               >
                 View
+              </button>
+              <button
+                onClick={() => onUnlinkDocument(doc.id)}
+                className="text-xs text-red-500 hover:text-red-600 font-medium"
+              >
+                Unlink
               </button>
             </div>
           ))}

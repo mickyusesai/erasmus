@@ -697,13 +697,20 @@ router.post('/travel-items/:id/link-document', participantAuth, asyncHandler(asy
 
 /**
  * DELETE /api/participant/travel-items/:id/link-document
- * Unlink a document from a travel item
+ * Unlink a specific document from a travel item
+ * Body: { documentId: string } - the document to unlink
  */
 router.delete('/travel-items/:id/link-document', participantAuth, asyncHandler(async (req: Request, res: Response) => {
   const participant = req.participant!;
 
   if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
     throw new ForbiddenError('Cannot modify travel items after approval');
+  }
+
+  const { documentId: docIdToUnlink } = req.body;
+
+  if (!docIdToUnlink) {
+    throw new ValidationError('documentId is required');
   }
 
   // Verify travel item ownership
@@ -719,20 +726,48 @@ router.delete('/travel-items/:id/link-document', participantAuth, asyncHandler(a
     throw new NotFoundError('Travel item not found');
   }
 
-  // Update travel item to remove document link
+  // Get the document being unlinked for logging
+  const docToUnlink = await prisma.document.findFirst({
+    where: { id: docIdToUnlink, participantId: participant.id },
+  });
+
+  // Determine if it's the primary document or an additional document
+  const isPrimaryDoc = travelItem.documentId === docIdToUnlink;
+  let additionalIds: string[] = [];
+  try {
+    additionalIds = travelItem.additionalDocumentIds ? JSON.parse(travelItem.additionalDocumentIds) : [];
+  } catch {
+    additionalIds = [];
+  }
+  const isAdditionalDoc = additionalIds.includes(docIdToUnlink);
+
+  if (!isPrimaryDoc && !isAdditionalDoc) {
+    throw new ValidationError('Document is not linked to this travel item');
+  }
+
+  // Update travel item to remove the document link
+  const updateData: Record<string, unknown> = {};
+  if (isPrimaryDoc) {
+    updateData.documentId = null;
+  }
+  if (isAdditionalDoc) {
+    const newAdditionalIds = additionalIds.filter((id: string) => id !== docIdToUnlink);
+    updateData.additionalDocumentIds = newAdditionalIds.length > 0 ? JSON.stringify(newAdditionalIds) : null;
+  }
+
   const updated = await prisma.travelItem.update({
     where: { id: req.params.id },
-    data: { documentId: null },
+    data: updateData,
   });
 
   // Log the change
-  if (travelItem.document) {
+  if (docToUnlink) {
     await prisma.changeLogEntry.create({
       data: {
         participantId: participant.id,
         userType: 'PARTICIPANT',
         fieldName: 'travelItem.documentLink',
-        previousValue: `Linked to: ${travelItem.document.renamedFilename}`,
+        previousValue: `Linked to: ${docToUnlink.renamedFilename}`,
         newValue: '(unlinked)',
       },
     });
