@@ -117,7 +117,6 @@ router.post('/organisations/:id/grant-credits', asyncHandler(async (req: Request
         creditsGranted: credits,
         status: 'COMPLETED',
         completedAt: new Date(),
-        notes: reason || `Manually granted by super admin`,
       },
     }),
   ]);
@@ -194,7 +193,6 @@ router.post('/organisations/:id/grant-annual', asyncHandler(async (req: Request,
         creditsGranted: 0,
         status: 'COMPLETED',
         completedAt: new Date(),
-        notes: 'Annual license granted by super admin',
       },
     }),
   ]);
