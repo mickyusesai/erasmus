@@ -2,7 +2,18 @@ import { useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { organisationApi, OrgDashboardData } from '../../services/api';
-import { Plus, Users, FolderOpen, CreditCard, Settings, LogOut, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, CheckCircle, ArrowRight, Euro } from 'lucide-react';
+import { Card, CardContent, CardHeader } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+
+// Helper function to format dates as DD-MM-YYYY (European format)
+function formatDate(dateInput: string | Date): string {
+  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+}
 
 export default function OrgDashboard() {
   const navigate = useNavigate();
@@ -28,8 +39,15 @@ export default function OrgDashboard() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      <div className="min-h-screen bg-gray-50">
+        <div className="animate-pulse space-y-6 max-w-7xl mx-auto px-4 py-8">
+          <div className="h-8 w-48 bg-gray-200 rounded-lg" />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-32 bg-gray-200 rounded-2xl" />
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -37,40 +55,74 @@ export default function OrgDashboard() {
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white p-8 rounded-lg shadow-md text-center">
-          <p className="text-red-600 mb-4">Failed to load dashboard. Please login again.</p>
-          <button
-            onClick={handleLogout}
-            className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-          >
-            Go to Login
-          </button>
-        </div>
+        <Card>
+          <CardContent>
+            <div className="text-center">
+              <p className="text-red-600 mb-4">Failed to load dashboard. Please login again.</p>
+              <Button onClick={handleLogout}>Go to Login</Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
   const dashboard = data as OrgDashboardData;
 
+  const statCards = [
+    {
+      label: 'Available Credits',
+      value: dashboard.credits.hasAnnualLicense && !dashboard.credits.annualLicenseExpired
+        ? '∞'
+        : String(dashboard.credits.available),
+      icon: CreditCard,
+      color: 'text-purple-600',
+      bgColor: 'bg-purple-100',
+    },
+    {
+      label: 'Total Projects',
+      value: dashboard.stats.projectCount,
+      icon: FolderKanban,
+      color: 'text-blue-600',
+      bgColor: 'bg-blue-100',
+    },
+    {
+      label: 'Total Participants',
+      value: dashboard.stats.totalParticipants,
+      icon: Users,
+      color: 'text-emerald-600',
+      bgColor: 'bg-emerald-100',
+    },
+  ];
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white shadow-sm">
+      <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">EasyReimburse</h1>
-            <p className="text-sm text-gray-600">{dashboard.organisation.name}</p>
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="EasyReimburse" className="w-10 h-10 rounded-xl object-contain" />
+            <div>
+              <h1 className="font-semibold text-gray-900">EasyReimburse</h1>
+              <p className="text-xs text-gray-500">{dashboard.organisation.name}</p>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Link
+              to="/org/billing"
+              className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Billing
+            </Link>
             <Link
               to="/org/settings"
-              className="p-2 text-gray-600 hover:text-gray-900 transition-colors"
+              className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <Settings className="w-5 h-5" />
             </Link>
             <button
               onClick={handleLogout}
-              className="p-2 text-gray-600 hover:text-red-600 transition-colors"
+              className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
             >
               <LogOut className="w-5 h-5" />
             </button>
@@ -78,112 +130,177 @@ export default function OrgDashboard() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        {/* Welcome Message */}
-        <div className="mb-8">
-          <h2 className="text-2xl font-bold text-gray-900">Welcome back!</h2>
-          <p className="text-gray-600">Here's an overview of your organisation's projects.</p>
-        </div>
-
-        {/* Credit Status */}
-        <div className="mb-8">
-          <CreditStatusCard credits={dashboard.credits} />
-        </div>
-
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <StatCard
-            icon={<CreditCard className="w-8 h-8 text-primary-600" />}
-            label="Available Credits"
-            value={dashboard.credits.hasAnnualLicense && !dashboard.credits.annualLicenseExpired
-              ? 'Unlimited'
-              : String(dashboard.credits.available)}
-          />
-          <StatCard
-            icon={<FolderOpen className="w-8 h-8 text-blue-600" />}
-            label="Total Projects"
-            value={String(dashboard.stats.projectCount)}
-          />
-          <StatCard
-            icon={<Users className="w-8 h-8 text-green-600" />}
-            label="Total Participants"
-            value={String(dashboard.stats.totalParticipants)}
-          />
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex gap-4 mb-8">
-          <Link
-            to="/org/projects/new"
-            className={`inline-flex items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-colors ${
-              dashboard.credits.canCreateProject
-                ? 'bg-primary-600 text-white hover:bg-primary-700'
-                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-            }`}
-            onClick={(e) => !dashboard.credits.canCreateProject && e.preventDefault()}
-          >
-            <Plus className="w-5 h-5" />
-            Create New Project
+      <main className="max-w-7xl mx-auto px-4 py-8 space-y-8 animate-fadeIn">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+            <p className="text-gray-500 mt-1">Welcome back! Here's your organisation overview.</p>
+          </div>
+          <Link to="/org/projects/new">
+            <Button disabled={!dashboard.credits.canCreateProject}>
+              <Plus className="w-4 h-4 mr-2" />
+              New Project
+            </Button>
           </Link>
-          <Link
-            to="/org/billing"
-            className="inline-flex items-center gap-2 px-6 py-3 bg-white border border-gray-300 rounded-lg font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
-          >
-            <CreditCard className="w-5 h-5" />
-            Buy Credits
-          </Link>
+        </div>
+
+        {/* Credit Status Alert */}
+        <CreditStatusCard credits={dashboard.credits} />
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {statCards.map((stat) => (
+            <Card key={stat.label}>
+              <CardContent>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">{stat.label}</p>
+                    <p className="text-3xl font-bold text-gray-900 mt-1">{stat.value}</p>
+                  </div>
+                  <div className={`w-12 h-12 rounded-xl ${stat.bgColor} flex items-center justify-center`}>
+                    <stat.icon className={`w-6 h-6 ${stat.color}`} />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Quick Actions */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Credit Summary */}
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold text-gray-900">Credit Summary</h2>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+                      <CreditCard className="w-5 h-5 text-purple-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Project Credits</p>
+                      <p className="font-semibold text-gray-900">
+                        {dashboard.credits.hasAnnualLicense && !dashboard.credits.annualLicenseExpired
+                          ? 'Unlimited (Annual License)'
+                          : `${dashboard.credits.available} available`}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <Link to="/org/billing" className="p-4 bg-primary-50 rounded-xl hover:bg-primary-100 transition-colors">
+                    <p className="text-sm text-primary-600">Buy Credits</p>
+                    <p className="text-lg font-bold text-primary-700">€95/project</p>
+                  </Link>
+                  <Link to="/org/billing" className="p-4 bg-emerald-50 rounded-xl hover:bg-emerald-100 transition-colors">
+                    <p className="text-sm text-emerald-600">Annual License</p>
+                    <p className="text-lg font-bold text-emerald-700">€995/year</p>
+                  </Link>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Recent Activity */}
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold text-gray-900">Account Status</h2>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <span className="text-gray-700">Organisation</span>
+                  <span className="font-semibold text-gray-900">{dashboard.organisation.name}</span>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <span className="text-gray-700">Email</span>
+                  <span className="font-semibold text-gray-900">{dashboard.organisation.email}</span>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <span className="text-gray-700">Projects Created</span>
+                  <span className="font-semibold text-gray-900">{dashboard.stats.projectCount}</span>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <span className="text-gray-700">Total Participants</span>
+                  <span className="font-semibold text-gray-900">{dashboard.stats.totalParticipants}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         {/* Projects List */}
-        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900">Your Projects</h3>
-          </div>
-          {dashboard.projects.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">
-              <FolderOpen className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p>No projects yet. Create your first project to get started!</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-200">
-              {dashboard.projects.map((project) => (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">Your Projects</h2>
+              {dashboard.projects.length > 0 && (
                 <Link
-                  key={project.id}
-                  to={`/org/projects/${project.id}`}
-                  className="block px-6 py-4 hover:bg-gray-50 transition-colors"
+                  to="/org/projects/new"
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
                 >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-medium text-gray-900">{project.name}</h4>
-                      <p className="text-sm text-gray-500">
-                        {project.country} • {new Date(project.startDate).toLocaleDateString()} - {new Date(project.endDate).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-gray-900">{project.participantCount} participants</p>
-                      <p className="text-xs text-gray-500">Created {new Date(project.createdAt).toLocaleDateString()}</p>
-                    </div>
-                  </div>
+                  Create new <ArrowRight className="w-4 h-4" />
                 </Link>
-              ))}
+              )}
             </div>
-          )}
-        </div>
+          </CardHeader>
+          <CardContent>
+            {dashboard.projects.length === 0 ? (
+              <div className="text-center py-8">
+                <FolderKanban className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500">No projects yet</p>
+                <Link
+                  to="/org/projects/new"
+                  className="text-primary-600 hover:text-primary-700 font-medium text-sm mt-2 inline-block"
+                >
+                  Create your first project
+                </Link>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      <th className="pb-3">Project</th>
+                      <th className="pb-3">Location</th>
+                      <th className="pb-3">Dates</th>
+                      <th className="pb-3">Participants</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {dashboard.projects.map((project) => (
+                      <tr key={project.id} className="hover:bg-gray-50">
+                        <td className="py-3">
+                          <Link
+                            to={`/org/projects/${project.id}`}
+                            className="font-medium text-gray-900 hover:text-primary-600"
+                          >
+                            {project.name}
+                          </Link>
+                        </td>
+                        <td className="py-3 text-gray-600">{project.country}</td>
+                        <td className="py-3 text-gray-600 text-sm">
+                          {formatDate(project.startDate)} - {formatDate(project.endDate)}
+                        </td>
+                        <td className="py-3">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            {project.participantCount} participants
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </main>
-    </div>
-  );
-}
-
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="bg-white rounded-xl shadow-sm p-6">
-      <div className="flex items-center gap-4">
-        {icon}
-        <div>
-          <p className="text-sm text-gray-600">{label}</p>
-          <p className="text-2xl font-bold text-gray-900">{value}</p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -193,14 +310,16 @@ function CreditStatusCard({ credits }: { credits: OrgDashboardData['credits'] })
   if (credits.hasAnnualLicense && !credits.annualLicenseExpired) {
     const expiresAt = credits.annualLicenseExpiresAt ? new Date(credits.annualLicenseExpiresAt) : null;
     return (
-      <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-6">
+      <div className="bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200 rounded-2xl p-6">
         <div className="flex items-start gap-3">
-          <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0 mt-0.5" />
+          <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
+            <CheckCircle className="w-5 h-5 text-emerald-600" />
+          </div>
           <div>
-            <h3 className="font-semibold text-green-800">Annual License Active</h3>
-            <p className="text-green-700 text-sm mt-1">
+            <h3 className="font-semibold text-emerald-800">Annual License Active</h3>
+            <p className="text-emerald-700 text-sm mt-1">
               You have unlimited project credits.
-              {expiresAt && ` License expires on ${expiresAt.toLocaleDateString()}.`}
+              {expiresAt && ` License expires on ${formatDate(expiresAt)}.`}
             </p>
           </div>
         </div>
@@ -212,14 +331,16 @@ function CreditStatusCard({ credits }: { credits: OrgDashboardData['credits'] })
   if (credits.hasFoundingCredit && !credits.foundingCreditExpired) {
     const expiresAt = credits.foundingCreditExpiresAt ? new Date(credits.foundingCreditExpiresAt) : null;
     return (
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6">
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6">
         <div className="flex items-start gap-3">
-          <AlertTriangle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
+          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
+            <CreditCard className="w-5 h-5 text-blue-600" />
+          </div>
           <div>
             <h3 className="font-semibold text-blue-800">Founding Credit Available</h3>
             <p className="text-blue-700 text-sm mt-1">
               You have 1 free project credit from early access.
-              {expiresAt && ` Please start a project before ${expiresAt.toLocaleDateString()} to use it.`}
+              {expiresAt && ` Please start a project before ${formatDate(expiresAt)} to use it.`}
             </p>
           </div>
         </div>
@@ -230,32 +351,28 @@ function CreditStatusCard({ credits }: { credits: OrgDashboardData['credits'] })
   // No credits
   if (!credits.canCreateProject) {
     return (
-      <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-6">
+      <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6">
         <div className="flex items-start gap-3">
-          <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle className="w-5 h-5 text-amber-600" />
+          </div>
           <div>
             <h3 className="font-semibold text-amber-800">No Credits Available</h3>
             <p className="text-amber-700 text-sm mt-1">
               {credits.reason || 'Purchase credits to create new projects.'}
             </p>
+            <Link
+              to="/org/billing"
+              className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-amber-800 hover:text-amber-900"
+            >
+              Buy credits <ArrowRight className="w-4 h-4" />
+            </Link>
           </div>
         </div>
       </div>
     );
   }
 
-  // Has regular credits
-  return (
-    <div className="bg-gradient-to-r from-gray-50 to-slate-50 border border-gray-200 rounded-xl p-6">
-      <div className="flex items-start gap-3">
-        <CreditCard className="w-6 h-6 text-gray-600 flex-shrink-0 mt-0.5" />
-        <div>
-          <h3 className="font-semibold text-gray-800">{credits.available} Credit{credits.available !== 1 ? 's' : ''} Available</h3>
-          <p className="text-gray-600 text-sm mt-1">
-            You can create {credits.available} more project{credits.available !== 1 ? 's' : ''}.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+  // Has regular credits - don't show anything special
+  return null;
 }
