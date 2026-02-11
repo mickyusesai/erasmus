@@ -19,6 +19,10 @@ import OrgBilling from './pages/organisation/Billing';
 import OrgSettings from './pages/organisation/Settings';
 import FoundingAccess from './pages/organisation/FoundingAccess';
 
+// Super Admin pages
+import SuperAdminLogin from './pages/superadmin/Login';
+import SuperAdminDashboard from './pages/superadmin/Dashboard';
+
 // Participant pages
 import ParticipantLayout from './components/participant/ParticipantLayout';
 import ReimbursementPage from './pages/participant/ReimbursementPage';
@@ -63,6 +67,10 @@ function App() {
       <Route path="/org/billing" element={<OrgBilling />} />
       <Route path="/org/settings" element={<OrgSettings />} />
       <Route path="/founding-access" element={<FoundingAccess />} />
+
+      {/* Super Admin routes */}
+      <Route path="/super-admin/login" element={<SuperAdminLogin />} />
+      <Route path="/super-admin/dashboard" element={<SuperAdminDashboard />} />
 
       {/* Participant routes */}
       <Route path="/reimbursement" element={<ParticipantLayout />}>
