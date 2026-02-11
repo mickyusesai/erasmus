@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { organisationApi, OrgDashboardData } from '../../services/api';
-import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, CheckCircle, ArrowRight, Euro } from 'lucide-react';
+import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, CheckCircle, ArrowRight } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 
