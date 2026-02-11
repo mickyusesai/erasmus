@@ -89,7 +89,7 @@ router.get('/', async (req: Request, res: Response) => {
 
   // Get dissemination activity counts for participants whose projects have dissemination enabled
   const participantsWithDissemination = await Promise.all(
-    participants.map(async (p) => {
+    participants.map(async (p: any) => {
       let hasDisseminationActivity = false;
       if (p.project?.disseminationEnabled) {
         const activityCount = await prisma.disseminationActivity.count({

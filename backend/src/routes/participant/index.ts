@@ -423,12 +423,14 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
   const aiService = getAiService();
 
   // Convert currency to EUR if not already
-  let amountEur = result.data.amountEur;
-  if (!amountEur && result.data.amountOriginal && result.data.currencyOriginal) {
+  let amountEur = result.data.amountEur as number | undefined;
+  const amountOriginal = result.data.amountOriginal as number;
+  const currencyOriginal = result.data.currencyOriginal as string;
+  if (!amountEur && amountOriginal && currencyOriginal) {
     amountEur = await aiService.convertToEur(
-      result.data.amountOriginal,
-      result.data.currencyOriginal,
-      result.data.purchaseDate || undefined
+      amountOriginal,
+      currencyOriginal,
+      (result.data.purchaseDate as Date | null) || undefined
     );
   }
 

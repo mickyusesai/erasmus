@@ -718,6 +718,154 @@ export const organisationApi = {
     });
     return handleResponse<{ organisation: OrganisationInfo }>(res);
   },
+
+  // Participants
+  getProjectParticipants: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/participants`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ participants: OrgParticipant[] }>(res);
+  },
+
+  createParticipant: async (projectId: string, data: { firstName: string; lastName: string; email: string; country: string }) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/participants`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ participant: OrgParticipant }>(res);
+  },
+
+  previewImport: async (projectId: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const token = localStorage.getItem('org-token');
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/participants/preview-import`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    return handleResponse<ImportPreview>(res);
+  },
+
+  importParticipants: async (projectId: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const token = localStorage.getItem('org-token');
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/participants/import`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    return handleResponse<ImportResult>(res);
+  },
+
+  getParticipant: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ participant: OrgParticipantDetail }>(res);
+  },
+
+  updateParticipant: async (id: string, data: Partial<{ firstName: string; lastName: string; email: string; country: string; notesInternal: string }>) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ participant: OrgParticipant }>(res);
+  },
+
+  deleteParticipant: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  sendMagicLink: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/send-magic-link`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  sendMagicLinksBulk: async (participantIds: string[]) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/send-magic-links-bulk`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ participantIds }),
+    });
+    return handleResponse<{ results: { id: string; success: boolean }[] }>(res);
+  },
+
+  approveParticipant: async (id: string, data?: { amountToReimburse?: number; adminNotes?: string }) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}/approve`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data || {}),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  markPaid: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}/mark-paid`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  markAiCheckOk: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}/mark-ai-check-ok`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  getDocumentUrl: async (participantId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/documents/${documentId}/url`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ url: string }>(res);
+  },
+
+  // Country Limits
+  getCountryLimits: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<CountryLimit[]>(res);
+  },
+
+  setCountryLimit: async (projectId: string, data: { country: string; maxReimbursementAmount: number; greenTravel?: boolean }) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<CountryLimit>(res);
+  },
+
+  deleteCountryLimit: async (projectId: string, country: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits/${country}`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  // Export
+  exportProjectCsv: (projectId: string) => {
+    const url = `${API_BASE}/organisation/projects/${projectId}/export/csv`;
+    // Open in new tab - CSV export handles auth via token in URL or session
+    window.open(url, '_blank');
+  },
 };
 
 // Organisation Types
@@ -800,6 +948,53 @@ export interface CreateOrgProjectData {
   startDate: string;
   endDate: string;
   carRatePerKm?: number;
+}
+
+export interface OrgParticipant {
+  id: string;
+  projectId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  country: string;
+  status: ParticipantStatus;
+  lastMagicLinkSentAt?: string;
+  createdAt: string;
+  reimbursementSummary?: ReimbursementSummary;
+  _count?: {
+    documents: number;
+    travelItems: number;
+  };
+  disseminationStatus?: {
+    hasActivity: boolean;
+    hasSocialMedia: boolean;
+  };
+}
+
+export interface OrgParticipantDetail extends OrgParticipant {
+  magicLinkToken: string;
+  magicLinkActive: boolean;
+  bankAccountIban?: string;
+  bankAccountHolderName?: string;
+  bankAccountBic?: string;
+  notesInternal?: string;
+  participantNote?: string;
+  documents: Document[];
+  travelItems: TravelItem[];
+  declarationsOnHonor: Declaration[];
+  declarationsOfTravel: DeclarationOfTravel[];
+  changeLogEntries: ChangeLogEntry[];
+  maxReimbursementForCountry?: number;
+  greenTravel?: boolean;
+  project: {
+    id: string;
+    name: string;
+    country: string;
+    startDate: string;
+    endDate: string;
+    disseminationEnabled: boolean;
+    carRatePerKm: number;
+  };
 }
 
 export interface ConsolidationResult {

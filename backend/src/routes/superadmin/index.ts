@@ -26,8 +26,8 @@ router.get('/organisations', asyncHandler(async (req: Request, res: Response) =>
 
   // Calculate stats
   const totalOrganisations = organisations.length;
-  const totalProjects = organisations.reduce((sum, org) => sum + org._count.projects, 0);
-  const totalCreditsOutstanding = organisations.reduce((sum, org) => sum + org.projectCredits, 0);
+  const totalProjects = organisations.reduce((sum: number, org: any) => sum + org._count.projects, 0);
+  const totalCreditsOutstanding = organisations.reduce((sum: number, org: any) => sum + org.projectCredits, 0);
 
   res.json({
     organisations,

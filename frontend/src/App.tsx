@@ -17,6 +17,7 @@ import OrgProjectCreate from './pages/organisation/ProjectCreate';
 import OrgProjectDetail from './pages/organisation/ProjectDetail';
 import OrgBilling from './pages/organisation/Billing';
 import OrgSettings from './pages/organisation/Settings';
+import OrgParticipantDetail from './pages/organisation/ParticipantDetail';
 import FoundingAccess from './pages/organisation/FoundingAccess';
 
 // Super Admin pages
@@ -64,6 +65,7 @@ function App() {
       <Route path="/org/dashboard" element={<OrgDashboard />} />
       <Route path="/org/projects/new" element={<OrgProjectCreate />} />
       <Route path="/org/projects/:id" element={<OrgProjectDetail />} />
+      <Route path="/org/participants/:id" element={<OrgParticipantDetail />} />
       <Route path="/org/billing" element={<OrgBilling />} />
       <Route path="/org/settings" element={<OrgSettings />} />
       <Route path="/founding-access" element={<FoundingAccess />} />

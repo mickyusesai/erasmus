@@ -1,9 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import { parse } from 'csv-parse/sync';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { organisationAuth, ensureOwnProject } from '../../middleware/auth.js';
-import { Organisation, PurchaseType } from '@prisma/client';
+import { Organisation, PurchaseType, ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+import { v4 as uuidv4 } from 'uuid';
+import { getEmailService } from '../../services/email/index.js';
+import { getStorageService } from '../../services/storage/index.js';
+import multer from 'multer';
 
 const router = Router();
 
@@ -167,7 +172,7 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       projectCount: projects.length,
       totalParticipants,
     },
-    projects: projects.map((p) => ({
+    projects: projects.map((p: any) => ({
       id: p.id,
       name: p.name,
       country: p.country,
@@ -177,7 +182,7 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       creditSource: p.creditSource,
       createdAt: p.createdAt,
     })),
-    recentPurchases: recentPurchases.map((p) => ({
+    recentPurchases: recentPurchases.map((p: any) => ({
       id: p.id,
       type: p.type,
       amountCents: p.amountCents,
@@ -211,7 +216,7 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
   });
 
   res.json({
-    projects: projects.map((p) => ({
+    projects: projects.map((p: any) => ({
       id: p.id,
       name: p.name,
       description: p.description,
@@ -501,7 +506,7 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
       annualLicenseExpiresAt: org.annualLicenseExpiresAt,
       annualLicenseStartedAt: org.annualLicenseStartedAt,
     },
-    purchases: purchases.map((p) => ({
+    purchases: purchases.map((p: any) => ({
       id: p.id,
       type: p.type,
       amountCents: p.amountCents,
@@ -535,6 +540,793 @@ router.get('/settings', asyncHandler(async (req: Request, res: Response) => {
       createdAt: org.createdAt,
     },
   });
+}));
+
+// =============================================================================
+// PARTICIPANT ROUTES
+// =============================================================================
+
+// Multer setup for CSV import
+const upload = multer({ storage: multer.memoryStorage() });
+
+/**
+ * GET /api/organisation/projects/:id/participants
+ * List all participants for a project
+ */
+router.get('/projects/:id/participants', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const participants = await prisma.participant.findMany({
+    where: { projectId },
+    include: {
+      reimbursementSummary: true,
+      _count: {
+        select: { documents: true, travelItems: true },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  // Get dissemination status for each participant
+  const participantsWithDissemination = await Promise.all(
+    participants.map(async (p: any) => {
+      const [activityCount, socialMediaCount] = await Promise.all([
+        prisma.disseminationActivity.count({
+          where: { createdById: p.id },
+        }),
+        prisma.socialMediaPost.count({
+          where: { participantId: p.id },
+        }),
+      ]);
+      return {
+        ...p,
+        disseminationStatus: {
+          hasActivity: activityCount > 0,
+          hasSocialMedia: socialMediaCount > 0,
+        },
+      };
+    })
+  );
+
+  res.json({ participants: participantsWithDissemination });
+}));
+
+const createParticipantSchema = z.object({
+  firstName: z.string().min(1, 'First name is required'),
+  lastName: z.string().min(1, 'Last name is required'),
+  email: z.string().email('Invalid email'),
+  country: z.string().min(1, 'Country is required'),
+});
+
+/**
+ * POST /api/organisation/projects/:id/participants
+ * Add a new participant to a project
+ */
+router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const result = createParticipantSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const { firstName, lastName, email, country } = result.data;
+
+  // Check if participant with same email already exists in this project
+  const existing = await prisma.participant.findFirst({
+    where: { projectId, email },
+  });
+
+  if (existing) {
+    throw new ValidationError('A participant with this email already exists in this project');
+  }
+
+  // Create participant
+  const participant = await prisma.participant.create({
+    data: {
+      projectId,
+      firstName,
+      lastName,
+      email,
+      country,
+      magicLinkToken: uuidv4(),
+      magicLinkActive: true,
+    },
+  });
+
+  // Create reimbursement summary
+  const countryLimit = await prisma.projectCountryLimit.findFirst({
+    where: { projectId, country },
+  });
+
+  await prisma.reimbursementSummary.create({
+    data: {
+      participantId: participant.id,
+      totalEur: 0,
+      maxReimbursementAllowed: countryLimit?.maxReimbursementAmount || 0,
+      amountToReimburse: 0,
+    },
+  });
+
+  // Create country limit if it doesn't exist
+  if (!countryLimit) {
+    await prisma.projectCountryLimit.create({
+      data: {
+        projectId,
+        country,
+        maxReimbursementAmount: 0,
+        currency: 'EUR',
+      },
+    });
+  }
+
+  res.status(201).json({ participant });
+}));
+
+/**
+ * POST /api/organisation/projects/:id/participants/preview-import
+ * Preview CSV import
+ */
+router.post('/projects/:id/participants/preview-import', ensureOwnProject, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
+  if (!req.file) {
+    throw new ValidationError('No file uploaded');
+  }
+
+  const content = req.file.buffer.toString('utf-8');
+
+  try {
+    const records = parse(content, {
+      columns: true,
+      skip_empty_lines: true,
+      trim: true,
+    }) as Record<string, string>[];
+
+    // Map column names (flexible)
+    const mappedRecords = records.map((row) => ({
+      firstName: row.first_name || row.firstName || row['First Name'] || '',
+      lastName: row.last_name || row.lastName || row['Last Name'] || '',
+      email: row.email || row.Email || '',
+      country: row.country || row.Country || '',
+    }));
+
+    const validRecords = mappedRecords.filter(
+      (r) => r.firstName && r.lastName && r.email && r.country
+    );
+
+    res.json({
+      totalRows: validRecords.length,
+      columns: Object.keys(records[0] || {}),
+      preview: validRecords.slice(0, 10),
+    });
+  } catch (err) {
+    throw new ValidationError('Failed to parse CSV file');
+  }
+}));
+
+/**
+ * POST /api/organisation/projects/:id/participants/import
+ * Import participants from CSV
+ */
+router.post('/projects/:id/participants/import', ensureOwnProject, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  if (!req.file) {
+    throw new ValidationError('No file uploaded');
+  }
+
+  const content = req.file.buffer.toString('utf-8');
+
+  const records = parse(content, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+  }) as Record<string, string>[];
+
+  const mappedRecords = records.map((row) => ({
+    firstName: row.first_name || row.firstName || row['First Name'] || '',
+    lastName: row.last_name || row.lastName || row['Last Name'] || '',
+    email: row.email || row.Email || '',
+    country: row.country || row.Country || '',
+  }));
+
+  const validRecords = mappedRecords.filter(
+    (r) => r.firstName && r.lastName && r.email && r.country
+  );
+
+  const created: any[] = [];
+  const errors: { row: number; error: string }[] = [];
+
+  for (let i = 0; i < validRecords.length; i++) {
+    const record = validRecords[i];
+
+    try {
+      // Check for existing
+      const existing = await prisma.participant.findFirst({
+        where: { projectId, email: record.email },
+      });
+
+      if (existing) {
+        errors.push({ row: i + 1, error: `Email ${record.email} already exists` });
+        continue;
+      }
+
+      // Create participant
+      const participant = await prisma.participant.create({
+        data: {
+          projectId,
+          firstName: record.firstName,
+          lastName: record.lastName,
+          email: record.email,
+          country: record.country,
+          magicLinkToken: uuidv4(),
+          magicLinkActive: true,
+        },
+      });
+
+      // Create reimbursement summary
+      const countryLimit = await prisma.projectCountryLimit.findFirst({
+        where: { projectId, country: record.country },
+      });
+
+      await prisma.reimbursementSummary.create({
+        data: {
+          participantId: participant.id,
+          totalEur: 0,
+          maxReimbursementAllowed: countryLimit?.maxReimbursementAmount || 0,
+          amountToReimburse: 0,
+        },
+      });
+
+      // Create country limit if needed
+      if (!countryLimit) {
+        await prisma.projectCountryLimit.create({
+          data: {
+            projectId,
+            country: record.country,
+            maxReimbursementAmount: 0,
+            currency: 'EUR',
+          },
+        });
+      }
+
+      created.push(participant);
+    } catch (err: any) {
+      errors.push({ row: i + 1, error: err.message || 'Unknown error' });
+    }
+  }
+
+  res.json({
+    success: true,
+    created: created.length,
+    errors,
+    participants: created,
+  });
+}));
+
+/**
+ * GET /api/organisation/participants/:id
+ * Get participant detail (like admin view)
+ */
+router.get('/participants/:id', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: {
+      project: true,
+      documents: true,
+      travelItems: {
+        orderBy: { departureDate: 'asc' },
+      },
+      declarationsOnHonor: true,
+      declarationsOfTravel: true,
+      reimbursementSummary: true,
+      changeLogEntries: {
+        orderBy: { changedAt: 'desc' },
+      },
+    },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  // Verify organisation owns this project
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  // Get country limit
+  const countryLimit = await prisma.projectCountryLimit.findFirst({
+    where: {
+      projectId: participant.projectId,
+      country: participant.country,
+    },
+  });
+
+  res.json({
+    participant: {
+      ...participant,
+      maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+      greenTravel: countryLimit?.greenTravel || false,
+    },
+  });
+}));
+
+/**
+ * PATCH /api/organisation/participants/:id
+ * Update participant
+ */
+const updateParticipantSchema = z.object({
+  firstName: z.string().min(1).optional(),
+  lastName: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  country: z.string().min(1).optional(),
+  notesInternal: z.string().optional(),
+});
+
+router.patch('/participants/:id', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  const result = updateParticipantSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const updated = await prisma.participant.update({
+    where: { id: participantId },
+    data: result.data,
+  });
+
+  res.json({ participant: updated });
+}));
+
+/**
+ * DELETE /api/organisation/participants/:id
+ * Delete participant
+ */
+router.delete('/participants/:id', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  // Delete all related data
+  await prisma.$transaction([
+    prisma.changeLogEntry.deleteMany({ where: { participantId } }),
+    prisma.declarationOfTravel.deleteMany({ where: { participantId } }),
+    prisma.declarationOnHonor.deleteMany({ where: { participantId } }),
+    prisma.travelItem.deleteMany({ where: { participantId } }),
+    prisma.document.deleteMany({ where: { participantId } }),
+    prisma.reimbursementSummary.deleteMany({ where: { participantId } }),
+    prisma.socialMediaPost.deleteMany({ where: { participantId } }),
+    prisma.participant.delete({ where: { id: participantId } }),
+  ]);
+
+  res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/:id/send-magic-link
+ * Send magic link to participant
+ */
+router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  // Send the email
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+
+  const emailService = getEmailService();
+  await emailService.sendMagicLink(
+    participant.email,
+    participant.firstName,
+    participant.project.name,
+    magicLink
+  );
+
+  // Update last sent timestamp
+  await prisma.participant.update({
+    where: { id: participantId },
+    data: { lastMagicLinkSentAt: new Date() },
+  });
+
+  res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/send-magic-links-bulk
+ * Send magic links to multiple participants
+ */
+router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const { participantIds } = req.body;
+
+  if (!Array.isArray(participantIds) || participantIds.length === 0) {
+    throw new ValidationError('participantIds must be a non-empty array');
+  }
+
+  const results: { id: string; success: boolean }[] = [];
+
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const emailService = getEmailService();
+
+  for (const id of participantIds) {
+    try {
+      const participant = await prisma.participant.findUnique({
+        where: { id },
+        include: { project: true },
+      });
+
+      if (!participant || participant.project.organisationId !== org.id) {
+        results.push({ id, success: false });
+        continue;
+      }
+
+      const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+      await emailService.sendMagicLink(
+        participant.email,
+        participant.firstName,
+        participant.project.name,
+        magicLink
+      );
+
+      await prisma.participant.update({
+        where: { id },
+        data: { lastMagicLinkSentAt: new Date() },
+      });
+
+      results.push({ id, success: true });
+    } catch {
+      results.push({ id, success: false });
+    }
+  }
+
+  res.json({ results });
+}));
+
+/**
+ * POST /api/organisation/participants/:id/approve
+ * Approve participant for reimbursement
+ */
+router.post('/participants/:id/approve', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+  const { amountToReimburse, adminNotes } = req.body;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true, reimbursementSummary: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  // Update status and reimbursement summary
+  await prisma.$transaction([
+    prisma.participant.update({
+      where: { id: participantId },
+      data: { status: 'ADMIN_APPROVED' },
+    }),
+    prisma.reimbursementSummary.update({
+      where: { participantId },
+      data: {
+        adminApproved: true,
+        adminNotes: adminNotes || null,
+        amountToReimburse: amountToReimburse ?? participant.reimbursementSummary?.amountToReimburse ?? 0,
+      },
+    }),
+    prisma.changeLogEntry.create({
+      data: {
+        participantId,
+        userType: 'ADMIN',
+        fieldName: 'status',
+        previousValue: participant.status,
+        newValue: 'ADMIN_APPROVED',
+      },
+    }),
+  ]);
+
+  res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/:id/mark-paid
+ * Mark participant as paid
+ */
+router.post('/participants/:id/mark-paid', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  await prisma.$transaction([
+    prisma.participant.update({
+      where: { id: participantId },
+      data: { status: 'PAID' },
+    }),
+    prisma.reimbursementSummary.update({
+      where: { participantId },
+      data: { paid: true },
+    }),
+    prisma.changeLogEntry.create({
+      data: {
+        participantId,
+        userType: 'ADMIN',
+        fieldName: 'status',
+        previousValue: participant.status,
+        newValue: 'PAID',
+      },
+    }),
+  ]);
+
+  res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/:id/mark-ai-check-ok
+ * Mark AI check as OK
+ */
+router.post('/participants/:id/mark-ai-check-ok', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  await prisma.reimbursementSummary.update({
+    where: { participantId },
+    data: { aiCheckOk: true },
+  });
+
+  res.json({ success: true });
+}));
+
+/**
+ * GET /api/organisation/participants/:id/documents/:docId/url
+ * Get presigned URL for document
+ */
+router.get('/participants/:id/documents/:docId/url', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const { id: participantId, docId } = req.params;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant || participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  const document = await prisma.document.findUnique({
+    where: { id: docId },
+  });
+
+  if (!document || document.participantId !== participantId) {
+    throw new NotFoundError('Document not found');
+  }
+
+  const storage = getStorageService();
+  const url = await storage.getUrl(document.storedFilePath);
+
+  res.json({ url });
+}));
+
+// =============================================================================
+// COUNTRY LIMITS ROUTES
+// =============================================================================
+
+/**
+ * GET /api/organisation/projects/:id/country-limits
+ * Get country limits for a project
+ */
+router.get('/projects/:id/country-limits', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const limits = await prisma.projectCountryLimit.findMany({
+    where: { projectId },
+    orderBy: { country: 'asc' },
+  });
+
+  res.json(limits);
+}));
+
+/**
+ * POST /api/organisation/projects/:id/country-limits
+ * Set country limit
+ */
+const countryLimitSchema = z.object({
+  country: z.string().min(1),
+  maxReimbursementAmount: z.number().min(0),
+  greenTravel: z.boolean().optional(),
+});
+
+router.post('/projects/:id/country-limits', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const result = countryLimitSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const { country, maxReimbursementAmount, greenTravel } = result.data;
+
+  // Upsert the limit
+  const limit = await prisma.projectCountryLimit.upsert({
+    where: {
+      projectId_country: { projectId, country },
+    },
+    create: {
+      projectId,
+      country,
+      maxReimbursementAmount,
+      currency: 'EUR',
+      greenTravel: greenTravel || false,
+    },
+    update: {
+      maxReimbursementAmount,
+      greenTravel: greenTravel ?? undefined,
+    },
+  });
+
+  // Update reimbursement summaries for participants from this country
+  const participants = await prisma.participant.findMany({
+    where: { projectId, country },
+  });
+
+  for (const p of participants) {
+    await prisma.reimbursementSummary.updateMany({
+      where: { participantId: p.id },
+      data: { maxReimbursementAllowed: maxReimbursementAmount },
+    });
+  }
+
+  res.json(limit);
+}));
+
+/**
+ * DELETE /api/organisation/projects/:id/country-limits/:country
+ * Delete country limit
+ */
+router.delete('/projects/:id/country-limits/:country', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const { id: projectId, country } = req.params;
+
+  await prisma.projectCountryLimit.delete({
+    where: {
+      projectId_country: { projectId, country },
+    },
+  });
+
+  res.json({ success: true });
+}));
+
+/**
+ * GET /api/organisation/projects/:id/export/csv
+ * Export project participants to CSV
+ */
+router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      participants: {
+        include: {
+          reimbursementSummary: true,
+          travelItems: true,
+        },
+      },
+    },
+  });
+
+  if (!project) {
+    throw new NotFoundError('Project not found');
+  }
+
+  // Build CSV
+  const headers = [
+    'First Name',
+    'Last Name',
+    'Email',
+    'Country',
+    'Status',
+    'Total EUR',
+    'Max Reimbursement',
+    'Amount to Reimburse',
+    'IBAN',
+    'Account Holder',
+    'BIC',
+  ];
+
+  const rows = project.participants.map((p: any) => [
+    p.firstName,
+    p.lastName,
+    p.email,
+    p.country,
+    p.status,
+    p.reimbursementSummary?.totalEur || 0,
+    p.reimbursementSummary?.maxReimbursementAllowed || 0,
+    p.reimbursementSummary?.amountToReimburse || 0,
+    p.bankAccountIban || '',
+    p.bankAccountHolderName || '',
+    p.bankAccountBic || '',
+  ]);
+
+  const csvContent = [
+    headers.join(','),
+    ...rows.map((r: any[]) => r.map((v: any) => `"${String(v).replace(/"/g, '""')}"`).join(',')),
+  ].join('\n');
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-z0-9]/gi, '_')}_participants.csv"`);
+  res.send(csvContent);
 }));
 
 export default router;
