@@ -13,7 +13,7 @@ async function main() {
 
   const superAdmin = await prisma.superAdmin.create({
     data: {
-      email: 'admin@easyreimburse.com',
+      email: 'mickyvz@live.nl',
       passwordHash: superAdminHash,
       name: 'Super Admin',
     },
@@ -26,8 +26,8 @@ async function main() {
 
   const org = await prisma.organisation.create({
     data: {
-      name: 'Youth Exchange Network',
-      email: 'demo@youthexchange.org',
+      name: 'Arbre en Fleurs Association',
+      email: 'arbre.en.fleurs.association@gmail.com',
       passwordHash: orgPasswordHash,
       projectCredits: 5,  // Give some credits for testing
       foundingCreditClaimed: true,
@@ -194,10 +194,10 @@ async function main() {
 
   console.log('\n=== LOGIN CREDENTIALS ===');
   console.log('\nSuper Admin:');
-  console.log('  Email: admin@easyreimburse.com');
+  console.log('  Email: mickyvz@live.nl');
   console.log('  Password: admin123!');
   console.log('\nDemo Organisation:');
-  console.log('  Email: demo@youthexchange.org');
+  console.log('  Email: arbre.en.fleurs.association@gmail.com');
   console.log('  Password: demo123!');
 
   console.log('\nDemo magic link tokens:');
