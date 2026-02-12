@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { organisationApi } from '../../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, HelpCircle } from 'lucide-react';
 
 export default function ProjectCreate() {
   const navigate = useNavigate();
@@ -12,6 +12,7 @@ export default function ProjectCreate() {
   const [country, setCountry] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [venueAddress, setVenueAddress] = useState('');
   const [carRatePerKm, setCarRatePerKm] = useState('0.22');
 
   // Check if logged in
@@ -34,6 +35,7 @@ export default function ProjectCreate() {
       name,
       description,
       country,
+      venueAddress: venueAddress || undefined,
       startDate,
       endDate,
       carRatePerKm: parseFloat(carRatePerKm),
@@ -166,10 +168,34 @@ export default function ProjectCreate() {
               />
             </div>
 
+            <div>
+              <div className="flex items-center gap-1 mb-1">
+                <label htmlFor="venueAddress" className="block text-sm font-medium text-gray-700">
+                  Venue Address
+                </label>
+                <div className="relative group">
+                  <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-72 z-10">
+                    The venue address helps our AI understand where participants are traveling to. Participants may not always reach the exact venue by public transport (e.g., bus pickup from a nearby city).
+                    <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+                  </div>
+                </div>
+              </div>
+              <input
+                id="venueAddress"
+                type="text"
+                value={venueAddress}
+                onChange={(e) => setVenueAddress(e.target.value)}
+                disabled={!canCreate}
+                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                placeholder="e.g., Dlouha 33, Prague, Czech Republic"
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label htmlFor="startDate" className="block text-sm font-medium text-gray-700 mb-1">
-                  Start Date *
+                  Arrival Day *
                 </label>
                 <input
                   id="startDate"
@@ -183,7 +209,7 @@ export default function ProjectCreate() {
               </div>
               <div>
                 <label htmlFor="endDate" className="block text-sm font-medium text-gray-700 mb-1">
-                  End Date *
+                  Departure Day *
                 </label>
                 <input
                   id="endDate"

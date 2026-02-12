@@ -837,6 +837,13 @@ export const organisationApi = {
     return handleResponse<{ url: string }>(res);
   },
 
+  getChangelogSummary: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/changelog-summary`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ summary: string }>(res);
+  },
+
   // Country Limits
   getCountryLimits: async (projectId: string) => {
     const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits`, {
@@ -897,6 +904,7 @@ export interface OrgProject {
   name: string;
   description?: string;
   country: string;
+  venueAddress?: string;
   startDate: string;
   endDate: string;
   disseminationEnabled: boolean;
@@ -943,6 +951,7 @@ export interface CreateOrgProjectData {
   name: string;
   description?: string;
   country: string;
+  venueAddress?: string;
   startDate: string;
   endDate: string;
   carRatePerKm?: number;
@@ -975,6 +984,11 @@ export interface OrgParticipantDetail extends OrgParticipant {
   bankAccountIban?: string;
   bankAccountHolderName?: string;
   bankAccountBic?: string;
+  bankName?: string;
+  personalAddress?: string;
+  personalCity?: string;
+  personalPostalCode?: string;
+  personalCountry?: string;
   notesInternal?: string;
   participantNote?: string;
   documents: Document[];
@@ -1109,6 +1123,11 @@ export interface ParticipantDetail extends Participant {
   bankAccountIban?: string;
   bankAccountHolderName?: string;
   bankAccountBic?: string;
+  bankName?: string;
+  personalAddress?: string;
+  personalCity?: string;
+  personalPostalCode?: string;
+  personalCountry?: string;
   notesInternal?: string;
   participantNote?: string;
   documents: Document[];
@@ -1259,6 +1278,11 @@ export interface BankDetails {
   bankAccountIban: string;
   bankAccountHolderName: string;
   bankAccountBic?: string;
+  bankName?: string;
+  personalAddress?: string;
+  personalCity?: string;
+  personalPostalCode?: string;
+  personalCountry?: string;
 }
 
 export interface ImportPreview {
@@ -1304,6 +1328,11 @@ export interface ParticipantAuthResponse {
     bankAccountIban?: string;
     bankAccountHolderName?: string;
     bankAccountBic?: string;
+    bankName?: string;
+    personalAddress?: string;
+    personalCity?: string;
+    personalPostalCode?: string;
+    personalCountry?: string;
     participantNote?: string;
     detectedHomeCountry?: string | null;
     homeCountryConfidence?: number | null;

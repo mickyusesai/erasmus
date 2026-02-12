@@ -193,6 +193,7 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
       endDate: p.endDate,
       disseminationEnabled: p.disseminationEnabled,
       carRatePerKm: p.carRatePerKm,
+      venueAddress: p.venueAddress,
       participantCount: p._count.participants,
       creditSource: p.creditSource,
       isTestProject: p.isTestProject,
@@ -211,6 +212,7 @@ const createProjectSchema = z.object({
   startDate: z.string().transform((s) => new Date(s)),
   endDate: z.string().transform((s) => new Date(s)),
   carRatePerKm: z.number().min(0).default(0.22),
+  venueAddress: z.string().optional(),
 });
 
 /**
@@ -233,7 +235,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Consume credit and create project in a transaction
-  const { name, description, country, startDate, endDate, carRatePerKm } = result.data;
+  const { name, description, country, startDate, endDate, carRatePerKm, venueAddress } = result.data;
 
   // Refresh org data to get latest credit count
   const freshOrg = await prisma.organisation.findUnique({
@@ -257,6 +259,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
       startDate,
       endDate,
       carRatePerKm,
+      venueAddress,
       creditSource,
     },
     include: {
@@ -273,6 +276,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
       name: project.name,
       description: project.description,
       country: project.country,
+      venueAddress: project.venueAddress,
       startDate: project.startDate,
       endDate: project.endDate,
       carRatePerKm: project.carRatePerKm,
@@ -326,6 +330,7 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       name: project.name,
       description: project.description,
       country: project.country,
+      venueAddress: project.venueAddress,
       startDate: project.startDate,
       endDate: project.endDate,
       disseminationEnabled: project.disseminationEnabled,
@@ -348,6 +353,7 @@ const updateProjectSchema = z.object({
   endDate: z.string().transform((s) => new Date(s)).optional(),
   disseminationEnabled: z.boolean().optional(),
   carRatePerKm: z.number().min(0).optional(),
+  venueAddress: z.string().optional(),
 });
 
 /**
@@ -394,6 +400,7 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
       name: project.name,
       description: project.description,
       country: project.country,
+      venueAddress: project.venueAddress,
       startDate: project.startDate,
       endDate: project.endDate,
       disseminationEnabled: project.disseminationEnabled,
@@ -854,6 +861,46 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
       greenTravel: countryLimit?.greenTravel || false,
     },
   });
+}));
+
+/**
+ * GET /api/organisation/participants/:id/changelog-summary
+ * Get AI summary of changelog entries
+ */
+router.get('/participants/:id/changelog-summary', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: {
+      project: true,
+      changeLogEntries: {
+        orderBy: { changedAt: 'desc' },
+      },
+    },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  if (participant.changeLogEntries.length === 0) {
+    res.json({ summary: 'No changes recorded yet.' });
+    return;
+  }
+
+  const { summarizeChangelog } = await import('../../services/ai/claudeAiService.js');
+  const summary = await summarizeChangelog(
+    participant.changeLogEntries,
+    `${participant.firstName} ${participant.lastName}`,
+  );
+
+  res.json({ summary });
 }));
 
 /**

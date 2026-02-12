@@ -19,6 +19,7 @@ import {
   ChevronUp,
   ExternalLink,
   Trash2,
+  Sparkles,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -63,6 +64,13 @@ export default function OrgParticipantDetail() {
     queryFn: () => organisationApi.getParticipant(id!),
     enabled: !!id,
     retry: false,
+  });
+
+  const { data: summaryData } = useQuery({
+    queryKey: ['changelog-summary', id],
+    queryFn: () => organisationApi.getChangelogSummary(id!),
+    enabled: !!id && (data?.participant?.changeLogEntries?.length ?? 0) > 0,
+    staleTime: 5 * 60 * 1000,
   });
 
   const sendMagicLinkMutation = useMutation({
@@ -291,6 +299,21 @@ export default function OrgParticipantDetail() {
                 </CardContent>
               </Card>
 
+              {/* AI Changelog Summary */}
+              {summaryData?.summary && summaryData.summary !== 'No changes recorded yet.' && (
+                <Card className="border-indigo-200 bg-indigo-50">
+                  <CardContent className="py-3 px-4">
+                    <div className="flex items-start gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-500 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium text-indigo-800">AI Summary</p>
+                        <p className="text-sm text-indigo-700 mt-1">{summaryData.summary}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Change Log */}
               <Card>
                 <CardHeader>
@@ -371,9 +394,96 @@ export default function OrgParticipantDetail() {
                         <p className="font-mono text-gray-900">{participant.bankAccountBic}</p>
                       </div>
                     )}
+                    {participant.bankName && (
+                      <div>
+                        <p className="text-gray-500">Bank Name</p>
+                        <p className="text-gray-900">{participant.bankName}</p>
+                      </div>
+                    )}
+                    {(participant.personalAddress || participant.personalCity || participant.personalPostalCode || participant.personalCountry) && (
+                      <div>
+                        <p className="text-gray-500">Personal Address</p>
+                        <p className="text-gray-900">
+                          {[participant.personalAddress, participant.personalCity, participant.personalPostalCode, participant.personalCountry]
+                            .filter(Boolean)
+                            .join(', ')}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Review Checklist */}
+              {(participant.status === 'PARTICIPANT_COMPLETE' || participant.status === 'ADMIN_APPROVED') && (() => {
+                const checks = [
+                  {
+                    label: 'Bank details are complete',
+                    done: !!(participant.bankAccountIban && participant.bankAccountHolderName),
+                    priority: 'high' as const,
+                  },
+                  {
+                    label: 'All travel items have amounts',
+                    done: !participant.travelItems.some(
+                      (item: TravelItem) => (item.amountEur === 0 || item.amountEur === null) && !item.excludedFromReimbursement
+                    ),
+                    priority: 'high' as const,
+                  },
+                  {
+                    label: 'Flight numbers filled in',
+                    done: !participant.travelItems.some(
+                      (item: TravelItem) => item.modeOfTransport === 'PLANE' && !item.flightNumber
+                    ),
+                    priority: 'medium' as const,
+                  },
+                  {
+                    label: 'AI check passed',
+                    done: !!summary?.aiCheckOk,
+                    priority: 'medium' as const,
+                  },
+                  {
+                    label: 'No validation warnings',
+                    done: !participant.travelItems.some(
+                      (item: TravelItem) => item.validationWarnings && JSON.parse(item.validationWarnings as string).length > 0
+                    ),
+                    priority: 'medium' as const,
+                  },
+                ];
+                const completedCount = checks.filter(c => c.done).length;
+
+                return (
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-semibold text-gray-900">Review Checklist</h3>
+                        <span className="text-xs text-gray-500">{completedCount}/{checks.length}</span>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {checks.map((check, i) => (
+                          <div key={i} className="flex items-start gap-2">
+                            {check.done ? (
+                              <CheckCircle className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            ) : (
+                              <HelpCircle className={clsx(
+                                'w-4 h-4 mt-0.5 flex-shrink-0',
+                                check.priority === 'high' ? 'text-red-400' : 'text-amber-400'
+                              )} />
+                            )}
+                            <span className={clsx(
+                              'text-sm',
+                              check.done ? 'text-gray-500 line-through' : 'text-gray-700'
+                            )}>
+                              {check.label}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
 
               {/* Actions */}
               <Card>

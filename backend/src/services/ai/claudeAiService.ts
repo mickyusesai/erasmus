@@ -523,3 +523,56 @@ Other important notes:
     }
   }
 }
+
+/**
+ * Summarize changelog entries for admin review using Claude Haiku
+ */
+export async function summarizeChangelog(
+  changeLogEntries: Array<{
+    userType: string;
+    fieldName: string;
+    previousValue: string | null;
+    newValue: string | null;
+    changedAt: Date | string;
+  }>,
+  participantName: string,
+): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return 'AI summary unavailable (API key not configured).';
+  }
+
+  const client = new Anthropic({ apiKey });
+
+  const entriesSummary = changeLogEntries
+    .map(
+      (e) =>
+        `[${e.userType}] ${e.fieldName}: "${e.previousValue || '(empty)'}" -> "${e.newValue || '(empty)'}" at ${new Date(e.changedAt).toISOString()}`,
+    )
+    .join('\n');
+
+  try {
+    const response = await client.messages.create({
+      model: 'claude-3-haiku-20240307',
+      max_tokens: 300,
+      messages: [
+        {
+          role: 'user',
+          content: `You are reviewing changelog entries for participant "${participantName}" in an Erasmus+ travel reimbursement system. Summarize what has happened in 2-3 short sentences. Focus on: what was changed, who changed it (PARTICIPANT or ADMIN), and what the admin reviewing this should still check or pay attention to. Be concise and actionable.
+
+Changelog entries:
+${entriesSummary}
+
+Summary:`,
+        },
+      ],
+    });
+
+    return response.content[0].type === 'text'
+      ? response.content[0].text.trim()
+      : 'Unable to generate summary.';
+  } catch (error) {
+    console.error('[AI] Failed to summarize changelog:', error);
+    return 'Unable to generate summary at this time.';
+  }
+}
