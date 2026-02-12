@@ -674,21 +674,21 @@ CRITICAL (organisation must take action):
 5. If a travel item has NO DOCUMENT LINKED → flag it, no proof of travel.
 
 IMPORTANT (organisation should review):
-6. If a route doesn't seem to match the expected home (${data.participantCountry}) ↔ project (${data.projectCountry}) travel pattern.
+6. If a route doesn't seem to match the expected home (${data.participantCountry}) ↔ project (${data.projectCountry}) travel pattern. IMPORTANT: Match cities to countries generously — for example Chisinau=Moldova, Skopje=North Macedonia, Brussels=Belgium, etc. A travel item from Chisinau to Amsterdam is a VALID route for a Moldovan participant traveling to The Netherlands. Only flag truly unrelated routes.
 7. If AI-detected home country differs from the participant's stated home country (${data.participantCountry}) — compare ONLY these two, do NOT confuse with the project country.
 8. If any document extraction has confidence below 70% → the extracted data might be wrong.
 9. If a booking has multiple passengers → verify the claimed portion is fair.
 10. If total claimed exceeds the country reimbursement limit.
-11. If the changelog shows the participant changed important fields like amounts, routes, or dates (NOT just filling in empty fields — only flag actual changes from one value to another). Use the correct category: "Flight Edit" for flight numbers, "Route Edit" for locations, "Amount Edit" for prices.
+11. If the changelog shows the participant changed important fields like amounts, routes, or dates (NOT just filling in empty fields — only flag actual changes from one value to another). Use the correct category: "Flight Edit" for flight numbers, "Route Edit" for locations, "Amount Edit" for prices. IMPORTANT: Do NOT flag changes to bank details fields (IBAN, BIC, account holder name, bank name, personal address fields) — participants always fill these in themselves, so any "change" is just them entering their data.
 12. If a plane travel item is missing its flight number.
 
 INFORMATIONAL (good to know):
 13. Non-EUR currency without purchase date (exchange rate may be approximate).
 14. Travel dates more than 2 days outside project window.
-15. Bank details incomplete.
+15. Bank details incomplete (missing IBAN, holder name, or BIC).
 16. Uploaded documents not linked to any travel item.
 17. Round-trip bookings — verify price is counted only once.
-18. If the participant left a note → surface it so the org sees it.
+18. If the participant left a note in the PARTICIPANT'S OWN NOTE field above → surface it so the org sees it. Do NOT create a finding about notes if no participant note exists.
 19. If document count vs travel item count seems unusual.
 20. Car travel — flag distance for manual reasonableness check.
 
@@ -704,6 +704,9 @@ IMPORTANT RULES:
 - Use ACCURATE categories — a flight number edit is "Flight Edit", NOT "Price Change"
 - Do NOT confuse the participant's home country (${data.participantCountry}) with the project country (${data.projectCountry})
 - Declaration of Travel = the replacement document EXISTS and needs checking, NOT that something is missing
+- NEVER flag bank detail fields (IBAN, BIC, holder name, bank name, address) as manual edits — participants always fill these in themselves
+- NEVER create a "Participant Note" finding unless the PARTICIPANT'S OWN NOTE field above actually contains text
+- For route matching, use geographic knowledge: match cities to their countries (Chisinau=Moldova, Skopje=North Macedonia, etc.)
 - If everything is fine: [{"severity":"info","message":"All checks passed — data looks complete and consistent.","category":"All Clear"}]
 - Maximum 12 findings, prioritize critical > important > info
 - Return ONLY the JSON array`;

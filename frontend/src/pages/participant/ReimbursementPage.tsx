@@ -1847,12 +1847,25 @@ function TravelItemCard({
     setIsConverting(false);
   }, [item.currencyOriginal, item.amountOriginal, item.purchaseDate, isNonEurCurrency, token, onUpdate, item.amountEur]);
 
-  // Trigger conversion when relevant fields change or on mount
+  // Track previous conversion inputs to avoid re-converting on re-mount when data hasn't changed
+  const lastConversionKey = useRef('');
+
+  // Trigger conversion only when the conversion inputs actually change
   useEffect(() => {
-    if (isNonEurCurrency && item.purchaseDate && item.amountOriginal) {
-      handleCurrencyConversion();
+    if (!isNonEurCurrency || !item.purchaseDate || !item.amountOriginal) return;
+
+    const conversionKey = `${item.currencyOriginal}|${item.amountOriginal}|${item.purchaseDate}`;
+    if (conversionKey === lastConversionKey.current) return;
+
+    // If we already have a EUR amount and this is just a re-mount (not a value change), skip
+    if (lastConversionKey.current === '' && item.amountEur && item.amountEur > 0) {
+      lastConversionKey.current = conversionKey;
+      return;
     }
-  }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, handleCurrencyConversion]);
+
+    lastConversionKey.current = conversionKey;
+    handleCurrencyConversion();
+  }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, item.currencyOriginal, item.amountEur, handleCurrencyConversion]);
 
   return (
     <div className={clsx(
