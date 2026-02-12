@@ -608,12 +608,13 @@ export async function generateParticipantReview(data: {
   } | null;
   bankDetailsComplete: boolean;
 }): Promise<ReviewFinding[]> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
   }
 
-  const client = new Anthropic({ apiKey });
+  const { default: OpenAI } = await import('openai');
+  const client = new OpenAI({ apiKey });
 
   const prompt = `You are an AI reviewer for an Erasmus+ travel reimbursement system. You review a participant's complete data and produce an actionable checklist for the organisation administrator.
 
@@ -716,13 +717,14 @@ IMPORTANT RULES:
 - Return ONLY the JSON array`;
 
   try {
-    const response = await client.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 1500,
+    const response = await client.chat.completions.create({
+      model: 'gpt-5.2',
+      max_completion_tokens: 4000,
+      reasoning: { effort: 'medium' },
       messages: [{ role: 'user', content: prompt }],
     });
 
-    const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '[]';
+    const text = response.choices[0]?.message?.content?.trim() || '[]';
 
     // Parse JSON from response (handle potential markdown wrapping)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -735,7 +737,7 @@ IMPORTANT RULES:
       (f) => f.severity && f.message && f.category
     );
   } catch (error) {
-    console.error('[AI] Failed to generate participant review:', error);
+    console.error('[AI Review] Failed to generate participant review:', error);
     return [{ severity: 'info', message: 'Unable to generate review at this time.', category: 'System' }];
   }
 }
