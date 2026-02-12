@@ -276,12 +276,19 @@ export default function OrgDashboard() {
                     {dashboard.projects.map((project) => (
                       <tr key={project.id} className="hover:bg-gray-50">
                         <td className="py-3">
-                          <Link
-                            to={`/org/projects/${project.id}`}
-                            className="font-medium text-gray-900 hover:text-primary-600"
-                          >
-                            {project.name}
-                          </Link>
+                          <div className="flex items-center gap-2">
+                            <Link
+                              to={`/org/projects/${project.id}`}
+                              className="font-medium text-gray-900 hover:text-primary-600"
+                            >
+                              {project.name}
+                            </Link>
+                            {project.isTestProject && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                                Test
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 text-gray-600">{project.country}</td>
                         <td className="py-3 text-gray-600 text-sm">
@@ -289,7 +296,8 @@ export default function OrgDashboard() {
                         </td>
                         <td className="py-3">
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                            {project.participantCount} participants
+                            {project.participantCount}
+                            {project.maxParticipants ? `/${project.maxParticipants}` : ''} participants
                           </span>
                         </td>
                       </tr>
@@ -320,27 +328,6 @@ function CreditStatusCard({ credits }: { credits: OrgDashboardData['credits'] })
             <p className="text-emerald-700 text-sm mt-1">
               You have unlimited project credits.
               {expiresAt && ` License expires on ${formatDate(expiresAt)}.`}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Founding credit available
-  if (credits.hasFoundingCredit && !credits.foundingCreditExpired) {
-    const expiresAt = credits.foundingCreditExpiresAt ? new Date(credits.foundingCreditExpiresAt) : null;
-    return (
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
-            <CreditCard className="w-5 h-5 text-blue-600" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-blue-800">Founding Credit Available</h3>
-            <p className="text-blue-700 text-sm mt-1">
-              You have 1 free project credit from early access.
-              {expiresAt && ` Please start a project before ${formatDate(expiresAt)} to use it.`}
             </p>
           </div>
         </div>

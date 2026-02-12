@@ -13,6 +13,12 @@ import {
 const router = Router();
 
 // =============================================================================
+// CONSTANTS
+// =============================================================================
+
+const TEST_PROJECT_MAX_PARTICIPANTS = 10;
+
+// =============================================================================
 // ORGANISATION AUTH ROUTES
 // =============================================================================
 
@@ -24,12 +30,13 @@ const registerSchema = z.object({
     .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
     .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
     .regex(/[0-9]/, 'Password must contain at least one number'),
-  oid: z.string().optional(), // Organisation ID - optional for regular registration
+  oid: z.string().optional(), // Organisation ID - optional identifier
 });
 
 /**
  * POST /api/auth/register
  * Register a new organisation account
+ * Automatically creates a free test project with max 10 participants
  */
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   const result = registerSchema.safeParse(req.body);
@@ -52,21 +59,45 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   // Hash password
   const passwordHash = await bcrypt.hash(password, 12);
 
-  // Create organisation
-  const organisation = await prisma.organisation.create({
-    data: {
-      name,
-      email: email.toLowerCase(),
-      passwordHash,
-      oid: oid || null,
-    },
+  // Create organisation with test project in a transaction
+  const organisation = await prisma.$transaction(async (tx) => {
+    // Create organisation
+    const org = await tx.organisation.create({
+      data: {
+        name,
+        email: email.toLowerCase(),
+        passwordHash,
+        oid: oid || null,
+      },
+    });
+
+    // Create free test project
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setFullYear(endDate.getFullYear() + 1); // 1 year from now
+
+    await tx.project.create({
+      data: {
+        organisationId: org.id,
+        name: 'Test Project',
+        description: 'A free test project to try out the platform. Limited to 10 participants.',
+        country: 'Test',
+        startDate,
+        endDate,
+        isTestProject: true,
+        maxParticipants: TEST_PROJECT_MAX_PARTICIPANTS,
+        creditSource: null, // No credit consumed for test projects
+      },
+    });
+
+    return org;
   });
 
   // Generate token
   const token = generateOrganisationToken(organisation);
 
   res.status(201).json({
-    message: 'Registration successful',
+    message: 'Registration successful! A free test project has been created for you with up to 10 participants.',
     token,
     organisation: {
       id: organisation.id,
@@ -129,9 +160,6 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
       projectCredits: organisation.projectCredits,
       hasAnnualLicense: organisation.hasAnnualLicense,
       annualLicenseExpiresAt: organisation.annualLicenseExpiresAt,
-      foundingCreditClaimed: organisation.foundingCreditClaimed,
-      foundingCreditUsed: organisation.foundingCreditUsed,
-      foundingCreditExpiresAt: organisation.foundingCreditExpiresAt,
     },
   });
 }));
@@ -165,9 +193,6 @@ router.get('/me', organisationAuth, asyncHandler(async (req: Request, res: Respo
       hasAnnualLicense: organisation.hasAnnualLicense,
       annualLicenseExpiresAt: organisation.annualLicenseExpiresAt,
       annualLicenseStartedAt: organisation.annualLicenseStartedAt,
-      foundingCreditClaimed: organisation.foundingCreditClaimed,
-      foundingCreditUsed: organisation.foundingCreditUsed,
-      foundingCreditExpiresAt: organisation.foundingCreditExpiresAt,
       createdAt: organisation.createdAt,
     },
     stats: {
@@ -311,106 +336,6 @@ router.post('/super-admin/login', asyncHandler(async (req: Request, res: Respons
       id: admin.id,
       email: admin.email,
       name: admin.name,
-    },
-  });
-}));
-
-// =============================================================================
-// FOUNDING CREDIT ROUTES
-// =============================================================================
-
-const claimFoundingCreditSchema = z.object({
-  name: z.string().min(2, 'Organisation name must be at least 2 characters'),
-  email: z.string().email('Invalid email address'),
-  password: z.string()
-    .min(8, 'Password must be at least 8 characters')
-    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
-    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-    .regex(/[0-9]/, 'Password must contain at least one number'),
-  oid: z.string().min(1, 'Organisation ID (OID) is required'),
-});
-
-/**
- * POST /api/auth/claim-founding-credit
- * Register and claim founding credit (free first project)
- */
-router.post('/claim-founding-credit', asyncHandler(async (req: Request, res: Response) => {
-  const result = claimFoundingCreditSchema.safeParse(req.body);
-
-  if (!result.success) {
-    throw new ValidationError(result.error.errors[0].message);
-  }
-
-  const { name, email, password, oid } = result.data;
-
-  // Check if email already exists
-  const existingByEmail = await prisma.organisation.findUnique({
-    where: { email: email.toLowerCase() },
-  });
-
-  if (existingByEmail) {
-    throw new ConflictError('An account with this email already exists. Please login instead.');
-  }
-
-  // Check if OID has already claimed a founding credit
-  const existingByOid = await prisma.organisation.findFirst({
-    where: {
-      oid: oid,
-      foundingCreditClaimed: true,
-    },
-  });
-
-  if (existingByOid) {
-    throw new ConflictError('This Organisation ID has already claimed a founding credit');
-  }
-
-  // Hash password
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  // Calculate expiration date (1 month from now)
-  const foundingCreditExpiresAt = new Date();
-  foundingCreditExpiresAt.setMonth(foundingCreditExpiresAt.getMonth() + 1);
-
-  // Create organisation with founding credit
-  const organisation = await prisma.organisation.create({
-    data: {
-      name,
-      email: email.toLowerCase(),
-      passwordHash,
-      oid,
-      foundingCreditClaimed: true,
-      foundingCreditClaimedAt: new Date(),
-      foundingCreditExpiresAt,
-      foundingCreditUsed: false,
-    },
-  });
-
-  // Record the founding credit as a purchase for audit trail
-  await prisma.purchase.create({
-    data: {
-      organisationId: organisation.id,
-      type: 'FOUNDING',
-      amountCents: 0,
-      currency: 'EUR',
-      creditsGranted: 1,
-      status: 'COMPLETED',
-      completedAt: new Date(),
-    },
-  });
-
-  // Generate token
-  const token = generateOrganisationToken(organisation);
-
-  res.status(201).json({
-    message: 'Founding credit claimed successfully! You have 1 month to start your first project.',
-    token,
-    organisation: {
-      id: organisation.id,
-      name: organisation.name,
-      email: organisation.email,
-      projectCredits: 0, // Founding credit is tracked separately
-      foundingCreditClaimed: true,
-      foundingCreditExpiresAt,
     },
   });
 }));

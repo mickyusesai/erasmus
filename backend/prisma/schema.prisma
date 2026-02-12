@@ -17,7 +17,7 @@ model Organisation {
   name                    String
   email                   String    @unique  // Login email
   passwordHash            String
-  oid                     String?   // Organisation ID (OID) - used for founding credit verification
+  oid                     String?   // Organisation ID (OID) - optional identifier
 
   // Credit tracking
   projectCredits          Int       @default(0)
@@ -26,12 +26,6 @@ model Organisation {
   hasAnnualLicense        Boolean   @default(false)
   annualLicenseStartedAt  DateTime?
   annualLicenseExpiresAt  DateTime?
-
-  // Founding credit tracking
-  foundingCreditClaimed   Boolean   @default(false)
-  foundingCreditClaimedAt DateTime?
-  foundingCreditExpiresAt DateTime?  // Must start project within 1 month of claiming
-  foundingCreditUsed      Boolean   @default(false)
 
   // Account status
   isActive                Boolean   @default(true)
@@ -74,7 +68,7 @@ enum PurchaseType {
   PACK_5      // €395, 5 credits
   PACK_10     // €595, 10 credits
   ANNUAL      // €995, unlimited for 1 year
-  FOUNDING    // Free, 1 credit (invitation only)
+  FOUNDING    // Legacy: was for invitation-only free credit (no longer used)
   MANUAL      // Manually added by super admin
 }
 
@@ -112,8 +106,12 @@ model Project {
   disseminationEnabled     Boolean                 @default(false)  // Whether dissemination page is shown to participants
   carRatePerKm             Float                   @default(0.22)   // Rate per km for car travel reimbursement (EUR)
 
+  // Test project - automatically created for new organisations (max 10 participants)
+  isTestProject            Boolean                 @default(false)
+  maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects
+
   // Credit tracking - which credit was used to create this project
-  creditSource             PurchaseType?           // SINGLE, PACK_5, PACK_10, ANNUAL, FOUNDING, MANUAL
+  creditSource             PurchaseType?           // SINGLE, PACK_5, PACK_10, ANNUAL, FOUNDING, MANUAL, or null for test projects
 
   createdAt                DateTime                @default(now())
   updatedAt                DateTime                @updatedAt

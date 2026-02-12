@@ -76,7 +76,7 @@ export default function Billing() {
         {/* Current Status */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Current Status</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-gray-50 rounded-lg p-4">
               <p className="text-sm text-gray-600">Project Credits</p>
               <p className="text-2xl font-bold text-gray-900">{credits.projectCredits}</p>
@@ -98,26 +98,6 @@ export default function Billing() {
               {credits.annualLicenseExpiresAt && (
                 <p className="text-xs text-gray-500 mt-1">
                   {credits.annualLicenseExpired ? 'Expired' : 'Expires'}: {new Date(credits.annualLicenseExpiresAt).toLocaleDateString()}
-                </p>
-              )}
-            </div>
-
-            <div className={`rounded-lg p-4 ${credits.hasFoundingCredit && !credits.foundingCreditExpired ? 'bg-blue-50' : 'bg-gray-50'}`}>
-              <p className="text-sm text-gray-600">Founding Credit</p>
-              <p className="text-lg font-bold text-gray-900">
-                {credits.hasFoundingCredit ? (
-                  credits.foundingCreditExpired ? (
-                    <span className="text-red-600">Expired</span>
-                  ) : (
-                    <span className="text-blue-600">Available</span>
-                  )
-                ) : (
-                  'Not available'
-                )}
-              </p>
-              {credits.foundingCreditExpiresAt && !credits.foundingCreditExpired && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Expires: {new Date(credits.foundingCreditExpiresAt).toLocaleDateString()}
                 </p>
               )}
             </div>

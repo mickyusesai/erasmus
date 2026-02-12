@@ -23,8 +23,6 @@ interface CreditStatus {
   canCreateProject: boolean;
   reason?: string;
   availableCredits: number;
-  hasFoundingCredit: boolean;
-  foundingCreditExpired: boolean;
   hasAnnualLicense: boolean;
   annualLicenseExpired: boolean;
 }
@@ -37,16 +35,8 @@ function getCreditStatus(org: Organisation): CreditStatus {
   const annualLicenseExpired = org.annualLicenseExpiresAt ? org.annualLicenseExpiresAt < now : true;
   const annualLicenseActive = hasAnnualLicense && !annualLicenseExpired;
 
-  // Check founding credit
-  const hasFoundingCredit = org.foundingCreditClaimed && !org.foundingCreditUsed;
-  const foundingCreditExpired = org.foundingCreditExpiresAt ? org.foundingCreditExpiresAt < now : false;
-  const foundingCreditAvailable = hasFoundingCredit && !foundingCreditExpired;
-
   // Calculate available credits
-  let availableCredits = org.projectCredits;
-  if (foundingCreditAvailable) {
-    availableCredits += 1;
-  }
+  const availableCredits = org.projectCredits;
 
   // Determine if can create project
   let canCreateProject = false;
@@ -54,12 +44,8 @@ function getCreditStatus(org: Organisation): CreditStatus {
 
   if (annualLicenseActive) {
     canCreateProject = true;
-  } else if (foundingCreditAvailable) {
-    canCreateProject = true;
   } else if (org.projectCredits > 0) {
     canCreateProject = true;
-  } else if (hasFoundingCredit && foundingCreditExpired) {
-    reason = 'Your founding credit has expired. Please purchase credits to create a project.';
   } else if (hasAnnualLicense && annualLicenseExpired) {
     reason = 'Your annual license has expired. Please renew to create new projects.';
   } else {
@@ -70,8 +56,6 @@ function getCreditStatus(org: Organisation): CreditStatus {
     canCreateProject,
     reason,
     availableCredits,
-    hasFoundingCredit,
-    foundingCreditExpired,
     hasAnnualLicense,
     annualLicenseExpired,
   };
@@ -80,23 +64,8 @@ function getCreditStatus(org: Organisation): CreditStatus {
 async function consumeCredit(org: Organisation): Promise<PurchaseType> {
   const now = new Date();
 
-  // Priority: Founding credit > Regular credits > Annual (no consumption)
-
-  // Check founding credit first
-  if (org.foundingCreditClaimed && !org.foundingCreditUsed) {
-    const notExpired = !org.foundingCreditExpiresAt || org.foundingCreditExpiresAt > now;
-    if (notExpired) {
-      await prisma.organisation.update({
-        where: { id: org.id },
-        data: { foundingCreditUsed: true },
-      });
-      return 'FOUNDING';
-    }
-  }
-
-  // Check annual license
+  // Check annual license first (doesn't consume credits)
   if (org.hasAnnualLicense && org.annualLicenseExpiresAt && org.annualLicenseExpiresAt > now) {
-    // Annual license - no credit consumed
     return 'ANNUAL';
   }
 
@@ -161,9 +130,6 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       available: creditStatus.availableCredits,
       canCreateProject: creditStatus.canCreateProject,
       reason: creditStatus.reason,
-      hasFoundingCredit: creditStatus.hasFoundingCredit,
-      foundingCreditExpired: creditStatus.foundingCreditExpired,
-      foundingCreditExpiresAt: org.foundingCreditExpiresAt,
       hasAnnualLicense: creditStatus.hasAnnualLicense,
       annualLicenseExpired: creditStatus.annualLicenseExpired,
       annualLicenseExpiresAt: org.annualLicenseExpiresAt,
@@ -180,6 +146,8 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       endDate: p.endDate,
       participantCount: p._count.participants,
       creditSource: p.creditSource,
+      isTestProject: p.isTestProject,
+      maxParticipants: p.maxParticipants,
       createdAt: p.createdAt,
     })),
     recentPurchases: recentPurchases.map((p: any) => ({
@@ -227,6 +195,8 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
       carRatePerKm: p.carRatePerKm,
       participantCount: p._count.participants,
       creditSource: p.creditSource,
+      isTestProject: p.isTestProject,
+      maxParticipants: p.maxParticipants,
       countryLimits: p.countryLimits,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -498,9 +468,6 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
     credits: {
       available: creditStatus.availableCredits,
       projectCredits: org.projectCredits,
-      hasFoundingCredit: creditStatus.hasFoundingCredit && !org.foundingCreditUsed,
-      foundingCreditExpired: creditStatus.foundingCreditExpired,
-      foundingCreditExpiresAt: org.foundingCreditExpiresAt,
       hasAnnualLicense: creditStatus.hasAnnualLicense,
       annualLicenseExpired: creditStatus.annualLicenseExpired,
       annualLicenseExpiresAt: org.annualLicenseExpiresAt,
@@ -612,6 +579,23 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
 
   const { firstName, lastName, email, country } = result.data;
 
+  // Get project with participant count
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { _count: { select: { participants: true } } },
+  });
+
+  if (!project) {
+    throw new NotFoundError('Project not found');
+  }
+
+  // Check test project participant limit
+  if (project.isTestProject && project.maxParticipants !== null) {
+    if (project._count.participants >= project.maxParticipants) {
+      throw new ForbiddenError(`Test project is limited to ${project.maxParticipants} participants. Please purchase credits to create a full project.`);
+    }
+  }
+
   // Check if participant with same email already exists in this project
   const existing = await prisma.participant.findFirst({
     where: { projectId, email },
@@ -714,6 +698,16 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
     throw new ValidationError('No file uploaded');
   }
 
+  // Get project with participant count
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { _count: { select: { participants: true } } },
+  });
+
+  if (!project) {
+    throw new NotFoundError('Project not found');
+  }
+
   const content = req.file.buffer.toString('utf-8');
 
   const records = parse(content, {
@@ -732,6 +726,14 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
   const validRecords = mappedRecords.filter(
     (r) => r.firstName && r.lastName && r.email && r.country
   );
+
+  // Check test project participant limit
+  if (project.isTestProject && project.maxParticipants !== null) {
+    const remainingSlots = project.maxParticipants - project._count.participants;
+    if (validRecords.length > remainingSlots) {
+      throw new ForbiddenError(`Test project can only add ${remainingSlots} more participant(s) (limit: ${project.maxParticipants}). Please purchase credits to create a full project.`);
+    }
+  }
 
   const created: any[] = [];
   const errors: { row: number; error: string }[] = [];

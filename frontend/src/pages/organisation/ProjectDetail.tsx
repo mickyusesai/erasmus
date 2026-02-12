@@ -137,11 +137,21 @@ export default function OrgProjectDetail() {
               <ArrowLeft className="w-5 h-5 text-gray-600" />
             </Link>
             <div className="flex-1">
-              <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
+                {project.isTestProject && (
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                    Test Project
+                  </span>
+                )}
+              </div>
               <p className="text-gray-500">
                 {project.country} &middot;{' '}
                 {formatDate(project.startDate)} -{' '}
                 {formatDate(project.endDate)}
+                {project.maxParticipants && (
+                  <> &middot; Max {project.maxParticipants} participants</>
+                )}
               </p>
             </div>
             <Button
@@ -151,6 +161,23 @@ export default function OrgProjectDetail() {
               Export CSV
             </Button>
           </div>
+
+          {/* Test Project Banner */}
+          {project.isTestProject && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="font-medium text-amber-800">Test Project</h3>
+                  <p className="text-sm text-amber-700 mt-1">
+                    This is a free test project limited to {project.maxParticipants || 10} participants.
+                    To create a full project with unlimited participants, please{' '}
+                    <Link to="/org/billing" className="underline font-medium">purchase credits</Link>.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Tabs */}
           <div className="border-b border-gray-200">

@@ -18,7 +18,6 @@ import OrgProjectDetail from './pages/organisation/ProjectDetail';
 import OrgBilling from './pages/organisation/Billing';
 import OrgSettings from './pages/organisation/Settings';
 import OrgParticipantDetail from './pages/organisation/ParticipantDetail';
-import FoundingAccess from './pages/organisation/FoundingAccess';
 
 // Super Admin pages
 import SuperAdminLogin from './pages/superadmin/Login';
@@ -68,7 +67,6 @@ function App() {
       <Route path="/org/participants/:id" element={<OrgParticipantDetail />} />
       <Route path="/org/billing" element={<OrgBilling />} />
       <Route path="/org/settings" element={<OrgSettings />} />
-      <Route path="/founding-access" element={<FoundingAccess />} />
 
       {/* Super Admin routes */}
       <Route path="/super-admin/login" element={<SuperAdminLogin />} />

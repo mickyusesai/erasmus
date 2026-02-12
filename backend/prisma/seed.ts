@@ -30,8 +30,6 @@ async function main() {
       email: 'arbre.en.fleurs.association@gmail.com',
       passwordHash: orgPasswordHash,
       projectCredits: 5,  // Give some credits for testing
-      foundingCreditClaimed: true,
-      foundingCreditUsed: true,
     },
   });
   console.log('Created organisation:', org.name);

@@ -878,9 +878,6 @@ export interface OrganisationInfo {
   hasAnnualLicense: boolean;
   annualLicenseExpiresAt?: string;
   annualLicenseStartedAt?: string;
-  foundingCreditClaimed: boolean;
-  foundingCreditUsed: boolean;
-  foundingCreditExpiresAt?: string;
   createdAt?: string;
 }
 
@@ -888,9 +885,6 @@ export interface OrgCreditStatus {
   available: number;
   canCreateProject: boolean;
   reason?: string;
-  hasFoundingCredit: boolean;
-  foundingCreditExpired: boolean;
-  foundingCreditExpiresAt?: string;
   hasAnnualLicense: boolean;
   annualLicenseExpired: boolean;
   annualLicenseExpiresAt?: string;
@@ -907,6 +901,8 @@ export interface OrgProject {
   carRatePerKm: number;
   participantCount: number;
   creditSource?: string;
+  isTestProject: boolean;
+  maxParticipants?: number;
   createdAt: string;
   updatedAt?: string;
 }
