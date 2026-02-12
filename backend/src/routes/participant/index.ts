@@ -1210,6 +1210,125 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
     data: { aiCheckOk: validation.aiCheckPassed },
   });
 
+  // Generate AI review findings in the background (only once, on submission)
+  (async () => {
+    try {
+      // Fetch full participant data for AI review
+      const fullParticipant = await prisma.participant.findUnique({
+        where: { id: participant.id },
+        include: {
+          project: true,
+          documents: { include: { extraction: true } },
+          travelItems: {
+            orderBy: { departureDate: 'asc' },
+            include: { declarationsOfTravel: true },
+          },
+          declarationsOnHonor: true,
+          declarationsOfTravel: true,
+          reimbursementSummary: true,
+          changeLogEntries: { orderBy: { changedAt: 'desc' }, take: 50 },
+        },
+      });
+
+      if (!fullParticipant || fullParticipant.travelItems.length === 0) return;
+
+      const countryLimit = await prisma.projectCountryLimit.findFirst({
+        where: { projectId: fullParticipant.projectId, country: fullParticipant.country },
+      });
+
+      const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
+      const findings = await generateParticipantReview({
+        participantName: `${fullParticipant.firstName} ${fullParticipant.lastName}`,
+        participantCountry: fullParticipant.country,
+        detectedHomeCountry: fullParticipant.detectedHomeCountry,
+        homeCountryConfidence: fullParticipant.homeCountryConfidence,
+        participantNote: fullParticipant.participantNote,
+        projectCountry: fullParticipant.project.country,
+        projectStartDate: fullParticipant.project.startDate.toISOString().split('T')[0],
+        projectEndDate: fullParticipant.project.endDate.toISOString().split('T')[0],
+        maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+        travelItems: fullParticipant.travelItems.map((item) => ({
+          id: item.id,
+          modeOfTransport: item.modeOfTransport,
+          fromLocation: item.fromLocation,
+          toLocation: item.toLocation,
+          departureDate: item.departureDate?.toISOString().split('T')[0] || null,
+          flightNumber: item.flightNumber,
+          bookingReference: item.bookingReference,
+          amountOriginal: item.amountOriginal,
+          currencyOriginal: item.currencyOriginal,
+          amountEur: item.amountEur,
+          purchaseDate: item.purchaseDate?.toISOString().split('T')[0] || null,
+          manuallyEdited: item.manuallyEdited,
+          originalAmountFromAi: item.originalAmountFromAi,
+          checked: item.checked,
+          priceMissing: item.priceMissing,
+          routeMatchesCountry: item.routeMatchesCountry,
+          excludedFromReimbursement: item.excludedFromReimbursement,
+          numberOfPassengers: item.numberOfPassengers,
+          participantPortion: item.participantPortion,
+          distanceKm: item.distanceKm,
+          validationWarnings: item.validationWarnings,
+          documentId: item.documentId,
+          amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
+          comment: item.comment,
+        })),
+        documents: fullParticipant.documents.map((doc) => ({
+          id: doc.id,
+          documentType: doc.documentType,
+          originalFilename: doc.originalFilename,
+          extraction: doc.extraction ? {
+            confidence: doc.extraction.confidence,
+            detectedDocumentType: doc.extraction.detectedDocumentType,
+            passengerName: doc.extraction.passengerName,
+            amount: doc.extraction.amount,
+            currency: doc.extraction.currency,
+          } : null,
+        })),
+        declarationsOnHonor: fullParticipant.declarationsOnHonor.map((d) => ({
+          missingDocumentType: d.missingDocumentType,
+          description: d.description,
+          reason: d.reason,
+        })),
+        declarationsOfTravel: fullParticipant.declarationsOfTravel.map((d) => ({
+          fromPlace: d.fromPlace,
+          toPlace: d.toPlace,
+          travelDate: d.travelDate?.toISOString().split('T')[0] || null,
+          flightNumber: d.flightNumber,
+          modeOfTransport: d.modeOfTransport,
+        })),
+        changeLogEntries: fullParticipant.changeLogEntries.map((e) => ({
+          userType: e.userType,
+          fieldName: e.fieldName,
+          previousValue: e.previousValue,
+          newValue: e.newValue,
+        })),
+        reimbursementSummary: fullParticipant.reimbursementSummary ? {
+          totalEur: fullParticipant.reimbursementSummary.totalEur,
+          maxReimbursementAllowed: fullParticipant.reimbursementSummary.maxReimbursementAllowed,
+          amountToReimburse: fullParticipant.reimbursementSummary.amountToReimburse,
+        } : null,
+        bankDetailsComplete: !!(fullParticipant.bankAccountIban && fullParticipant.bankAccountHolderName && fullParticipant.bankAccountBic),
+      });
+
+      // Store findings in DB
+      if (findings.length > 0) {
+        await prisma.aiReviewFinding.createMany({
+          data: findings.map((f) => ({
+            participantId: participant.id,
+            severity: f.severity,
+            message: f.message,
+            category: f.category,
+          })),
+        });
+      }
+
+      console.log(`[AI Review] Generated ${findings.length} findings for participant ${participant.id}`);
+    } catch (error) {
+      console.error(`[AI Review] Failed to generate review for participant ${participant.id}:`, error);
+    }
+  })();
+
   res.json({ success: true });
 }));
 

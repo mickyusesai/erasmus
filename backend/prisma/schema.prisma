@@ -172,6 +172,7 @@ model Participant {
   createdDisseminations     DisseminationActivity[] @relation("CreatedActivities")
   socialMediaPosts          SocialMediaPost[]
   declarationsOfTravel      DeclarationOfTravel[]
+  aiReviewFindings          AiReviewFinding[]
 }
 
 enum ParticipantStatus {
@@ -395,6 +396,18 @@ model ChangeLogEntry {
 enum UserType {
   PARTICIPANT
   ADMIN
+}
+
+// AI Review Finding - generated once when participant submits, checkable by org
+model AiReviewFinding {
+  id            String      @id @default(uuid())
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  severity      String      // 'critical' | 'important' | 'info'
+  message       String
+  category      String
+  checked       Boolean     @default(false)
+  createdAt     DateTime    @default(now())
 }
 
 // DeclarationOnHonor - for missing documents

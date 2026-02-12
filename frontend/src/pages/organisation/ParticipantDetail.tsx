@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -15,14 +15,14 @@ import {
   Car,
   Ship,
   HelpCircle,
-  ChevronDown,
-  ChevronUp,
   ExternalLink,
   Trash2,
   Sparkles,
   AlertTriangle,
   AlertCircle,
   Info,
+  Check,
+  Loader2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -51,7 +51,6 @@ const transportIcons: Record<TransportMode, React.ElementType> = {
 export default function OrgParticipantDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [showChangeLog, setShowChangeLog] = useState(false);
   const queryClient = useQueryClient();
 
   // Check if logged in
@@ -71,9 +70,28 @@ export default function OrgParticipantDetail() {
 
   const { data: reviewData, isLoading: reviewLoading } = useQuery({
     queryKey: ['participant-review', id],
-    queryFn: () => organisationApi.getChangelogSummary(id!),
+    queryFn: () => organisationApi.getReviewFindings(id!),
     enabled: !!id && data?.participant?.status !== 'DRAFT',
     staleTime: 5 * 60 * 1000,
+  });
+
+  const toggleFindingMutation = useMutation({
+    mutationFn: ({ findingId }: { findingId: string }) =>
+      organisationApi.toggleReviewFinding(id!, findingId),
+    onSuccess: (result) => {
+      // Optimistically update the findings list
+      queryClient.setQueryData(['participant-review', id], (old: { findings: ReviewFinding[] } | undefined) => {
+        if (!old) return old;
+        return {
+          findings: old.findings.map((f) =>
+            f.id === result.finding.id ? { ...f, checked: result.finding.checked } : f
+          ),
+        };
+      });
+    },
+    onError: () => {
+      toast.error('Failed to update finding');
+    },
   });
 
   const sendMagicLinkMutation = useMutation({
@@ -157,6 +175,9 @@ export default function OrgParticipantDetail() {
 
   const participant = data.participant;
   const summary = participant.reimbursementSummary;
+  const findings = reviewData?.findings || [];
+  const allChecked = findings.length > 0 && findings.every((f: ReviewFinding) => f.checked);
+  const checkedCount = findings.filter((f: ReviewFinding) => f.checked).length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -301,134 +322,78 @@ export default function OrgParticipantDetail() {
                   )}
                 </CardContent>
               </Card>
-
-              {/* AI Review Findings */}
-              {reviewData?.findings && reviewData.findings.length > 0 && (
-                <Card className="border-indigo-200">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-indigo-500" />
-                      <h3 className="font-semibold text-gray-900">AI Review</h3>
-                      <span className="text-xs text-gray-500">
-                        {reviewData.findings.filter((f: ReviewFinding) => f.severity === 'critical').length > 0
-                          ? `${reviewData.findings.filter((f: ReviewFinding) => f.severity === 'critical').length} critical`
-                          : reviewData.findings.filter((f: ReviewFinding) => f.severity === 'important').length > 0
-                            ? `${reviewData.findings.filter((f: ReviewFinding) => f.severity === 'important').length} to review`
-                            : 'All clear'}
-                      </span>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      {reviewData.findings.map((finding: ReviewFinding, i: number) => (
-                        <div
-                          key={i}
-                          className={clsx(
-                            'flex items-start gap-2 p-2 rounded-lg text-sm',
-                            finding.severity === 'critical' && 'bg-red-50',
-                            finding.severity === 'important' && 'bg-amber-50',
-                            finding.severity === 'info' && 'bg-gray-50',
-                          )}
-                        >
-                          {finding.severity === 'critical' ? (
-                            <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
-                          ) : finding.severity === 'important' ? (
-                            <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                          ) : (
-                            <Info className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className={clsx(
-                                'px-1.5 py-0.5 rounded text-xs font-medium',
-                                finding.severity === 'critical' && 'bg-red-100 text-red-700',
-                                finding.severity === 'important' && 'bg-amber-100 text-amber-700',
-                                finding.severity === 'info' && 'bg-gray-100 text-gray-600',
-                              )}>
-                                {finding.category}
-                              </span>
-                            </div>
-                            <p className={clsx(
-                              'mt-1',
-                              finding.severity === 'critical' && 'text-red-800',
-                              finding.severity === 'important' && 'text-amber-800',
-                              finding.severity === 'info' && 'text-gray-600',
-                            )}>
-                              {finding.message}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-              {reviewLoading && participant.status !== 'DRAFT' && (
-                <Card className="border-indigo-200">
-                  <CardContent className="py-4">
-                    <div className="flex items-center gap-2 text-sm text-indigo-600">
-                      <Sparkles className="w-4 h-4 animate-pulse" />
-                      <span>AI is reviewing participant data...</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Change Log */}
-              <Card>
-                <CardHeader>
-                  <button
-                    onClick={() => setShowChangeLog(!showChangeLog)}
-                    className="flex items-center justify-between w-full"
-                  >
-                    <h3 className="font-semibold text-gray-900">Change Log</h3>
-                    {showChangeLog ? (
-                      <ChevronUp className="w-5 h-5 text-gray-400" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5 text-gray-400" />
-                    )}
-                  </button>
-                </CardHeader>
-                {showChangeLog && (
-                  <CardContent>
-                    {participant.changeLogEntries.length > 0 ? (
-                      <div className="space-y-3">
-                        {participant.changeLogEntries.map((entry) => (
-                          <div key={entry.id} className="flex items-start gap-3 text-sm">
-                            <span
-                              className={clsx(
-                                'px-2 py-0.5 rounded text-xs font-medium',
-                                entry.userType === 'ADMIN'
-                                  ? 'bg-purple-100 text-purple-700'
-                                  : 'bg-blue-100 text-blue-700'
-                              )}
-                            >
-                              {entry.userType}
-                            </span>
-                            <div className="flex-1">
-                              <p className="text-gray-900">
-                                Changed <span className="font-medium">{entry.fieldName}</span>
-                              </p>
-                              <p className="text-gray-500 text-xs mt-0.5">
-                                {entry.previousValue || '(empty)'} → {entry.newValue || '(empty)'}
-                              </p>
-                            </div>
-                            <span className="text-gray-400 text-xs">
-                              {new Date(entry.changedAt).toLocaleString()}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-gray-500 text-center py-4">No changes recorded</p>
-                    )}
-                  </CardContent>
-                )}
-              </Card>
             </div>
 
             {/* Sidebar */}
             <div className="space-y-6">
+              {/* AI Review Findings */}
+              {participant.status !== 'DRAFT' && (
+                <Card className={clsx(
+                  'border',
+                  allChecked ? 'border-emerald-300' : findings.length > 0 ? 'border-indigo-200' : 'border-gray-200'
+                )}>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className={clsx(
+                          'w-4 h-4',
+                          allChecked ? 'text-emerald-500' : 'text-indigo-500'
+                        )} />
+                        <h3 className="font-semibold text-gray-900">AI Review</h3>
+                      </div>
+                      {findings.length > 0 && (
+                        <span className={clsx(
+                          'text-xs font-medium px-2 py-0.5 rounded-full',
+                          allChecked
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-gray-100 text-gray-600'
+                        )}>
+                          {checkedCount}/{findings.length}
+                        </span>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {reviewLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-indigo-600 py-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Loading review...</span>
+                      </div>
+                    ) : allChecked && findings.length > 0 ? (
+                      <>
+                        <div className="flex items-center gap-2 p-2 bg-emerald-50 rounded-lg text-sm text-emerald-700 mb-3">
+                          <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                          <span className="font-medium">All items reviewed</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {findings.map((finding: ReviewFinding) => (
+                            <FindingItem
+                              key={finding.id}
+                              finding={finding}
+                              onToggle={() => toggleFindingMutation.mutate({ findingId: finding.id })}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    ) : findings.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {findings.map((finding: ReviewFinding) => (
+                          <FindingItem
+                            key={finding.id}
+                            finding={finding}
+                            onToggle={() => toggleFindingMutation.mutate({ findingId: finding.id })}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-gray-500 text-sm py-2">
+                        No review findings yet. Findings are generated when the participant submits.
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Bank Details */}
               <Card>
                 <CardHeader>
@@ -473,77 +438,6 @@ export default function OrgParticipantDetail() {
                   </div>
                 </CardContent>
               </Card>
-
-              {/* Review Checklist */}
-              {(participant.status === 'PARTICIPANT_COMPLETE' || participant.status === 'ADMIN_APPROVED') && (() => {
-                const checks = [
-                  {
-                    label: 'Bank details are complete',
-                    done: !!(participant.bankAccountIban && participant.bankAccountHolderName),
-                    priority: 'high' as const,
-                  },
-                  {
-                    label: 'All travel items have amounts',
-                    done: !participant.travelItems.some(
-                      (item: TravelItem) => (item.amountEur === 0 || item.amountEur === null) && !item.excludedFromReimbursement
-                    ),
-                    priority: 'high' as const,
-                  },
-                  {
-                    label: 'Flight numbers filled in',
-                    done: !participant.travelItems.some(
-                      (item: TravelItem) => item.modeOfTransport === 'PLANE' && !item.flightNumber
-                    ),
-                    priority: 'medium' as const,
-                  },
-                  {
-                    label: 'AI check passed',
-                    done: !!summary?.aiCheckOk,
-                    priority: 'medium' as const,
-                  },
-                  {
-                    label: 'No validation warnings',
-                    done: !participant.travelItems.some(
-                      (item: TravelItem) => item.validationWarnings && JSON.parse(item.validationWarnings as string).length > 0
-                    ),
-                    priority: 'medium' as const,
-                  },
-                ];
-                const completedCount = checks.filter(c => c.done).length;
-
-                return (
-                  <Card>
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <h3 className="font-semibold text-gray-900">Review Checklist</h3>
-                        <span className="text-xs text-gray-500">{completedCount}/{checks.length}</span>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-2">
-                        {checks.map((check, i) => (
-                          <div key={i} className="flex items-start gap-2">
-                            {check.done ? (
-                              <CheckCircle className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
-                            ) : (
-                              <HelpCircle className={clsx(
-                                'w-4 h-4 mt-0.5 flex-shrink-0',
-                                check.priority === 'high' ? 'text-red-400' : 'text-amber-400'
-                              )} />
-                            )}
-                            <span className={clsx(
-                              'text-sm',
-                              check.done ? 'text-gray-500 line-through' : 'text-gray-700'
-                            )}>
-                              {check.label}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })()}
 
               {/* Actions */}
               <Card>
@@ -646,6 +540,74 @@ export default function OrgParticipantDetail() {
         </div>
       </div>
     </div>
+  );
+}
+
+function FindingItem({ finding, onToggle }: { finding: ReviewFinding; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      className={clsx(
+        'flex items-start gap-2 p-2 rounded-lg text-sm w-full text-left transition-colors',
+        finding.checked
+          ? 'bg-gray-50 opacity-60'
+          : finding.severity === 'critical'
+            ? 'bg-red-50 hover:bg-red-100'
+            : finding.severity === 'important'
+              ? 'bg-amber-50 hover:bg-amber-100'
+              : 'bg-gray-50 hover:bg-gray-100',
+      )}
+    >
+      <div className={clsx(
+        'w-4 h-4 rounded border mt-0.5 flex-shrink-0 flex items-center justify-center transition-colors',
+        finding.checked
+          ? 'bg-emerald-500 border-emerald-500'
+          : finding.severity === 'critical'
+            ? 'border-red-300'
+            : finding.severity === 'important'
+              ? 'border-amber-300'
+              : 'border-gray-300',
+      )}>
+        {finding.checked && <Check className="w-3 h-3 text-white" />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          {!finding.checked && (
+            finding.severity === 'critical' ? (
+              <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />
+            ) : finding.severity === 'important' ? (
+              <AlertCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
+            ) : (
+              <Info className="w-3 h-3 text-gray-400 flex-shrink-0" />
+            )
+          )}
+          <span className={clsx(
+            'px-1.5 py-0.5 rounded text-xs font-medium',
+            finding.checked
+              ? 'bg-gray-100 text-gray-500'
+              : finding.severity === 'critical'
+                ? 'bg-red-100 text-red-700'
+                : finding.severity === 'important'
+                  ? 'bg-amber-100 text-amber-700'
+                  : 'bg-gray-100 text-gray-600',
+          )}>
+            {finding.category}
+          </span>
+        </div>
+        <p className={clsx(
+          'mt-1',
+          finding.checked
+            ? 'text-gray-400 line-through'
+            : finding.severity === 'critical'
+              ? 'text-red-800'
+              : finding.severity === 'important'
+                ? 'text-amber-800'
+                : 'text-gray-600',
+        )}>
+          {finding.message}
+        </p>
+      </div>
+    </button>
   );
 }
 

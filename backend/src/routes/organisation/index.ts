@@ -864,32 +864,16 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
 }));
 
 /**
- * GET /api/organisation/participants/:id/changelog-summary
- * Get comprehensive AI review of participant reimbursement data
+ * GET /api/organisation/participants/:id/review-findings
+ * Get stored AI review findings from database (generated once on participant submission)
  */
-router.get('/participants/:id/changelog-summary', asyncHandler(async (req: Request, res: Response) => {
+router.get('/participants/:id/review-findings', asyncHandler(async (req: Request, res: Response) => {
   const org = req.organisation!;
   const participantId = req.params.id;
 
   const participant = await prisma.participant.findUnique({
     where: { id: participantId },
-    include: {
-      project: true,
-      documents: {
-        include: { extraction: true },
-      },
-      travelItems: {
-        orderBy: { departureDate: 'asc' },
-        include: { declarationsOfTravel: true },
-      },
-      declarationsOnHonor: true,
-      declarationsOfTravel: true,
-      reimbursementSummary: true,
-      changeLogEntries: {
-        orderBy: { changedAt: 'desc' },
-        take: 50,
-      },
-    },
+    include: { project: true },
   });
 
   if (!participant) {
@@ -900,96 +884,56 @@ router.get('/participants/:id/changelog-summary', asyncHandler(async (req: Reque
     throw new ForbiddenError('Access denied');
   }
 
-  // Check if there's enough data to review
-  if (participant.travelItems.length === 0 && participant.documents.length === 0) {
-    res.json({ findings: [] });
-    return;
-  }
-
-  // Get country limit
-  const countryLimit = await prisma.projectCountryLimit.findFirst({
-    where: {
-      projectId: participant.projectId,
-      country: participant.country,
-    },
+  const findings = await prisma.aiReviewFinding.findMany({
+    where: { participantId },
+    orderBy: [
+      { severity: 'asc' }, // critical first (alphabetical: c < i < info)
+      { createdAt: 'asc' },
+    ],
   });
 
-  const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
-  const findings = await generateParticipantReview({
-    participantName: `${participant.firstName} ${participant.lastName}`,
-    participantCountry: participant.country,
-    detectedHomeCountry: participant.detectedHomeCountry,
-    homeCountryConfidence: participant.homeCountryConfidence,
-    participantNote: participant.participantNote,
-    projectCountry: participant.project.country,
-    projectStartDate: participant.project.startDate.toISOString().split('T')[0],
-    projectEndDate: participant.project.endDate.toISOString().split('T')[0],
-    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
-    travelItems: participant.travelItems.map((item) => ({
-      id: item.id,
-      modeOfTransport: item.modeOfTransport,
-      fromLocation: item.fromLocation,
-      toLocation: item.toLocation,
-      departureDate: item.departureDate?.toISOString().split('T')[0] || null,
-      flightNumber: item.flightNumber,
-      bookingReference: item.bookingReference,
-      amountOriginal: item.amountOriginal,
-      currencyOriginal: item.currencyOriginal,
-      amountEur: item.amountEur,
-      purchaseDate: item.purchaseDate?.toISOString().split('T')[0] || null,
-      manuallyEdited: item.manuallyEdited,
-      originalAmountFromAi: item.originalAmountFromAi,
-      checked: item.checked,
-      priceMissing: item.priceMissing,
-      routeMatchesCountry: item.routeMatchesCountry,
-      excludedFromReimbursement: item.excludedFromReimbursement,
-      numberOfPassengers: item.numberOfPassengers,
-      participantPortion: item.participantPortion,
-      distanceKm: item.distanceKm,
-      validationWarnings: item.validationWarnings,
-      documentId: item.documentId,
-      amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
-      comment: item.comment,
-    })),
-    documents: participant.documents.map((doc) => ({
-      id: doc.id,
-      documentType: doc.documentType,
-      originalFilename: doc.originalFilename,
-      extraction: doc.extraction ? {
-        confidence: doc.extraction.confidence,
-        detectedDocumentType: doc.extraction.detectedDocumentType,
-        passengerName: doc.extraction.passengerName,
-        amount: doc.extraction.amount,
-        currency: doc.extraction.currency,
-      } : null,
-    })),
-    declarationsOnHonor: participant.declarationsOnHonor.map((d) => ({
-      missingDocumentType: d.missingDocumentType,
-      description: d.description,
-      reason: d.reason,
-    })),
-    declarationsOfTravel: participant.declarationsOfTravel.map((d) => ({
-      fromPlace: d.fromPlace,
-      toPlace: d.toPlace,
-      travelDate: d.travelDate?.toISOString().split('T')[0] || null,
-      flightNumber: d.flightNumber,
-      modeOfTransport: d.modeOfTransport,
-    })),
-    changeLogEntries: participant.changeLogEntries.map((e) => ({
-      userType: e.userType,
-      fieldName: e.fieldName,
-      previousValue: e.previousValue,
-      newValue: e.newValue,
-    })),
-    reimbursementSummary: participant.reimbursementSummary ? {
-      totalEur: participant.reimbursementSummary.totalEur,
-      maxReimbursementAllowed: participant.reimbursementSummary.maxReimbursementAllowed,
-      amountToReimburse: participant.reimbursementSummary.amountToReimburse,
-    } : null,
-    bankDetailsComplete: !!(participant.bankAccountIban && participant.bankAccountHolderName && participant.bankAccountBic),
-  });
+  // Sort by severity priority: critical > important > info
+  const severityOrder: Record<string, number> = { critical: 0, important: 1, info: 2 };
+  findings.sort((a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3));
 
   res.json({ findings });
+}));
+
+/**
+ * PATCH /api/organisation/participants/:id/review-findings/:findingId/toggle
+ * Toggle the checked status of an AI review finding
+ */
+router.patch('/participants/:id/review-findings/:findingId/toggle', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const { id: participantId, findingId } = req.params;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  const finding = await prisma.aiReviewFinding.findFirst({
+    where: { id: findingId, participantId },
+  });
+
+  if (!finding) {
+    throw new NotFoundError('Finding not found');
+  }
+
+  const updated = await prisma.aiReviewFinding.update({
+    where: { id: findingId },
+    data: { checked: !finding.checked },
+  });
+
+  res.json({ finding: updated });
 }));
 
 /**
@@ -1057,6 +1001,7 @@ router.delete('/participants/:id', asyncHandler(async (req: Request, res: Respon
 
   // Delete all related data
   await prisma.$transaction([
+    prisma.aiReviewFinding.deleteMany({ where: { participantId } }),
     prisma.changeLogEntry.deleteMany({ where: { participantId } }),
     prisma.declarationOfTravel.deleteMany({ where: { participantId } }),
     prisma.declarationOnHonor.deleteMany({ where: { participantId } }),

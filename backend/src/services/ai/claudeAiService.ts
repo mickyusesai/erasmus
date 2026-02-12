@@ -615,85 +615,98 @@ export async function generateParticipantReview(data: {
 
   const client = new Anthropic({ apiKey });
 
-  const prompt = `You are an AI reviewer for an Erasmus+ travel reimbursement system. Your job is to review a participant's complete reimbursement data and produce a checklist of findings for the organisation administrator.
+  const prompt = `You are an AI reviewer for an Erasmus+ travel reimbursement system. You review a participant's complete data and produce an actionable checklist for the organisation administrator.
 
-PARTICIPANT: "${data.participantName}" from ${data.participantCountry}
-PROJECT: In ${data.projectCountry}, from ${data.projectStartDate} to ${data.projectEndDate}
-${data.detectedHomeCountry ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${data.homeCountryConfidence})` : ''}
-${data.participantNote ? `PARTICIPANT NOTE: "${data.participantNote}"` : ''}
-MAX REIMBURSEMENT FOR COUNTRY: €${data.maxReimbursementForCountry || 'Not set'}
-TOTAL REIMBURSEMENT: €${data.reimbursementSummary?.totalEur || 0}
+=== CONTEXT (read carefully) ===
+
+PARTICIPANT'S HOME COUNTRY: ${data.participantCountry} (this is where they live and travel FROM)
+${data.detectedHomeCountry ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${(data.homeCountryConfidence! * 100).toFixed(0)}%)` : ''}
+PARTICIPANT NAME: ${data.participantName}
+PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ project takes place, where participants travel TO)
+PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
+${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : ''}
+MAX REIMBURSEMENT FOR ${data.participantCountry}: €${data.maxReimbursementForCountry || 'Not set'}
+TOTAL CLAIMED: €${data.reimbursementSummary?.totalEur || 0}
 BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
 
-TRAVEL ITEMS (${data.travelItems.length}):
-${data.travelItems.map((item, i) => `  ${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} on ${item.departureDate || '?'}
-     Amount: €${item.amountEur ?? 'MISSING'}${item.manuallyEdited ? ` (MANUALLY CHANGED from AI-detected €${item.originalAmountFromAi})` : ''}
-     ${item.priceMissing ? 'PRICE MISSING' : ''}${item.documentId ? '' : 'NO DOCUMENT LINKED'}
-     ${item.flightNumber ? `Flight: ${item.flightNumber}` : item.modeOfTransport === 'PLANE' ? 'FLIGHT NUMBER MISSING' : ''}
-     ${item.numberOfPassengers && item.numberOfPassengers > 1 ? `Multi-passenger booking (${item.numberOfPassengers} passengers, portion: ${item.participantPortion})` : ''}
-     ${item.routeMatchesCountry === false ? 'ROUTE DOES NOT MATCH COUNTRY' : ''}
-     ${item.excludedFromReimbursement ? 'EXCLUDED FROM REIMBURSEMENT' : ''}
-     ${item.amountIncludedInRoundTrip ? 'Price included in round-trip outbound leg' : ''}
-     ${item.distanceKm ? `Distance: ${item.distanceKm}km` : ''}
-     ${item.currencyOriginal && item.currencyOriginal !== 'EUR' && !item.purchaseDate ? 'NON-EUR CURRENCY WITHOUT PURCHASE DATE' : ''}
-     ${item.validationWarnings && item.validationWarnings !== '[]' ? `Warnings: ${item.validationWarnings}` : ''}
-     ${item.comment ? `Comment: "${item.comment}"` : ''}`).join('\n')}
+The typical journey pattern is: participant travels FROM their home country (${data.participantCountry}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
 
-DOCUMENTS (${data.documents.length}):
-${data.documents.map((doc, i) => `  ${i + 1}. [${doc.documentType}] ${doc.originalFilename}${doc.extraction ? ` (confidence: ${doc.extraction.confidence}, detected as: ${doc.extraction.detectedDocumentType})` : ''}`).join('\n')}
+=== TRAVEL ITEMS (${data.travelItems.length}) ===
+${data.travelItems.map((item, i) => {
+    const flags = [];
+    if (item.manuallyEdited) flags.push(`AMOUNT MANUALLY CHANGED by participant: AI detected €${item.originalAmountFromAi}, participant set €${item.amountEur}`);
+    if (item.priceMissing) flags.push('PRICE IS MISSING');
+    if (!item.documentId) flags.push('NO SUPPORTING DOCUMENT LINKED');
+    if (item.modeOfTransport === 'PLANE' && !item.flightNumber) flags.push('FLIGHT NUMBER NOT FILLED IN');
+    if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`SHARED BOOKING: ${item.numberOfPassengers} passengers, this participant claims portion: ${item.participantPortion}`);
+    if (item.routeMatchesCountry === false) flags.push('ROUTE MAY NOT MATCH expected home↔project travel pattern');
+    if (item.excludedFromReimbursement) flags.push('Participant excluded this from reimbursement');
+    if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
+    if (item.distanceKm) flags.push(`Car distance: ${item.distanceKm}km`);
+    if (item.currencyOriginal && item.currencyOriginal !== 'EUR' && !item.purchaseDate) flags.push('Non-EUR currency but no purchase date for exchange rate');
+    if (item.validationWarnings && item.validationWarnings !== '[]') flags.push(`System warnings: ${item.validationWarnings}`);
+    return `${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} | Date: ${item.departureDate || '?'} | €${item.amountEur ?? 'MISSING'} (${item.currencyOriginal || 'EUR'})${item.flightNumber ? ` | Flight: ${item.flightNumber}` : ''}${item.bookingReference ? ` | Booking: ${item.bookingReference}` : ''}${flags.length > 0 ? '\n     ⚠ ' + flags.join('\n     ⚠ ') : ''}`;
+  }).join('\n')}
 
-DECLARATIONS ON HONOR (${data.declarationsOnHonor.length}):
-${data.declarationsOnHonor.map((d) => `  - Missing ${d.missingDocumentType}: "${d.description}" (Reason: ${d.reason})`).join('\n') || '  None'}
+=== DOCUMENTS (${data.documents.length}) ===
+${data.documents.map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}`).join('\n')}
 
-DECLARATIONS OF TRAVEL - MISSING BOARDING PASSES (${data.declarationsOfTravel.length}):
-${data.declarationsOfTravel.map((d) => `  - ${d.modeOfTransport} ${d.fromPlace} → ${d.toPlace} on ${d.travelDate || '?'}${d.flightNumber ? ` (${d.flightNumber})` : ''}`).join('\n') || '  None'}
+=== DECLARATIONS OF TRAVEL (${data.declarationsOfTravel.length}) ===
+These are SIGNED declarations the participant created to REPLACE missing boarding passes. Each one is a PDF with their signature. The organisation MUST manually verify each declaration is correct (check route, date, flight number match the travel item).
+${data.declarationsOfTravel.map((d) => `- ${d.modeOfTransport}: ${d.fromPlace} → ${d.toPlace} on ${d.travelDate || '?'}${d.flightNumber ? ` (flight ${d.flightNumber})` : ''}`).join('\n') || 'None'}
 
-CHANGELOG (participant/admin edits, ${data.changeLogEntries.length} entries):
-${data.changeLogEntries.slice(0, 30).map((e) => `  [${e.userType}] ${e.fieldName}: "${e.previousValue || '(empty)'}" → "${e.newValue || '(empty)'}"`).join('\n') || '  None'}
+=== DECLARATIONS ON HONOR (${data.declarationsOnHonor.length}) ===
+These are sworn statements for other missing documents. The organisation should verify these claims.
+${data.declarationsOnHonor.map((d) => `- Missing ${d.missingDocumentType}: "${d.description}" — Reason: "${d.reason}"`).join('\n') || 'None'}
 
----
+=== CHANGELOG — MANUAL EDITS (${data.changeLogEntries.length} entries) ===
+${data.changeLogEntries.slice(0, 30).map((e) => `[${e.userType}] ${e.fieldName}: "${e.previousValue || '(empty)'}" → "${e.newValue || '(empty)'}"`).join('\n') || 'No edits recorded'}
 
-CHECK EACH OF THESE AND ONLY REPORT FINDINGS THAT ACTUALLY APPLY:
+=== YOUR TASK ===
 
-CRITICAL (organisation must verify):
-1. Declaration of Travel created (missing boarding pass replaced by signed declaration) — org must verify legitimacy
-2. Declaration on Honor created (missing document with sworn statement) — org must verify the claim
-3. Participant manually changed a ticket amount from what the AI detected — possible cost inflation
-4. Price missing on a travel item — cannot reimburse without verified amount
-5. Travel item has no linked document — no proof of travel
+Review ALL the data above and report ONLY findings that actually apply. Go through these checks:
 
-IMPORTANT (should review):
-6. Route doesn't match participant's home country — journey might not be to/from the project
-7. AI-detected home country differs from participant's stated country — wrong country = wrong limit
-8. Low confidence document extraction (< 0.7) — AI wasn't sure, data might be wrong
-9. Multi-passenger booking — verify the participant's claimed portion is fair
-10. Total reimbursement exceeds country limit — will be capped
-11. Participant changed locations, dates, or other key fields in the changelog
-12. Flight number missing for a plane travel item
+CRITICAL (organisation must take action):
+1. If a Declaration of Travel exists → tell org to verify the declaration PDF (check that route, date, and flight number are correct). This is NOT a "missing document" — it's a replacement that needs verification.
+2. If a Declaration on Honor exists → tell org to verify the sworn statement and decide if it's acceptable.
+3. If a participant MANUALLY CHANGED AN AMOUNT from what the AI detected → flag the specific item with both amounts. This could be legitimate (AI was wrong) or suspicious.
+4. If a travel item has PRICE MISSING → flag it, can't reimburse without amount.
+5. If a travel item has NO DOCUMENT LINKED → flag it, no proof of travel.
+
+IMPORTANT (organisation should review):
+6. If a route doesn't seem to match the expected home (${data.participantCountry}) ↔ project (${data.projectCountry}) travel pattern.
+7. If AI-detected home country differs from the participant's stated home country (${data.participantCountry}) — compare ONLY these two, do NOT confuse with the project country.
+8. If any document extraction has confidence below 70% → the extracted data might be wrong.
+9. If a booking has multiple passengers → verify the claimed portion is fair.
+10. If total claimed exceeds the country reimbursement limit.
+11. If the changelog shows the participant changed important fields like amounts, routes, or dates (NOT just filling in empty fields — only flag actual changes from one value to another). Use the correct category: "Flight Edit" for flight numbers, "Route Edit" for locations, "Amount Edit" for prices.
+12. If a plane travel item is missing its flight number.
 
 INFORMATIONAL (good to know):
-13. Non-EUR currency without purchase date — exchange rate can't be accurately calculated
-14. Travel dates significantly outside project window (more than 2 days before/after)
-15. Bank details incomplete
-16. Documents uploaded but not linked to any travel item
-17. Round-trip price allocation — make sure total is counted only once
-18. Participant left a note explaining something
-19. Unusual ratio of documents to travel items
-20. Car travel — check if claimed distance seems reasonable for the route
+13. Non-EUR currency without purchase date (exchange rate may be approximate).
+14. Travel dates more than 2 days outside project window.
+15. Bank details incomplete.
+16. Uploaded documents not linked to any travel item.
+17. Round-trip bookings — verify price is counted only once.
+18. If the participant left a note → surface it so the org sees it.
+19. If document count vs travel item count seems unusual.
+20. Car travel — flag distance for manual reasonableness check.
 
-RESPOND WITH A JSON ARRAY of findings. Each finding has:
+=== RESPONSE FORMAT ===
+
+Return a JSON array. Each finding:
 - "severity": "critical" | "important" | "info"
-- "message": A clear, short sentence (max 15 words) describing the finding
-- "category": A 2-3 word category label (e.g., "Missing Document", "Price Change", "Declaration")
+- "message": Clear, specific sentence (max 20 words). Mention routes, amounts, flight numbers when relevant.
+- "category": Accurate 2-3 word label. Examples: "Declaration Check", "Amount Changed", "Flight Edit", "Missing Price", "No Document", "Route Mismatch", "Shared Booking", "Participant Note", "Bank Details", "Car Distance"
 
-RULES:
-- ONLY include findings that actually apply to this participant's data
-- If everything looks good for a check, do NOT include it
-- If there are no findings at all, return: [{"severity":"info","message":"All checks passed — reimbursement data looks complete and consistent.","category":"All Clear"}]
-- Be specific: mention routes, amounts, document names when relevant
-- Keep messages short and actionable
-- Maximum 10 findings (prioritize by severity)
-- Return ONLY the JSON array, nothing else`;
+IMPORTANT RULES:
+- Only report findings that ACTUALLY APPLY — skip checks that pass
+- Use ACCURATE categories — a flight number edit is "Flight Edit", NOT "Price Change"
+- Do NOT confuse the participant's home country (${data.participantCountry}) with the project country (${data.projectCountry})
+- Declaration of Travel = the replacement document EXISTS and needs checking, NOT that something is missing
+- If everything is fine: [{"severity":"info","message":"All checks passed — data looks complete and consistent.","category":"All Clear"}]
+- Maximum 12 findings, prioritize critical > important > info
+- Return ONLY the JSON array`;
 
   try {
     const response = await client.messages.create({

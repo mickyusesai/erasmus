@@ -837,11 +837,19 @@ export const organisationApi = {
     return handleResponse<{ url: string }>(res);
   },
 
-  getChangelogSummary: async (participantId: string) => {
-    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/changelog-summary`, {
+  getReviewFindings: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/review-findings`, {
       headers: getOrgAuthHeaders(),
     });
     return handleResponse<{ findings: ReviewFinding[] }>(res);
+  },
+
+  toggleReviewFinding: async (participantId: string, findingId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/review-findings/${findingId}/toggle`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ finding: ReviewFinding }>(res);
   },
 
   // Country Limits
@@ -1275,9 +1283,12 @@ export interface ChangeLogEntry {
 }
 
 export interface ReviewFinding {
+  id: string;
   severity: 'critical' | 'important' | 'info';
   message: string;
   category: string;
+  checked: boolean;
+  createdAt: string;
 }
 
 export interface BankDetails {
