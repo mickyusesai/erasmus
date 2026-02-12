@@ -1099,7 +1099,7 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
   });
 
   // Also create a document record for the PDF so it appears in the participant's documents
-  await prisma.document.create({
+  const declarationDoc = await prisma.document.create({
     data: {
       participantId: participant.id,
       storedFilePath: filePath,
@@ -1110,6 +1110,26 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
       documentType: DocumentType.OTHER, // Declaration of travel
     },
   });
+
+  // Auto-link the declaration PDF to the travel item
+  if (data.travelItemId) {
+    const existingItem = await prisma.travelItem.findUnique({ where: { id: data.travelItemId } });
+    if (existingItem) {
+      if (!existingItem.documentId) {
+        await prisma.travelItem.update({
+          where: { id: data.travelItemId },
+          data: { documentId: declarationDoc.id },
+        });
+      } else {
+        const additionalIds: string[] = existingItem.additionalDocumentIds ? JSON.parse(existingItem.additionalDocumentIds) : [];
+        additionalIds.push(declarationDoc.id);
+        await prisma.travelItem.update({
+          where: { id: data.travelItemId },
+          data: { additionalDocumentIds: JSON.stringify(additionalIds) },
+        });
+      }
+    }
+  }
 
   // Log the change
   await prisma.changeLogEntry.create({

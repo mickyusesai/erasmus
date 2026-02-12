@@ -380,6 +380,11 @@ export default function ReimbursementPage() {
             )}
           </>
         )}
+
+        {/* GDPR Notice - always visible at bottom */}
+        <p className="mt-8 mb-4 text-xs text-gray-400 text-center">
+          Your data is handled according to GDPR regulations. Only the project team will have access to your information. Data will be stored for reimbursement and auditing purposes and will be removed after a reasonable period.
+        </p>
       </div>
     </div>
   );
@@ -3303,7 +3308,7 @@ function DocumentViewModal({
   const isPdf = document.mimeType === 'application/pdf';
 
   return (
-    <Modal isOpen={!!document} onClose={onClose} title={document.renamedFilename}>
+    <Modal isOpen={!!document} onClose={onClose} title={document.renamedFilename} zIndex={60}>
       <div className="max-h-[70vh] overflow-auto">
         {isLoading && (
           <div className="flex items-center justify-center py-12">

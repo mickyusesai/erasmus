@@ -20,8 +20,7 @@ import {
   Banknote,
   Users,
   Share2,
-  Copy,
-  ExternalLink,
+  Search,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -289,6 +288,7 @@ function OverviewTab({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [searchQuery, setSearchQuery] = useState('');
   const queryClient = useQueryClient();
 
   // Form state for adding individual participant
@@ -311,9 +311,20 @@ function OverviewTab({
     ),
   };
 
+  // Filter participants by search
+  const filteredParticipants = useMemo(() => {
+    if (!searchQuery.trim()) return participants;
+    const q = searchQuery.toLowerCase();
+    return participants.filter((p) =>
+      `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
+      p.email.toLowerCase().includes(q) ||
+      p.country.toLowerCase().includes(q)
+    );
+  }, [participants, searchQuery]);
+
   // Sort participants
   const sortedParticipants = useMemo(() => {
-    const sorted = [...participants].sort((a, b) => {
+    const sorted = [...filteredParticipants].sort((a, b) => {
       let aVal: string | number = '';
       let bVal: string | number = '';
 
@@ -348,7 +359,7 @@ function OverviewTab({
       return sortDirection === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
     });
     return sorted;
-  }, [participants, sortField, sortDirection]);
+  }, [filteredParticipants, sortField, sortDirection]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -414,47 +425,11 @@ function OverviewTab({
     }
   };
 
-  const copyParticipantLink = () => {
-    const baseUrl = window.location.origin;
-    const link = `${baseUrl}/reimbursement?project=${projectId}`;
-    navigator.clipboard.writeText(link);
-    toast.success('Participant link copied to clipboard');
-  };
 
   const disseminationEnabled = project.disseminationEnabled;
 
   return (
     <div className="space-y-6">
-      {/* Participant Registration Link */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium text-gray-900">Participant Registration Link</p>
-              <p className="text-sm text-gray-500">Share with participants to submit reimbursement documents</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={copyParticipantLink}
-                className="p-2 bg-primary-100 text-primary-600 rounded-lg hover:bg-primary-200 transition-colors"
-                title="Copy link"
-              >
-                <Copy className="w-4 h-4" />
-              </button>
-              <a
-                href={`/reimbursement?project=${projectId}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
-                title="Open in new tab"
-              >
-                <ExternalLink className="w-4 h-4" />
-              </a>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-4">
         <Card>
@@ -519,8 +494,8 @@ function OverviewTab({
         </CardContent>
       </Card>
 
-      {/* Actions */}
-      <div className="flex flex-wrap gap-3">
+      {/* Actions & Search */}
+      <div className="flex flex-wrap items-center gap-3">
         <Button onClick={() => setShowAddModal(true)}>
           <UserPlus className="w-4 h-4 mr-2" />
           Add Participant
@@ -529,6 +504,17 @@ function OverviewTab({
           <Upload className="w-4 h-4 mr-2" />
           Import CSV
         </Button>
+        <div className="flex-1" />
+        <div className="relative">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search participants..."
+            className="pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent w-56"
+          />
+        </div>
         {selectedIds.length > 0 && (
           <Button
             variant="secondary"

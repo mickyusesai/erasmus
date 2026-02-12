@@ -674,10 +674,10 @@ CRITICAL (organisation must take action):
 5. If a travel item has NO DOCUMENT LINKED → flag it, no proof of travel.
 
 IMPORTANT (organisation should review):
-6. If a route doesn't seem to match the expected home (${data.participantCountry}) ↔ project (${data.projectCountry}) travel pattern. IMPORTANT: Match cities to countries generously — for example Chisinau=Moldova, Skopje=North Macedonia, Brussels=Belgium, etc. A travel item from Chisinau to Amsterdam is a VALID route for a Moldovan participant traveling to The Netherlands. Only flag truly unrelated routes.
+6. If a route doesn't seem to match the expected home (${data.participantCountry}) ↔ project (${data.projectCountry}) travel pattern. IMPORTANT: Match cities to countries generously — for example Chisinau=Moldova, Skopje=North Macedonia, Brussels=Belgium, Amsterdam/Eindhoven=Netherlands, etc. A travel item from Chisinau to Amsterdam is a VALID route for a Moldovan participant traveling to The Netherlands. Only flag truly unrelated routes (e.g., a side trip to a country unrelated to both home and project).
 7. If AI-detected home country differs from the participant's stated home country (${data.participantCountry}) — compare ONLY these two, do NOT confuse with the project country.
-8. If any document extraction has confidence below 70% → the extracted data might be wrong.
-9. If a booking has multiple passengers → verify the claimed portion is fair.
+8. If any document extraction has confidence below 70% → the extracted data might be wrong. IMPORTANT: Be precise with numbers — 72% is NOT below 70%. Only flag if the confidence is ACTUALLY below 70%.
+9. If a booking has multiple passengers (numberOfPassengers > 1) → verify the claimed portion is fair. IMPORTANT: If numberOfPassengers is 1, it's a single person. A single person buying an outbound + inbound ticket is NOT "multiple passengers" — that's just a round-trip. Only flag when numberOfPassengers is explicitly > 1.
 10. If total claimed exceeds the country reimbursement limit.
 11. If the changelog shows the participant changed important fields like amounts, routes, or dates (NOT just filling in empty fields — only flag actual changes from one value to another). Use the correct category: "Flight Edit" for flight numbers, "Route Edit" for locations, "Amount Edit" for prices. IMPORTANT: Do NOT flag changes to bank details fields (IBAN, BIC, account holder name, bank name, personal address fields) — participants always fill these in themselves, so any "change" is just them entering their data.
 12. If a plane travel item is missing its flight number.
@@ -700,13 +700,17 @@ Return a JSON array. Each finding:
 - "category": Accurate 2-3 word label. Examples: "Declaration Check", "Amount Changed", "Flight Edit", "Missing Price", "No Document", "Route Mismatch", "Shared Booking", "Participant Note", "Bank Details", "Car Distance"
 
 IMPORTANT RULES:
-- Only report findings that ACTUALLY APPLY — skip checks that pass
+- ONLY report PROBLEMS or things that need attention. NEVER report things that are fine/correct/matching/within limits.
+- Do NOT create findings saying "X is correct" or "X matches" or "X is within limits". The organisation only wants to see issues, not confirmations.
+- Examples of what NOT to report: "Home country matches", "Route matches expected pattern", "Bank details complete", "Total within limit", "Travel dates within range", "Document count matches", "Round-trip price counted correctly"
 - Use ACCURATE categories — a flight number edit is "Flight Edit", NOT "Price Change"
+- Be PRECISE with numbers — 72% is NOT below 70%. Only flag confidence below 70% if it's actually below 70%.
 - Do NOT confuse the participant's home country (${data.participantCountry}) with the project country (${data.projectCountry})
 - Declaration of Travel = the replacement document EXISTS and needs checking, NOT that something is missing
 - NEVER flag bank detail fields (IBAN, BIC, holder name, bank name, address) as manual edits — participants always fill these in themselves
 - NEVER create a "Participant Note" finding unless the PARTICIPANT'S OWN NOTE field above actually contains text
-- For route matching, use geographic knowledge: match cities to their countries (Chisinau=Moldova, Skopje=North Macedonia, etc.)
+- For route matching, use geographic knowledge: match cities to their countries (Chisinau=Moldova, Skopje=North Macedonia, Amsterdam/Eindhoven=Netherlands, etc.)
+- numberOfPassengers=1 means ONE person, which is normal. Only flag shared bookings when numberOfPassengers is GREATER than 1.
 - If everything is fine: [{"severity":"info","message":"All checks passed — data looks complete and consistent.","category":"All Clear"}]
 - Maximum 12 findings, prioritize critical > important > info
 - Return ONLY the JSON array`;
