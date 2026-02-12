@@ -113,8 +113,6 @@ export default function ProjectCreate() {
               <p className="text-blue-800 text-sm">
                 {dashboard?.credits.hasAnnualLicense && !dashboard?.credits.annualLicenseExpired
                   ? 'Creating this project will use your annual license (unlimited projects).'
-                  : dashboard?.credits.hasFoundingCredit && !dashboard?.credits.foundingCreditExpired
-                  ? 'Creating this project will use your founding credit (1 free project).'
                   : `Creating this project will use 1 credit. You have ${dashboard?.credits.available} credits available.`}
               </p>
             </div>
