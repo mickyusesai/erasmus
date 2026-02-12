@@ -524,55 +524,198 @@ Other important notes:
   }
 }
 
+export interface ReviewFinding {
+  severity: 'critical' | 'important' | 'info';
+  message: string;
+  category: string;
+}
+
 /**
- * Summarize changelog entries for admin review using Claude Haiku
+ * Generate a comprehensive AI review of a participant's reimbursement data.
+ * Examines travel items, documents, declarations, changelog, and financial data
+ * to produce an actionable checklist for the organisation.
  */
-export async function summarizeChangelog(
+export async function generateParticipantReview(data: {
+  participantName: string;
+  participantCountry: string;
+  detectedHomeCountry: string | null;
+  homeCountryConfidence: number | null;
+  participantNote: string | null;
+  projectCountry: string;
+  projectStartDate: string;
+  projectEndDate: string;
+  maxReimbursementForCountry: number;
+  travelItems: Array<{
+    id: string;
+    modeOfTransport: string;
+    fromLocation: string | null;
+    toLocation: string | null;
+    departureDate: string | null;
+    flightNumber: string | null;
+    bookingReference: string | null;
+    amountOriginal: number | null;
+    currencyOriginal: string | null;
+    amountEur: number | null;
+    purchaseDate: string | null;
+    manuallyEdited: boolean;
+    originalAmountFromAi: number | null;
+    checked: boolean;
+    priceMissing: boolean;
+    routeMatchesCountry: boolean | null;
+    excludedFromReimbursement: boolean;
+    numberOfPassengers: number | null;
+    participantPortion: number | null;
+    distanceKm: number | null;
+    validationWarnings: string | null;
+    documentId: string | null;
+    amountIncludedInRoundTrip: boolean;
+    comment: string | null;
+  }>;
+  documents: Array<{
+    id: string;
+    documentType: string;
+    originalFilename: string;
+    extraction?: {
+      confidence: number;
+      detectedDocumentType: string;
+      passengerName: string | null;
+      amount: number | null;
+      currency: string | null;
+    } | null;
+  }>;
+  declarationsOnHonor: Array<{
+    missingDocumentType: string;
+    description: string;
+    reason: string;
+  }>;
+  declarationsOfTravel: Array<{
+    fromPlace: string;
+    toPlace: string;
+    travelDate: string | null;
+    flightNumber: string | null;
+    modeOfTransport: string;
+  }>;
   changeLogEntries: Array<{
     userType: string;
     fieldName: string;
     previousValue: string | null;
     newValue: string | null;
-    changedAt: Date | string;
-  }>,
-  participantName: string,
-): Promise<string> {
+  }>;
+  reimbursementSummary: {
+    totalEur: number | null;
+    maxReimbursementAllowed: number | null;
+    amountToReimburse: number | null;
+  } | null;
+  bankDetailsComplete: boolean;
+}): Promise<ReviewFinding[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return 'AI summary unavailable (API key not configured).';
+    return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
   }
 
   const client = new Anthropic({ apiKey });
 
-  const entriesSummary = changeLogEntries
-    .map(
-      (e) =>
-        `[${e.userType}] ${e.fieldName}: "${e.previousValue || '(empty)'}" -> "${e.newValue || '(empty)'}" at ${new Date(e.changedAt).toISOString()}`,
-    )
-    .join('\n');
+  const prompt = `You are an AI reviewer for an Erasmus+ travel reimbursement system. Your job is to review a participant's complete reimbursement data and produce a checklist of findings for the organisation administrator.
+
+PARTICIPANT: "${data.participantName}" from ${data.participantCountry}
+PROJECT: In ${data.projectCountry}, from ${data.projectStartDate} to ${data.projectEndDate}
+${data.detectedHomeCountry ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${data.homeCountryConfidence})` : ''}
+${data.participantNote ? `PARTICIPANT NOTE: "${data.participantNote}"` : ''}
+MAX REIMBURSEMENT FOR COUNTRY: €${data.maxReimbursementForCountry || 'Not set'}
+TOTAL REIMBURSEMENT: €${data.reimbursementSummary?.totalEur || 0}
+BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
+
+TRAVEL ITEMS (${data.travelItems.length}):
+${data.travelItems.map((item, i) => `  ${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} on ${item.departureDate || '?'}
+     Amount: €${item.amountEur ?? 'MISSING'}${item.manuallyEdited ? ` (MANUALLY CHANGED from AI-detected €${item.originalAmountFromAi})` : ''}
+     ${item.priceMissing ? 'PRICE MISSING' : ''}${item.documentId ? '' : 'NO DOCUMENT LINKED'}
+     ${item.flightNumber ? `Flight: ${item.flightNumber}` : item.modeOfTransport === 'PLANE' ? 'FLIGHT NUMBER MISSING' : ''}
+     ${item.numberOfPassengers && item.numberOfPassengers > 1 ? `Multi-passenger booking (${item.numberOfPassengers} passengers, portion: ${item.participantPortion})` : ''}
+     ${item.routeMatchesCountry === false ? 'ROUTE DOES NOT MATCH COUNTRY' : ''}
+     ${item.excludedFromReimbursement ? 'EXCLUDED FROM REIMBURSEMENT' : ''}
+     ${item.amountIncludedInRoundTrip ? 'Price included in round-trip outbound leg' : ''}
+     ${item.distanceKm ? `Distance: ${item.distanceKm}km` : ''}
+     ${item.currencyOriginal && item.currencyOriginal !== 'EUR' && !item.purchaseDate ? 'NON-EUR CURRENCY WITHOUT PURCHASE DATE' : ''}
+     ${item.validationWarnings && item.validationWarnings !== '[]' ? `Warnings: ${item.validationWarnings}` : ''}
+     ${item.comment ? `Comment: "${item.comment}"` : ''}`).join('\n')}
+
+DOCUMENTS (${data.documents.length}):
+${data.documents.map((doc, i) => `  ${i + 1}. [${doc.documentType}] ${doc.originalFilename}${doc.extraction ? ` (confidence: ${doc.extraction.confidence}, detected as: ${doc.extraction.detectedDocumentType})` : ''}`).join('\n')}
+
+DECLARATIONS ON HONOR (${data.declarationsOnHonor.length}):
+${data.declarationsOnHonor.map((d) => `  - Missing ${d.missingDocumentType}: "${d.description}" (Reason: ${d.reason})`).join('\n') || '  None'}
+
+DECLARATIONS OF TRAVEL - MISSING BOARDING PASSES (${data.declarationsOfTravel.length}):
+${data.declarationsOfTravel.map((d) => `  - ${d.modeOfTransport} ${d.fromPlace} → ${d.toPlace} on ${d.travelDate || '?'}${d.flightNumber ? ` (${d.flightNumber})` : ''}`).join('\n') || '  None'}
+
+CHANGELOG (participant/admin edits, ${data.changeLogEntries.length} entries):
+${data.changeLogEntries.slice(0, 30).map((e) => `  [${e.userType}] ${e.fieldName}: "${e.previousValue || '(empty)'}" → "${e.newValue || '(empty)'}"`).join('\n') || '  None'}
+
+---
+
+CHECK EACH OF THESE AND ONLY REPORT FINDINGS THAT ACTUALLY APPLY:
+
+CRITICAL (organisation must verify):
+1. Declaration of Travel created (missing boarding pass replaced by signed declaration) — org must verify legitimacy
+2. Declaration on Honor created (missing document with sworn statement) — org must verify the claim
+3. Participant manually changed a ticket amount from what the AI detected — possible cost inflation
+4. Price missing on a travel item — cannot reimburse without verified amount
+5. Travel item has no linked document — no proof of travel
+
+IMPORTANT (should review):
+6. Route doesn't match participant's home country — journey might not be to/from the project
+7. AI-detected home country differs from participant's stated country — wrong country = wrong limit
+8. Low confidence document extraction (< 0.7) — AI wasn't sure, data might be wrong
+9. Multi-passenger booking — verify the participant's claimed portion is fair
+10. Total reimbursement exceeds country limit — will be capped
+11. Participant changed locations, dates, or other key fields in the changelog
+12. Flight number missing for a plane travel item
+
+INFORMATIONAL (good to know):
+13. Non-EUR currency without purchase date — exchange rate can't be accurately calculated
+14. Travel dates significantly outside project window (more than 2 days before/after)
+15. Bank details incomplete
+16. Documents uploaded but not linked to any travel item
+17. Round-trip price allocation — make sure total is counted only once
+18. Participant left a note explaining something
+19. Unusual ratio of documents to travel items
+20. Car travel — check if claimed distance seems reasonable for the route
+
+RESPOND WITH A JSON ARRAY of findings. Each finding has:
+- "severity": "critical" | "important" | "info"
+- "message": A clear, short sentence (max 15 words) describing the finding
+- "category": A 2-3 word category label (e.g., "Missing Document", "Price Change", "Declaration")
+
+RULES:
+- ONLY include findings that actually apply to this participant's data
+- If everything looks good for a check, do NOT include it
+- If there are no findings at all, return: [{"severity":"info","message":"All checks passed — reimbursement data looks complete and consistent.","category":"All Clear"}]
+- Be specific: mention routes, amounts, document names when relevant
+- Keep messages short and actionable
+- Maximum 10 findings (prioritize by severity)
+- Return ONLY the JSON array, nothing else`;
 
   try {
     const response = await client.messages.create({
       model: 'claude-3-haiku-20240307',
-      max_tokens: 300,
-      messages: [
-        {
-          role: 'user',
-          content: `You are reviewing changelog entries for participant "${participantName}" in an Erasmus+ travel reimbursement system. Summarize what has happened in 2-3 short sentences. Focus on: what was changed, who changed it (PARTICIPANT or ADMIN), and what the admin reviewing this should still check or pay attention to. Be concise and actionable.
-
-Changelog entries:
-${entriesSummary}
-
-Summary:`,
-        },
-      ],
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: prompt }],
     });
 
-    return response.content[0].type === 'text'
-      ? response.content[0].text.trim()
-      : 'Unable to generate summary.';
+    const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '[]';
+
+    // Parse JSON from response (handle potential markdown wrapping)
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      return [{ severity: 'info', message: 'Unable to parse AI review response.', category: 'System' }];
+    }
+
+    const findings: ReviewFinding[] = JSON.parse(jsonMatch[0]);
+    return findings.filter(
+      (f) => f.severity && f.message && f.category
+    );
   } catch (error) {
-    console.error('[AI] Failed to summarize changelog:', error);
-    return 'Unable to generate summary at this time.';
+    console.error('[AI] Failed to generate participant review:', error);
+    return [{ severity: 'info', message: 'Unable to generate review at this time.', category: 'System' }];
   }
 }

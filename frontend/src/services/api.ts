@@ -841,7 +841,7 @@ export const organisationApi = {
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/changelog-summary`, {
       headers: getOrgAuthHeaders(),
     });
-    return handleResponse<{ summary: string }>(res);
+    return handleResponse<{ findings: ReviewFinding[] }>(res);
   },
 
   // Country Limits
@@ -1272,6 +1272,12 @@ export interface ChangeLogEntry {
   previousValue?: string;
   newValue?: string;
   changedAt: string;
+}
+
+export interface ReviewFinding {
+  severity: 'critical' | 'important' | 'info';
+  message: string;
+  category: string;
 }
 
 export interface BankDetails {

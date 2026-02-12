@@ -20,11 +20,14 @@ import {
   ExternalLink,
   Trash2,
   Sparkles,
+  AlertTriangle,
+  AlertCircle,
+  Info,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding } from '../../services/api';
 import { clsx } from 'clsx';
 
 // Helper function to format dates as DD-MM-YYYY (European format)
@@ -66,10 +69,10 @@ export default function OrgParticipantDetail() {
     retry: false,
   });
 
-  const { data: summaryData } = useQuery({
-    queryKey: ['changelog-summary', id],
+  const { data: reviewData, isLoading: reviewLoading } = useQuery({
+    queryKey: ['participant-review', id],
     queryFn: () => organisationApi.getChangelogSummary(id!),
-    enabled: !!id && (data?.participant?.changeLogEntries?.length ?? 0) > 0,
+    enabled: !!id && data?.participant?.status !== 'DRAFT',
     staleTime: 5 * 60 * 1000,
   });
 
@@ -299,16 +302,73 @@ export default function OrgParticipantDetail() {
                 </CardContent>
               </Card>
 
-              {/* AI Changelog Summary */}
-              {summaryData?.summary && summaryData.summary !== 'No changes recorded yet.' && (
-                <Card className="border-indigo-200 bg-indigo-50">
-                  <CardContent className="py-3 px-4">
-                    <div className="flex items-start gap-2">
-                      <Sparkles className="w-4 h-4 text-indigo-500 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-sm font-medium text-indigo-800">AI Summary</p>
-                        <p className="text-sm text-indigo-700 mt-1">{summaryData.summary}</p>
-                      </div>
+              {/* AI Review Findings */}
+              {reviewData?.findings && reviewData.findings.length > 0 && (
+                <Card className="border-indigo-200">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-500" />
+                      <h3 className="font-semibold text-gray-900">AI Review</h3>
+                      <span className="text-xs text-gray-500">
+                        {reviewData.findings.filter((f: ReviewFinding) => f.severity === 'critical').length > 0
+                          ? `${reviewData.findings.filter((f: ReviewFinding) => f.severity === 'critical').length} critical`
+                          : reviewData.findings.filter((f: ReviewFinding) => f.severity === 'important').length > 0
+                            ? `${reviewData.findings.filter((f: ReviewFinding) => f.severity === 'important').length} to review`
+                            : 'All clear'}
+                      </span>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {reviewData.findings.map((finding: ReviewFinding, i: number) => (
+                        <div
+                          key={i}
+                          className={clsx(
+                            'flex items-start gap-2 p-2 rounded-lg text-sm',
+                            finding.severity === 'critical' && 'bg-red-50',
+                            finding.severity === 'important' && 'bg-amber-50',
+                            finding.severity === 'info' && 'bg-gray-50',
+                          )}
+                        >
+                          {finding.severity === 'critical' ? (
+                            <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                          ) : finding.severity === 'important' ? (
+                            <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                          ) : (
+                            <Info className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={clsx(
+                                'px-1.5 py-0.5 rounded text-xs font-medium',
+                                finding.severity === 'critical' && 'bg-red-100 text-red-700',
+                                finding.severity === 'important' && 'bg-amber-100 text-amber-700',
+                                finding.severity === 'info' && 'bg-gray-100 text-gray-600',
+                              )}>
+                                {finding.category}
+                              </span>
+                            </div>
+                            <p className={clsx(
+                              'mt-1',
+                              finding.severity === 'critical' && 'text-red-800',
+                              finding.severity === 'important' && 'text-amber-800',
+                              finding.severity === 'info' && 'text-gray-600',
+                            )}>
+                              {finding.message}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+              {reviewLoading && participant.status !== 'DRAFT' && (
+                <Card className="border-indigo-200">
+                  <CardContent className="py-4">
+                    <div className="flex items-center gap-2 text-sm text-indigo-600">
+                      <Sparkles className="w-4 h-4 animate-pulse" />
+                      <span>AI is reviewing participant data...</span>
                     </div>
                   </CardContent>
                 </Card>
