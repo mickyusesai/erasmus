@@ -2120,10 +2120,11 @@ function TravelItemCard({
         {isPlane && (
           <>
             <Input
-              label="Flight Number"
+              label={<span className="flex items-center gap-1">Flight Number {needsAttention(localFlightNumber) && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
               value={localFlightNumber}
               onChange={(e) => setLocalFlightNumber(e.target.value)}
               onBlur={() => localFlightNumber !== (item.flightNumber || '') && onUpdate({ flightNumber: localFlightNumber })}
+              className={needsAttention(localFlightNumber) ? attentionInputClass : ''}
             />
             <Input
               label="Booking Reference"
@@ -2870,6 +2871,11 @@ function Step3Confirm({
     bankAccountIban: data.participant.bankAccountIban || '',
     bankAccountHolderName: data.participant.bankAccountHolderName || '',
     bankAccountBic: data.participant.bankAccountBic || '',
+    bankName: data.participant.bankName || '',
+    personalAddress: data.participant.personalAddress || '',
+    personalCity: data.participant.personalCity || '',
+    personalPostalCode: data.participant.personalPostalCode || '',
+    personalCountry: data.participant.personalCountry || '',
   });
   const [confirmations, setConfirmations] = useState({
     dataCorrect: false,
@@ -3066,6 +3072,62 @@ function Step3Confirm({
                   required
                 />
               </div>
+              <Input
+                label="Bank Name"
+                value={bankDetails.bankName}
+                onChange={(e) =>
+                  setBankDetails({ ...bankDetails, bankName: e.target.value })
+                }
+                onBlur={() => updateBankMutation.mutate()}
+                placeholder="e.g., Deutsche Bank"
+              />
+            </div>
+          </div>
+
+          {/* Personal Address */}
+          <div className="space-y-4">
+            <h3 className="font-semibold text-gray-900">Personal Address</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2">
+                <Input
+                  label="Street Address"
+                  value={bankDetails.personalAddress}
+                  onChange={(e) =>
+                    setBankDetails({ ...bankDetails, personalAddress: e.target.value })
+                  }
+                  onBlur={() => updateBankMutation.mutate()}
+                  placeholder="e.g., Hauptstrasse 1"
+                />
+              </div>
+              <Input
+                label="City"
+                value={bankDetails.personalCity}
+                onChange={(e) =>
+                  setBankDetails({ ...bankDetails, personalCity: e.target.value })
+                }
+                onBlur={() => updateBankMutation.mutate()}
+                placeholder="e.g., Berlin"
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  label="Postal Code"
+                  value={bankDetails.personalPostalCode}
+                  onChange={(e) =>
+                    setBankDetails({ ...bankDetails, personalPostalCode: e.target.value })
+                  }
+                  onBlur={() => updateBankMutation.mutate()}
+                  placeholder="e.g., 10115"
+                />
+                <Input
+                  label="Country"
+                  value={bankDetails.personalCountry}
+                  onChange={(e) =>
+                    setBankDetails({ ...bankDetails, personalCountry: e.target.value })
+                  }
+                  onBlur={() => updateBankMutation.mutate()}
+                  placeholder="e.g., Germany"
+                />
+              </div>
             </div>
           </div>
 
@@ -3138,6 +3200,11 @@ function Step3Confirm({
               Submit Reimbursement
             </Button>
           </div>
+
+          {/* GDPR Notice */}
+          <p className="mt-6 text-xs text-gray-400 text-center">
+            Your data is handled according to GDPR regulations. Only the project team will have access to your information. Data will be stored for reimbursement and auditing purposes and will be removed after a reasonable period.
+          </p>
         </CardContent>
       </Card>
 

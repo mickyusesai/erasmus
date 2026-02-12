@@ -224,14 +224,14 @@ function CreateProjectModal({ isOpen, onClose, onSubmit, isLoading }: CreateProj
 
         <div className="grid grid-cols-2 gap-4">
           <Input
-            label="Start Date"
+            label="Arrival Day"
             type="date"
             value={formData.startDate}
             onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
             required
           />
           <Input
-            label="End Date"
+            label="Departure Day"
             type="date"
             value={formData.endDate}
             onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}

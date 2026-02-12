@@ -105,6 +105,7 @@ model Project {
   endDate                  DateTime
   disseminationEnabled     Boolean                 @default(false)  // Whether dissemination page is shown to participants
   carRatePerKm             Float                   @default(0.22)   // Rate per km for car travel reimbursement (EUR)
+  venueAddress             String?                                  // Address of the project venue (helps AI understand travel destination)
 
   // Test project - automatically created for new organisations (max 10 participants)
   isTestProject            Boolean                 @default(false)
@@ -148,6 +149,11 @@ model Participant {
   bankAccountIban           String?
   bankAccountHolderName     String?
   bankAccountBic            String?
+  bankName                  String?
+  personalAddress           String?
+  personalCity              String?
+  personalPostalCode        String?
+  personalCountry           String?
   notesInternal             String?
   participantNote           String?                 // Note from participant explaining travel situations (e.g., missed bus, lost ticket)
   lastMagicLinkSentAt       DateTime?

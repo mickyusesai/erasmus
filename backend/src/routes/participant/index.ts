@@ -42,6 +42,11 @@ const updateBankDetailsSchema = z.object({
   bankAccountIban: z.string().min(1, 'IBAN is required'),
   bankAccountHolderName: z.string().min(1, 'Account holder name is required'),
   bankAccountBic: z.string().optional(),
+  bankName: z.string().optional(),
+  personalAddress: z.string().optional(),
+  personalCity: z.string().optional(),
+  personalPostalCode: z.string().optional(),
+  personalCountry: z.string().optional(),
 });
 
 const updateTravelItemSchema = z.object({
@@ -202,6 +207,11 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       bankAccountIban: data?.bankAccountIban,
       bankAccountHolderName: data?.bankAccountHolderName,
       bankAccountBic: data?.bankAccountBic,
+      bankName: data?.bankName,
+      personalAddress: data?.personalAddress,
+      personalCity: data?.personalCity,
+      personalPostalCode: data?.personalPostalCode,
+      personalCountry: data?.personalCountry,
       participantNote: data?.participantNote,
       detectedHomeCountry: data?.detectedHomeCountry,
       homeCountryConfidence: data?.homeCountryConfidence,
@@ -881,6 +891,11 @@ router.patch('/bank-details', participantAuth, asyncHandler(async (req: Request,
     bankAccountIban: updated.bankAccountIban,
     bankAccountHolderName: updated.bankAccountHolderName,
     bankAccountBic: updated.bankAccountBic,
+    bankName: updated.bankName,
+    personalAddress: updated.personalAddress,
+    personalCity: updated.personalCity,
+    personalPostalCode: updated.personalPostalCode,
+    personalCountry: updated.personalCountry,
   });
 }));
 

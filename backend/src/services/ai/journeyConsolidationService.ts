@@ -523,7 +523,7 @@ THINK STEP BY STEP - Before generating output, reason through:
 PARTICIPANT INFO:
 - Name: ${participant.firstName} ${participant.lastName}
 - Country (traveling from): ${participant.country}
-- Project location: ${participant.project.country}
+- Project location: ${participant.project.country}${participant.project.venueAddress ? `\n- Project venue address: ${participant.project.venueAddress} (Note: participants may not have tickets directly to this exact address — final leg transport like bus pickup is common in Erasmus+ projects, so the journey doesn\'t need to end exactly there, but this helps understand the general destination)` : ''}
 - Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
 - Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
 
