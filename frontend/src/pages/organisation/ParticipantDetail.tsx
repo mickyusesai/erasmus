@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -23,6 +23,10 @@ import {
   Info,
   Check,
   Loader2,
+  RefreshCw,
+  CreditCard,
+  MapPin,
+  Building2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -52,6 +56,8 @@ export default function OrgParticipantDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [internalNotes, setInternalNotes] = useState('');
+  const [notesLoaded, setNotesLoaded] = useState(false);
 
   // Check if logged in
   useEffect(() => {
@@ -68,6 +74,14 @@ export default function OrgParticipantDetail() {
     retry: false,
   });
 
+  // Initialize internal notes from participant data
+  useEffect(() => {
+    if (data?.participant && !notesLoaded) {
+      setInternalNotes(data.participant.notesInternal || '');
+      setNotesLoaded(true);
+    }
+  }, [data, notesLoaded]);
+
   const { data: reviewData, isLoading: reviewLoading } = useQuery({
     queryKey: ['participant-review', id],
     queryFn: () => organisationApi.getReviewFindings(id!),
@@ -79,7 +93,6 @@ export default function OrgParticipantDetail() {
     mutationFn: ({ findingId }: { findingId: string }) =>
       organisationApi.toggleReviewFinding(id!, findingId),
     onSuccess: (result) => {
-      // Optimistically update the findings list
       queryClient.setQueryData(['participant-review', id], (old: { findings: ReviewFinding[] } | undefined) => {
         if (!old) return old;
         return {
@@ -91,6 +104,17 @@ export default function OrgParticipantDetail() {
     },
     onError: () => {
       toast.error('Failed to update finding');
+    },
+  });
+
+  const refreshReviewMutation = useMutation({
+    mutationFn: () => organisationApi.refreshReviewFindings(id!),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['participant-review', id], { findings: result.findings });
+      toast.success('AI review refreshed');
+    },
+    onError: () => {
+      toast.error('Failed to refresh AI review');
     },
   });
 
@@ -126,6 +150,16 @@ export default function OrgParticipantDetail() {
     onSuccess: () => {
       toast.success('Marked as paid');
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+  });
+
+  const updateNotesMutation = useMutation({
+    mutationFn: (notes: string) => organisationApi.updateParticipant(id!, { notesInternal: notes }),
+    onSuccess: () => {
+      toast.success('Notes saved');
+    },
+    onError: () => {
+      toast.error('Failed to save notes');
     },
   });
 
@@ -178,6 +212,15 @@ export default function OrgParticipantDetail() {
   const findings = reviewData?.findings || [];
   const allChecked = findings.length > 0 && findings.every((f: ReviewFinding) => f.checked);
   const checkedCount = findings.filter((f: ReviewFinding) => f.checked).length;
+
+  const handleRefreshReview = () => {
+    if (checkedCount > 0) {
+      if (!confirm('This will delete all current review findings and your check progress, and generate a new AI review. Are you sure?')) {
+        return;
+      }
+    }
+    refreshReviewMutation.mutate();
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -322,6 +365,82 @@ export default function OrgParticipantDetail() {
                   )}
                 </CardContent>
               </Card>
+
+              {/* Bank & Payment Details */}
+              <Card>
+                <CardHeader>
+                  <h3 className="font-semibold text-gray-900">Bank & Payment Details</h3>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    {/* Bank Account */}
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-1">
+                        <CreditCard className="w-4 h-4" />
+                        Bank Account
+                      </div>
+                      <div className="text-sm">
+                        <p className="text-gray-500">IBAN</p>
+                        <p className="font-mono text-gray-900">
+                          {participant.bankAccountIban || '-'}
+                        </p>
+                      </div>
+                      <div className="text-sm">
+                        <p className="text-gray-500">Account Holder</p>
+                        <p className="text-gray-900">
+                          {participant.bankAccountHolderName || '-'}
+                        </p>
+                      </div>
+                      {participant.bankAccountBic && (
+                        <div className="text-sm">
+                          <p className="text-gray-500">BIC</p>
+                          <p className="font-mono text-gray-900">{participant.bankAccountBic}</p>
+                        </div>
+                      )}
+                      {participant.bankName && (
+                        <div className="text-sm">
+                          <p className="text-gray-500">Bank Name</p>
+                          <p className="text-gray-900">{participant.bankName}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Personal Address */}
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-1">
+                        <MapPin className="w-4 h-4" />
+                        Personal Address
+                      </div>
+                      {participant.personalAddress || participant.personalCity || participant.personalPostalCode || participant.personalCountry ? (
+                        <>
+                          {participant.personalAddress && (
+                            <div className="text-sm">
+                              <p className="text-gray-500">Street</p>
+                              <p className="text-gray-900">{participant.personalAddress}</p>
+                            </div>
+                          )}
+                          {(participant.personalPostalCode || participant.personalCity) && (
+                            <div className="text-sm">
+                              <p className="text-gray-500">City</p>
+                              <p className="text-gray-900">
+                                {[participant.personalPostalCode, participant.personalCity].filter(Boolean).join(' ')}
+                              </p>
+                            </div>
+                          )}
+                          {participant.personalCountry && (
+                            <div className="text-sm">
+                              <p className="text-gray-500">Country</p>
+                              <p className="text-gray-900">{participant.personalCountry}</p>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-gray-400 text-sm">Not provided</p>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
 
             {/* Sidebar */}
@@ -341,23 +460,36 @@ export default function OrgParticipantDetail() {
                         )} />
                         <h3 className="font-semibold text-gray-900">AI Review</h3>
                       </div>
-                      {findings.length > 0 && (
-                        <span className={clsx(
-                          'text-xs font-medium px-2 py-0.5 rounded-full',
-                          allChecked
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-gray-100 text-gray-600'
-                        )}>
-                          {checkedCount}/{findings.length}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {findings.length > 0 && (
+                          <span className={clsx(
+                            'text-xs font-medium px-2 py-0.5 rounded-full',
+                            allChecked
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-gray-100 text-gray-600'
+                          )}>
+                            {checkedCount}/{findings.length}
+                          </span>
+                        )}
+                        <button
+                          onClick={handleRefreshReview}
+                          disabled={refreshReviewMutation.isPending}
+                          className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+                          title="Regenerate AI review"
+                        >
+                          <RefreshCw className={clsx(
+                            'w-3.5 h-3.5',
+                            refreshReviewMutation.isPending && 'animate-spin'
+                          )} />
+                        </button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent>
-                    {reviewLoading ? (
+                    {reviewLoading || refreshReviewMutation.isPending ? (
                       <div className="flex items-center gap-2 text-sm text-indigo-600 py-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Loading review...</span>
+                        <span>{refreshReviewMutation.isPending ? 'Regenerating review...' : 'Loading review...'}</span>
                       </div>
                     ) : allChecked && findings.length > 0 ? (
                       <>
@@ -393,51 +525,6 @@ export default function OrgParticipantDetail() {
                   </CardContent>
                 </Card>
               )}
-
-              {/* Bank Details */}
-              <Card>
-                <CardHeader>
-                  <h3 className="font-semibold text-gray-900">Bank Details</h3>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3 text-sm">
-                    <div>
-                      <p className="text-gray-500">IBAN</p>
-                      <p className="font-mono text-gray-900">
-                        {participant.bankAccountIban || '-'}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-gray-500">Account Holder</p>
-                      <p className="text-gray-900">
-                        {participant.bankAccountHolderName || '-'}
-                      </p>
-                    </div>
-                    {participant.bankAccountBic && (
-                      <div>
-                        <p className="text-gray-500">BIC</p>
-                        <p className="font-mono text-gray-900">{participant.bankAccountBic}</p>
-                      </div>
-                    )}
-                    {participant.bankName && (
-                      <div>
-                        <p className="text-gray-500">Bank Name</p>
-                        <p className="text-gray-900">{participant.bankName}</p>
-                      </div>
-                    )}
-                    {(participant.personalAddress || participant.personalCity || participant.personalPostalCode || participant.personalCountry) && (
-                      <div>
-                        <p className="text-gray-500">Personal Address</p>
-                        <p className="text-gray-900">
-                          {[participant.personalAddress, participant.personalCity, participant.personalPostalCode, participant.personalCountry]
-                            .filter(Boolean)
-                            .join(', ')}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
 
               {/* Actions */}
               <Card>
@@ -497,15 +584,28 @@ export default function OrgParticipantDetail() {
                 </Card>
               )}
 
-              {/* Internal Notes */}
+              {/* Internal Notes (organisation-only) */}
               <Card>
                 <CardHeader>
-                  <h3 className="font-semibold text-gray-900">Internal Notes</h3>
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-gray-500" />
+                    <h3 className="font-semibold text-gray-900">Internal Notes</h3>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">Only visible to your organisation</p>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-gray-600 text-sm">
-                    {participant.notesInternal || 'No notes'}
-                  </p>
+                  <textarea
+                    value={internalNotes}
+                    onChange={(e) => setInternalNotes(e.target.value)}
+                    onBlur={() => {
+                      if (internalNotes !== (participant.notesInternal || '')) {
+                        updateNotesMutation.mutate(internalNotes);
+                      }
+                    }}
+                    placeholder="Add internal notes about this participant..."
+                    className="w-full text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-y min-h-[80px]"
+                    rows={3}
+                  />
                 </CardContent>
               </Card>
 
@@ -671,7 +771,7 @@ function TravelItemCard({ item }: { item: TravelItem }) {
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <span className="font-medium text-gray-900">{item.fromLocation}</span>
-            <span className="text-gray-400">→</span>
+            <span className="text-gray-400">&rarr;</span>
             <span className="font-medium text-gray-900">{item.toLocation}</span>
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">

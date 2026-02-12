@@ -852,6 +852,14 @@ export const organisationApi = {
     return handleResponse<{ finding: ReviewFinding }>(res);
   },
 
+  refreshReviewFindings: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/review-findings/refresh`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ findings: ReviewFinding[] }>(res);
+  },
+
   // Country Limits
   getCountryLimits: async (projectId: string) => {
     const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits`, {

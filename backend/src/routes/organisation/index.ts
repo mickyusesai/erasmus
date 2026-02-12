@@ -937,6 +937,151 @@ router.patch('/participants/:id/review-findings/:findingId/toggle', asyncHandler
 }));
 
 /**
+ * POST /api/organisation/participants/:id/review-findings/refresh
+ * Delete existing AI review findings and regenerate them
+ */
+router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: {
+      project: true,
+      documents: { include: { extraction: true } },
+      travelItems: {
+        orderBy: { departureDate: 'asc' },
+        include: { declarationsOfTravel: true },
+      },
+      declarationsOnHonor: true,
+      declarationsOfTravel: true,
+      reimbursementSummary: true,
+      changeLogEntries: { orderBy: { changedAt: 'desc' }, take: 50 },
+    },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  // Delete all existing findings
+  await prisma.aiReviewFinding.deleteMany({ where: { participantId } });
+
+  // Check if there's enough data to review
+  if (participant.travelItems.length === 0 && participant.documents.length === 0) {
+    res.json({ findings: [] });
+    return;
+  }
+
+  // Get country limit
+  const countryLimit = await prisma.projectCountryLimit.findFirst({
+    where: { projectId: participant.projectId, country: participant.country },
+  });
+
+  const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
+  const findings = await generateParticipantReview({
+    participantName: `${participant.firstName} ${participant.lastName}`,
+    participantCountry: participant.country,
+    detectedHomeCountry: participant.detectedHomeCountry,
+    homeCountryConfidence: participant.homeCountryConfidence,
+    participantNote: participant.participantNote,
+    projectCountry: participant.project.country,
+    projectStartDate: participant.project.startDate.toISOString().split('T')[0],
+    projectEndDate: participant.project.endDate.toISOString().split('T')[0],
+    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+    travelItems: participant.travelItems.map((item) => ({
+      id: item.id,
+      modeOfTransport: item.modeOfTransport,
+      fromLocation: item.fromLocation,
+      toLocation: item.toLocation,
+      departureDate: item.departureDate?.toISOString().split('T')[0] || null,
+      flightNumber: item.flightNumber,
+      bookingReference: item.bookingReference,
+      amountOriginal: item.amountOriginal,
+      currencyOriginal: item.currencyOriginal,
+      amountEur: item.amountEur,
+      purchaseDate: item.purchaseDate?.toISOString().split('T')[0] || null,
+      manuallyEdited: item.manuallyEdited,
+      originalAmountFromAi: item.originalAmountFromAi,
+      checked: item.checked,
+      priceMissing: item.priceMissing,
+      routeMatchesCountry: item.routeMatchesCountry,
+      excludedFromReimbursement: item.excludedFromReimbursement,
+      numberOfPassengers: item.numberOfPassengers,
+      participantPortion: item.participantPortion,
+      distanceKm: item.distanceKm,
+      validationWarnings: item.validationWarnings,
+      documentId: item.documentId,
+      amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
+      comment: item.comment,
+    })),
+    documents: participant.documents.map((doc) => ({
+      id: doc.id,
+      documentType: doc.documentType,
+      originalFilename: doc.originalFilename,
+      extraction: doc.extraction ? {
+        confidence: doc.extraction.confidence,
+        detectedDocumentType: doc.extraction.detectedDocumentType,
+        passengerName: doc.extraction.passengerName,
+        amount: doc.extraction.amount,
+        currency: doc.extraction.currency,
+      } : null,
+    })),
+    declarationsOnHonor: participant.declarationsOnHonor.map((d) => ({
+      missingDocumentType: d.missingDocumentType,
+      description: d.description,
+      reason: d.reason,
+    })),
+    declarationsOfTravel: participant.declarationsOfTravel.map((d) => ({
+      fromPlace: d.fromPlace,
+      toPlace: d.toPlace,
+      travelDate: d.travelDate?.toISOString().split('T')[0] || null,
+      flightNumber: d.flightNumber,
+      modeOfTransport: d.modeOfTransport,
+    })),
+    changeLogEntries: participant.changeLogEntries.map((e) => ({
+      userType: e.userType,
+      fieldName: e.fieldName,
+      previousValue: e.previousValue,
+      newValue: e.newValue,
+    })),
+    reimbursementSummary: participant.reimbursementSummary ? {
+      totalEur: participant.reimbursementSummary.totalEur,
+      maxReimbursementAllowed: participant.reimbursementSummary.maxReimbursementAllowed,
+      amountToReimburse: participant.reimbursementSummary.amountToReimburse,
+    } : null,
+    bankDetailsComplete: !!(participant.bankAccountIban && participant.bankAccountHolderName && participant.bankAccountBic),
+  });
+
+  // Store new findings in DB
+  if (findings.length > 0) {
+    await prisma.aiReviewFinding.createMany({
+      data: findings.map((f) => ({
+        participantId,
+        severity: f.severity,
+        message: f.message,
+        category: f.category,
+      })),
+    });
+  }
+
+  // Fetch the stored findings with IDs
+  const storedFindings = await prisma.aiReviewFinding.findMany({
+    where: { participantId },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const severityOrder: Record<string, number> = { critical: 0, important: 1, info: 2 };
+  storedFindings.sort((a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3));
+
+  res.json({ findings: storedFindings });
+}));
+
+/**
  * PATCH /api/organisation/participants/:id
  * Update participant
  */
