@@ -353,11 +353,13 @@ export const participantApi = {
     return handleResponse<TravelItem>(res);
   },
 
-  deleteTravelItem: async (token: string, itemId: string) => {
-    const res = await fetch(`${API_BASE}/participant/travel-items/${itemId}?token=${token}`, {
+  deleteTravelItem: async (token: string, itemId: string, deleteDocuments = false) => {
+    const params = new URLSearchParams({ token });
+    if (deleteDocuments) params.set('deleteDocuments', 'true');
+    const res = await fetch(`${API_BASE}/participant/travel-items/${itemId}?${params}`, {
       method: 'DELETE',
     });
-    return handleResponse<{ success: boolean }>(res);
+    return handleResponse<{ success: boolean; deletedDocuments?: number }>(res);
   },
 
   toggleTravelItemChecked: async (token: string, itemId: string) => {
@@ -1221,6 +1223,9 @@ export interface CreateTravelItemData {
   // Document linking (for updates)
   documentId?: string | null;
   additionalDocumentIds?: string | null;  // JSON array string
+  // Car travel specific
+  distanceKm?: number;
+  isDriverCarpool?: boolean;
 }
 
 export interface Declaration {
@@ -1312,6 +1317,12 @@ export interface ParticipantAuthResponse {
     startDate: string;
     endDate: string;
     disseminationEnabled?: boolean;
+    carRatePerKm?: number;
+    organisation?: {
+      id: string;
+      name: string;
+      oid?: string;
+    } | null;
   };
   documents: Document[];
   travelItems: TravelItem[];

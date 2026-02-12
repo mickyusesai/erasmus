@@ -16,6 +16,12 @@ interface MissingBoardingPassModalProps {
   documents: Document[];
   participantName: string;
   participantCountry: string;
+  organisation?: {
+    id: string;
+    name: string;
+    oid?: string;
+  } | null;
+  onViewDocument?: (doc: Document) => void;
 }
 
 export function MissingBoardingPassModal({
@@ -26,6 +32,8 @@ export function MissingBoardingPassModal({
   documents,
   participantName,
   participantCountry,
+  organisation,
+  onViewDocument,
 }: MissingBoardingPassModalProps) {
   const queryClient = useQueryClient();
   const [view, setView] = useState<'options' | 'link-document' | 'declaration'>('options');
@@ -61,6 +69,11 @@ export function MissingBoardingPassModal({
 
   const apiBase = import.meta.env.VITE_API_URL || '';
 
+  // Find the linked document for the travel item (if any)
+  const linkedDocument = travelItem.documentId
+    ? documents.find((d) => d.id === travelItem.documentId) || null
+    : null;
+
   if (view === 'declaration') {
     return (
       <DeclarationOfTravelForm
@@ -73,6 +86,9 @@ export function MissingBoardingPassModal({
         travelItem={travelItem}
         participantName={participantName}
         participantCountry={participantCountry}
+        linkedDocument={linkedDocument}
+        onViewDocument={onViewDocument}
+        organisation={organisation}
       />
     );
   }

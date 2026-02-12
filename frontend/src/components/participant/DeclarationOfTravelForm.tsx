@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { FileText, AlertTriangle } from 'lucide-react';
+import { FileText, AlertTriangle, ExternalLink } from 'lucide-react';
 import { Card, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -12,6 +12,7 @@ import {
   TravelItem,
   TransportMode,
   CreateDeclarationOfTravelData,
+  Document,
 } from '../../services/api';
 
 interface DeclarationOfTravelFormProps {
@@ -21,6 +22,13 @@ interface DeclarationOfTravelFormProps {
   travelItem?: TravelItem;
   participantName: string;
   participantCountry: string;
+  linkedDocument?: Document | null;
+  onViewDocument?: (doc: Document) => void;
+  organisation?: {
+    id: string;
+    name: string;
+    oid?: string;
+  } | null;
 }
 
 const transportModeLabels: Record<TransportMode, string> = {
@@ -38,11 +46,15 @@ export function DeclarationOfTravelForm({
   token,
   travelItem,
   participantName,
+  linkedDocument,
+  onViewDocument,
+  organisation,
 }: DeclarationOfTravelFormProps) {
   const queryClient = useQueryClient();
   const signatureRef = useRef<SignaturePadRef>(null);
 
   // Pre-fill form with travel item data if available
+  // Pre-fill organisation fields from project organisation
   const [formData, setFormData] = useState({
     name: participantName,
     modeOfTransport: travelItem?.modeOfTransport || ('PLANE' as TransportMode),
@@ -55,8 +67,8 @@ export function DeclarationOfTravelForm({
     bookingReference: travelItem?.bookingReference || '',
     dateOfBirth: '',
     idNumber: '',
-    sendingOrgName: '',
-    sendingOrgOid: '',
+    sendingOrgName: organisation?.name || '',
+    sendingOrgOid: organisation?.oid || '',
     sendingOrgAddress: '',
   });
 
@@ -121,6 +133,35 @@ export function DeclarationOfTravelForm({
             </p>
           </div>
         </div>
+
+        {/* Linked Document - View for reference */}
+        {linkedDocument && (
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-blue-600" />
+                <div>
+                  <p className="text-sm font-medium text-blue-900">Related Document</p>
+                  <p className="text-xs text-blue-700">{linkedDocument.renamedFilename}</p>
+                </div>
+              </div>
+              {onViewDocument && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onViewDocument(linkedDocument)}
+                >
+                  <ExternalLink className="w-3 h-3 mr-1" />
+                  View
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-blue-600 mt-2">
+              You can view this document to help fill in the details below.
+            </p>
+          </div>
+        )}
 
         {/* Declaration Preview */}
         <Card className="bg-gray-50">

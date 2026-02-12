@@ -208,6 +208,7 @@ export default function ReimbursementPage() {
   const navigate = useNavigate();
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
+  const [hasSetInitialStep, setHasSetInitialStep] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('reimbursement');
   const [aiConsolidationWarnings, setAiConsolidationWarnings] = useState<string[]>([]);
 
@@ -223,6 +224,18 @@ export default function ReimbursementPage() {
     enabled: !!token,
     retry: false,
   });
+
+  // Set initial step based on whether travel items already exist
+  // If they have items, land on Step 2 (Check Data), otherwise Step 1 (Upload)
+  useEffect(() => {
+    if (data && !hasSetInitialStep && data.participant.status === 'DRAFT') {
+      const shouldStartOnStep2 = data.travelItems.length > 0;
+      if (shouldStartOnStep2) {
+        setCurrentStep(2);
+      }
+      setHasSetInitialStep(true);
+    }
+  }, [data, hasSetInitialStep]);
 
   if (!token) return null;
 
@@ -739,6 +752,9 @@ function Step2CheckData({
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
   const [missingBoardingPassItem, setMissingBoardingPassItem] = useState<TravelItem | null>(null);
+  const [deleteConfirmItem, setDeleteConfirmItem] = useState<TravelItem | null>(null);
+  const [deleteWithDocuments, setDeleteWithDocuments] = useState(false);
+  const [showReuploadWarning, setShowReuploadWarning] = useState(false);
 
   // Calculate unlinked documents (uploaded but not connected to any travel item)
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
@@ -804,19 +820,38 @@ function Step2CheckData({
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => participantApi.deleteTravelItem(token, id),
+    mutationFn: ({ id, deleteDocuments }: { id: string; deleteDocuments: boolean }) =>
+      participantApi.deleteTravelItem(token, id, deleteDocuments),
     // Optimistic delete for instant UI feedback
-    onMutate: async (id) => {
+    onMutate: async ({ id, deleteDocuments: shouldDeleteDocs }) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['participant-auth'] });
       // Snapshot the previous value
       const previousData = queryClient.getQueryData(['participant-auth']);
+
+      // Get the item to find linked document IDs
+      const itemToDelete = data.travelItems.find(t => t.id === id);
+      const docIdsToRemove: string[] = [];
+      if (shouldDeleteDocs && itemToDelete) {
+        if (itemToDelete.documentId) docIdsToRemove.push(itemToDelete.documentId);
+        if (itemToDelete.additionalDocumentIds) {
+          try {
+            const additionalIds = JSON.parse(itemToDelete.additionalDocumentIds) as string[];
+            docIdsToRemove.push(...additionalIds);
+          } catch { /* ignore */ }
+        }
+      }
+
       // Optimistically remove from the cache
       queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
         if (!old) return old;
         return {
           ...old,
           travelItems: old.travelItems.filter((item: TravelItem) => item.id !== id),
+          // Also remove documents if requested
+          documents: shouldDeleteDocs
+            ? old.documents.filter((doc: Document) => !docIdsToRemove.includes(doc.id))
+            : old.documents,
         };
       });
       return { previousData };
@@ -828,8 +863,10 @@ function Step2CheckData({
       }
       toast.error('Failed to remove travel item');
     },
-    onSuccess: () => {
-      toast.success('Travel item removed');
+    onSuccess: (_data, variables) => {
+      toast.success(variables.deleteDocuments
+        ? 'Travel item and linked documents removed'
+        : 'Travel item removed');
     },
     // No onSettled refetch - optimistic update is sufficient
   });
@@ -1138,14 +1175,15 @@ function Step2CheckData({
               </p>
             </div>
             <Button
-              variant={hasUnlinkedDocs ? "primary" : "secondary"}
+              variant="primary"
+              size="lg"
               onClick={() => setShowAddTravelModal(true)}
               className={hasUnlinkedDocs ? "ring-2 ring-amber-400 ring-offset-2 animate-pulse" : ""}
             >
-              <Plus className="w-4 h-4 mr-2" />
-              Add Travel
+              <Plus className="w-5 h-5 mr-2" />
+              Add Travel or Link Documents
               {hasUnlinkedDocs && (
-                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs rounded-full">
+                <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full">
                   {unlinkedDocs.length}
                 </span>
               )}
@@ -1172,7 +1210,10 @@ function Step2CheckData({
                   onUpdate={(updates) =>
                     updateMutation.mutate({ id: item.id, updates })
                   }
-                  onDelete={() => deleteMutation.mutate(item.id)}
+                  onDelete={() => {
+                    setDeleteConfirmItem(item);
+                    setDeleteWithDocuments(false);
+                  }}
                   onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
                   onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
                   onViewDocument={setViewingDocument}
@@ -1304,7 +1345,17 @@ function Step2CheckData({
               </div>
             )}
             <div className="flex justify-between">
-              <Button variant="secondary" onClick={onBack}>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  // Show warning if there are existing travel items
+                  if (data.travelItems.length > 0) {
+                    setShowReuploadWarning(true);
+                  } else {
+                    onBack();
+                  }
+                }}
+              >
                 Back to Upload
               </Button>
               <Button
@@ -1333,6 +1384,7 @@ function Step2CheckData({
         documents={data.documents}
         travelItems={data.travelItems}
         onViewDocument={setViewingDocument}
+        carRatePerKm={data.project.carRatePerKm || 0.22}
       />
 
       {/* Boarding Pass Upload Modal */}
@@ -1359,7 +1411,156 @@ function Step2CheckData({
           documents={data.documents}
           participantName={`${data.participant.firstName} ${data.participant.lastName}`}
           participantCountry={data.participant.country}
+          organisation={data.project.organisation}
+          onViewDocument={setViewingDocument}
         />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmItem && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-red-100 rounded-full">
+                <AlertTriangle className="w-6 h-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Delete Travel Item?</h3>
+            </div>
+
+            <p className="text-gray-600 mb-4">
+              Are you sure you want to delete this travel item?
+            </p>
+
+            {/* Show travel item details */}
+            <div className="p-3 bg-gray-50 rounded-lg mb-4">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="font-medium">{deleteConfirmItem.fromLocation}</span>
+                <ChevronRight className="w-4 h-4 text-gray-400" />
+                <span className="font-medium">{deleteConfirmItem.toLocation}</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                {deleteConfirmItem.modeOfTransport} • {new Date(deleteConfirmItem.departureDate).toLocaleDateString()}
+              </p>
+            </div>
+
+            {/* Show linked documents option if there are any */}
+            {(() => {
+              const linkedDocs: Document[] = [];
+              if (deleteConfirmItem.documentId) {
+                const doc = data.documents.find(d => d.id === deleteConfirmItem.documentId);
+                if (doc) linkedDocs.push(doc);
+              }
+              if (deleteConfirmItem.additionalDocumentIds) {
+                try {
+                  const additionalIds = JSON.parse(deleteConfirmItem.additionalDocumentIds) as string[];
+                  additionalIds.forEach(id => {
+                    const doc = data.documents.find(d => d.id === id);
+                    if (doc) linkedDocs.push(doc);
+                  });
+                } catch { /* ignore */ }
+              }
+
+              if (linkedDocs.length > 0) {
+                return (
+                  <div className="mb-4">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={deleteWithDocuments}
+                        onChange={(e) => setDeleteWithDocuments(e.target.checked)}
+                        className="mt-1 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                      />
+                      <div>
+                        <span className="text-sm font-medium text-gray-700">
+                          Also delete linked document{linkedDocs.length > 1 ? 's' : ''}
+                        </span>
+                        <div className="mt-1 space-y-1">
+                          {linkedDocs.map(doc => (
+                            <div key={doc.id} className="flex items-center gap-2 text-xs text-gray-500">
+                              <FileText className="w-3 h-3" />
+                              <span className="truncate">{doc.renamedFilename}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
+            <div className="flex gap-3 justify-end">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setDeleteConfirmItem(null);
+                  setDeleteWithDocuments(false);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                className="bg-red-600 hover:bg-red-700"
+                onClick={() => {
+                  deleteMutation.mutate({
+                    id: deleteConfirmItem.id,
+                    deleteDocuments: deleteWithDocuments,
+                  });
+                  setDeleteConfirmItem(null);
+                  setDeleteWithDocuments(false);
+                }}
+                loading={deleteMutation.isPending}
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Re-upload Warning Modal */}
+      {showReuploadWarning && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-amber-100 rounded-full">
+                <AlertTriangle className="w-6 h-6 text-amber-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Re-upload Documents?</h3>
+            </div>
+
+            <p className="text-gray-600 mb-4">
+              Going back to the upload page will allow you to upload additional documents.
+            </p>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-4">
+              <p className="text-sm text-amber-800">
+                <strong>Note:</strong> This will restart the AI analysis and may modify your current travel items.
+                If you just want to add a new travel item manually, you can do that here using the "Add Travel" button.
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <Button
+                variant="secondary"
+                onClick={() => setShowReuploadWarning(false)}
+              >
+                Stay Here
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setShowReuploadWarning(false);
+                  onBack();
+                }}
+              >
+                Go to Upload
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -2032,6 +2233,7 @@ function AddTravelModal({
   documents,
   travelItems,
   onViewDocument,
+  carRatePerKm = 0.22,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -2039,6 +2241,7 @@ function AddTravelModal({
   documents: Document[];
   travelItems: TravelItem[];
   onViewDocument: (doc: Document) => void;
+  carRatePerKm?: number;
 }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'create' | 'link'>('create');
@@ -2055,6 +2258,14 @@ function AddTravelModal({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>('');
   const [selectedTravelItemId, setSelectedTravelItemId] = useState<string>('');
+
+  // Car travel specific state
+  const [distanceKm, setDistanceKm] = useState<number>(0);
+  const [isCarpooling, setIsCarpooling] = useState(false);
+  const [carpoolRole, setCarpoolRole] = useState<'driver' | 'passenger'>('driver');
+
+  // Calculate car travel amount
+  const carAmount = isCarpooling && carpoolRole === 'passenger' ? 0 : distanceKm * carRatePerKm;
 
   // Find documents that are not linked to any travel item
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
@@ -2091,12 +2302,18 @@ function AddTravelModal({
         documentId = uploadResult.document.id;
       }
 
-      // Then create travel item
-      return participantApi.createTravelItem(token, {
+      // Prepare travel item data
+      const travelItemData = {
         ...formData,
-        amountEur: formData.amountOriginal, // Will be converted by backend
+        amountEur: formData.modeOfTransport === 'CAR' ? carAmount : formData.amountOriginal,
+        amountOriginal: formData.modeOfTransport === 'CAR' ? carAmount : formData.amountOriginal,
         documentId,
-      });
+        // Car travel specific fields
+        distanceKm: formData.modeOfTransport === 'CAR' ? distanceKm : undefined,
+        isDriverCarpool: formData.modeOfTransport === 'CAR' && isCarpooling ? carpoolRole === 'driver' : undefined,
+      };
+
+      return participantApi.createTravelItem(token, travelItemData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
@@ -2115,6 +2332,10 @@ function AddTravelModal({
       });
       setSelectedFile(null);
       setSelectedExistingDocId('');
+      // Reset car-specific state
+      setDistanceKm(0);
+      setIsCarpooling(false);
+      setCarpoolRole('driver');
     },
     onError: () => {
       toast.error('Failed to add travel item');
@@ -2439,30 +2660,102 @@ function AddTravelModal({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <Input
-                label="Amount"
-                type="number"
-                step="0.01"
-                value={formData.amountOriginal || ''}
-                onChange={(e) => setFormData({ ...formData, amountOriginal: parseFloat(e.target.value) || 0 })}
-                required
-              />
-              <Select
-                label="Currency"
-                value={formData.currencyOriginal}
-                options={[
-                  { value: 'EUR', label: 'EUR' },
-                  { value: 'USD', label: 'USD' },
-                  { value: 'GBP', label: 'GBP' },
-                  { value: 'PLN', label: 'PLN' },
-                  { value: 'CZK', label: 'CZK' },
-                  { value: 'HUF', label: 'HUF' },
-                  { value: 'RON', label: 'RON' },
-                ]}
-                onChange={(e) => setFormData({ ...formData, currencyOriginal: e.target.value })}
-              />
-            </div>
+            {/* Amount section - different for CAR mode */}
+            {formData.modeOfTransport === 'CAR' ? (
+              <>
+                {/* Kilometer input for car */}
+                <div>
+                  <Input
+                    label="Distance (km)"
+                    type="number"
+                    step="1"
+                    min="0"
+                    value={distanceKm || ''}
+                    onChange={(e) => setDistanceKm(parseFloat(e.target.value) || 0)}
+                    placeholder="Enter distance in kilometers"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Rate: €{carRatePerKm.toFixed(2)}/km = <strong>€{carAmount.toFixed(2)}</strong>
+                  </p>
+                </div>
+
+                {/* Carpool option */}
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isCarpooling}
+                      onChange={(e) => setIsCarpooling(e.target.checked)}
+                      className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className="text-sm text-gray-700">I carpooled with another participant</span>
+                  </label>
+
+                  {isCarpooling && (
+                    <div className="ml-6 space-y-2 p-3 bg-gray-50 rounded-lg">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="carpoolRole"
+                          checked={carpoolRole === 'driver'}
+                          onChange={() => setCarpoolRole('driver')}
+                          className="text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-sm text-gray-700">I was the driver (full reimbursement: €{(distanceKm * carRatePerKm).toFixed(2)})</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="carpoolRole"
+                          checked={carpoolRole === 'passenger'}
+                          onChange={() => setCarpoolRole('passenger')}
+                          className="text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-sm text-gray-700">I was a passenger (no reimbursement)</span>
+                      </label>
+                      {carpoolRole === 'passenger' && (
+                        <p className="text-xs text-amber-600 mt-1">
+                          As a passenger, your reimbursement will be €0 (you had no travel costs).
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Info about supporting documents */}
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-sm text-blue-800">
+                    <strong>Optional:</strong> You may upload gasoline receipts or toll receipts as supporting documents above.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  label="Amount"
+                  type="number"
+                  step="0.01"
+                  value={formData.amountOriginal || ''}
+                  onChange={(e) => setFormData({ ...formData, amountOriginal: parseFloat(e.target.value) || 0 })}
+                  required
+                />
+                <Select
+                  label="Currency"
+                  value={formData.currencyOriginal}
+                  options={[
+                    { value: 'EUR', label: 'EUR' },
+                    { value: 'USD', label: 'USD' },
+                    { value: 'GBP', label: 'GBP' },
+                    { value: 'PLN', label: 'PLN' },
+                    { value: 'CZK', label: 'CZK' },
+                    { value: 'HUF', label: 'HUF' },
+                    { value: 'RON', label: 'RON' },
+                  ]}
+                  onChange={(e) => setFormData({ ...formData, currencyOriginal: e.target.value })}
+                />
+              </div>
+            )}
 
             {formData.modeOfTransport === 'PLANE' && (
               <div className="grid grid-cols-2 gap-4">
@@ -2585,6 +2878,7 @@ function Step3Confirm({
   const [showDeclarationModal, setShowDeclarationModal] = useState(false);
   const [selectedMissingDoc, setSelectedMissingDoc] = useState<DocumentType | null>(null);
   const [declarationTravelItem, setDeclarationTravelItem] = useState<TravelItem | null>(null);
+  const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
 
   // Find flights missing boarding passes (no linked boarding pass document and no declaration of travel)
   const declarationsOfTravel = data.declarationsOfTravel || [];
@@ -2868,6 +3162,17 @@ function Step3Confirm({
           documents={data.documents}
           participantName={`${data.participant.firstName} ${data.participant.lastName}`}
           participantCountry={data.participant.country}
+          organisation={data.project.organisation}
+          onViewDocument={setViewingDocument}
+        />
+      )}
+
+      {/* Document Viewer Modal for Step 3 */}
+      {viewingDocument && (
+        <DocumentViewModal
+          document={viewingDocument}
+          token={token}
+          onClose={() => setViewingDocument(null)}
         />
       )}
     </>

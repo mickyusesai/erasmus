@@ -135,6 +135,14 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
           endDate: true,
           countryLimits: true,
           disseminationEnabled: true,
+          carRatePerKm: true,
+          organisation: {
+            select: {
+              id: true,
+              name: true,
+              oid: true,
+            },
+          },
         },
       },
       documents: {
@@ -202,6 +210,8 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
     project: {
       ...data?.project,
       disseminationEnabled: data?.project.disseminationEnabled || false,
+      carRatePerKm: data?.project.carRatePerKm ?? 0.22,
+      organisation: data?.project.organisation || null,
     },
     documents: data?.documents,
     travelItems: data?.travelItems,
@@ -401,6 +411,9 @@ const createTravelItemSchema = z.object({
   purchaseDate: z.string().transform((s) => new Date(s)).nullable().optional(),
   amountEur: z.number().optional(),
   documentId: z.string().uuid().nullable().optional(),
+  // Car travel specific
+  distanceKm: z.number().nullable().optional(),
+  isDriverCarpool: z.boolean().nullable().optional(),
 });
 
 /**
@@ -463,6 +476,9 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
       purchaseDate: result.data.purchaseDate || null,
       amountEur: amountEur || result.data.amountOriginal,
       checked: true, // Manually created items are checked by default
+      // Car travel specific fields
+      distanceKm: result.data.distanceKm || null,
+      isDriverCarpool: result.data.isDriverCarpool ?? false,
     },
   });
 
@@ -573,15 +589,18 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
 /**
  * DELETE /api/participant/travel-items/:id
  * Delete a travel item
+ * Query params:
+ *   deleteDocuments=true - also delete linked documents from storage and DB
  */
 router.delete('/travel-items/:id', participantAuth, asyncHandler(async (req: Request, res: Response) => {
   const participant = req.participant!;
+  const deleteDocuments = req.query.deleteDocuments === 'true';
 
   if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
     throw new ForbiddenError('Cannot delete travel items after approval');
   }
 
-  // Verify ownership
+  // Verify ownership and get linked documents
   const item = await prisma.travelItem.findFirst({
     where: {
       id: req.params.id,
@@ -593,15 +612,52 @@ router.delete('/travel-items/:id', participantAuth, asyncHandler(async (req: Req
     throw new NotFoundError('Travel item not found');
   }
 
+  // Collect document IDs to delete if requested
+  const docIdsToDelete: string[] = [];
+  if (deleteDocuments) {
+    if (item.documentId) {
+      docIdsToDelete.push(item.documentId);
+    }
+    if (item.additionalDocumentIds) {
+      try {
+        const additionalIds = JSON.parse(item.additionalDocumentIds) as string[];
+        docIdsToDelete.push(...additionalIds);
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }
+
+  // Delete travel item first
   await prisma.travelItem.delete({
     where: { id: req.params.id },
   });
+
+  // Delete linked documents if requested
+  if (deleteDocuments && docIdsToDelete.length > 0) {
+    const storage = getStorageService();
+    for (const docId of docIdsToDelete) {
+      const doc = await prisma.document.findFirst({
+        where: { id: docId, participantId: participant.id },
+      });
+      if (doc) {
+        // Delete from storage
+        try {
+          await storage.delete(doc.storedFilePath);
+        } catch (error) {
+          console.error(`[Delete] Failed to delete file from storage: ${doc.storedFilePath}`, error);
+        }
+        // Delete from DB
+        await prisma.document.delete({ where: { id: docId } });
+      }
+    }
+  }
 
   // Recalculate summary
   const aiService = getAiService();
   await aiService.recalculateParticipantSummary(participant.id);
 
-  res.json({ success: true });
+  res.json({ success: true, deletedDocuments: docIdsToDelete.length });
 }));
 
 /**
