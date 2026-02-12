@@ -720,9 +720,8 @@ IMPORTANT RULES:
     const response = await client.chat.completions.create({
       model: 'gpt-5.2',
       max_completion_tokens: 4000,
-      reasoning: { effort: 'medium' },
       messages: [{ role: 'user', content: prompt }],
-    });
+    } as any);
 
     const text = response.choices[0]?.message?.content?.trim() || '[]';
 
