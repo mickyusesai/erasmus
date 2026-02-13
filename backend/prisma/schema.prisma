@@ -27,6 +27,10 @@ model Organisation {
   annualLicenseStartedAt  DateTime?
   annualLicenseExpiresAt  DateTime?
 
+  // Password reset
+  passwordResetToken      String?   @unique
+  passwordResetExpiresAt  DateTime?
+
   // Account status
   isActive                Boolean   @default(true)
 

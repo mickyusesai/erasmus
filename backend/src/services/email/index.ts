@@ -1,39 +1,33 @@
 import { EmailService } from './types.js';
 import { ConsoleEmailService } from './consoleEmail.js';
+import { PostmarkEmailService } from './postmarkEmail.js';
 
 export * from './types.js';
 export { ConsoleEmailService } from './consoleEmail.js';
+export { PostmarkEmailService } from './postmarkEmail.js';
 
 /**
  * Factory function to create email service based on environment configuration
- *
- * To add SMTP or other providers later:
- * 1. Create SmtpEmailService implementing EmailService
- * 2. Add case here
- * 3. Configure with credentials from environment
  */
 export function createEmailService(): EmailService {
   const emailProvider = process.env.EMAIL_PROVIDER || 'console';
 
   switch (emailProvider) {
+    case 'postmark': {
+      const serverToken = process.env.POSTMARK_SERVER_TOKEN;
+      const from = process.env.EMAIL_FROM || 'micky@easyreimburse.ai';
+
+      if (!serverToken) {
+        console.error('[Email] POSTMARK_SERVER_TOKEN is not set, falling back to console');
+        return new ConsoleEmailService();
+      }
+
+      console.log(`[Email] Using Postmark provider (from: ${from})`);
+      return new PostmarkEmailService(serverToken, from);
+    }
+
     case 'console':
       return new ConsoleEmailService();
-
-    // Future implementations:
-    // case 'smtp':
-    //   return new SmtpEmailService({
-    //     host: process.env.SMTP_HOST!,
-    //     port: parseInt(process.env.SMTP_PORT || '587'),
-    //     user: process.env.SMTP_USER!,
-    //     password: process.env.SMTP_PASSWORD!,
-    //     from: process.env.EMAIL_FROM!,
-    //   });
-    //
-    // case 'sendgrid':
-    //   return new SendGridEmailService({
-    //     apiKey: process.env.SENDGRID_API_KEY!,
-    //     from: process.env.EMAIL_FROM!,
-    //   });
 
     default:
       console.warn(`Unknown email provider: ${emailProvider}, falling back to console`);

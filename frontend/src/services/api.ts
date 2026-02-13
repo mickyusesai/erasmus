@@ -638,6 +638,24 @@ export const organisationApi = {
     return handleResponse<{ organisation: OrganisationInfo; stats: { projectCount: number; participantCount: number } }>(res);
   },
 
+  forgotPassword: async (email: string) => {
+    const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  resetPassword: async (token: string, newPassword: string) => {
+    const res = await fetch(`${API_BASE}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, newPassword }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
   changePassword: async (currentPassword: string, newPassword: string) => {
     const res = await fetch(`${API_BASE}/auth/change-password`, {
       method: 'POST',
@@ -798,6 +816,23 @@ export const organisationApi = {
 
   sendMagicLinksBulk: async (participantIds: string[]) => {
     const res = await fetch(`${API_BASE}/organisation/participants/send-magic-links-bulk`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ participantIds }),
+    });
+    return handleResponse<{ results: { id: string; success: boolean }[] }>(res);
+  },
+
+  sendReminder: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/send-reminder`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  sendRemindersBulk: async (participantIds: string[]) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/send-reminders-bulk`, {
       method: 'POST',
       headers: getOrgAuthHeaders(),
       body: JSON.stringify({ participantIds }),

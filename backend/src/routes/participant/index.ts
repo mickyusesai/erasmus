@@ -11,6 +11,7 @@ import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
 import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
+import { getEmailService } from '../../services/email/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import disseminationRoutes from './dissemination.js';
@@ -1229,6 +1230,20 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
     where: { participantId: participant.id },
     data: { aiCheckOk: validation.aiCheckPassed },
   });
+
+  // Send submission confirmation email (fire and forget)
+  const participantWithProject = await prisma.participant.findUnique({
+    where: { id: participant.id },
+    include: { project: true },
+  });
+  if (participantWithProject) {
+    const emailService = getEmailService();
+    emailService.sendSubmissionConfirmation(
+      participantWithProject.email,
+      participantWithProject.firstName,
+      participantWithProject.project.name
+    ).catch((err) => console.error('[Email] Failed to send submission confirmation:', err));
+  }
 
   // Generate AI review findings in the background (only once, on submission)
   (async () => {

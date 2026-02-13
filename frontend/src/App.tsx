@@ -18,6 +18,8 @@ import OrgProjectDetail from './pages/organisation/ProjectDetail';
 import OrgBilling from './pages/organisation/Billing';
 import OrgSettings from './pages/organisation/Settings';
 import OrgParticipantDetail from './pages/organisation/ParticipantDetail';
+import OrgForgotPassword from './pages/organisation/ForgotPassword';
+import OrgResetPassword from './pages/organisation/ResetPassword';
 
 // Super Admin pages
 import SuperAdminLogin from './pages/superadmin/Login';
@@ -61,6 +63,8 @@ function App() {
       {/* Organisation routes */}
       <Route path="/org/login" element={<OrgLogin />} />
       <Route path="/org/register" element={<OrgRegister />} />
+      <Route path="/org/forgot-password" element={<OrgForgotPassword />} />
+      <Route path="/org/reset-password" element={<OrgResetPassword />} />
       <Route path="/org/dashboard" element={<OrgDashboard />} />
       <Route path="/org/projects/new" element={<OrgProjectCreate />} />
       <Route path="/org/projects/:id" element={<OrgProjectDetail />} />

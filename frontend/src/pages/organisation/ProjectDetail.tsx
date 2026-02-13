@@ -21,6 +21,7 @@ import {
   Users,
   Share2,
   Search,
+  Bell,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -401,6 +402,18 @@ function OverviewTab({
     },
   });
 
+  const sendRemindersMutation = useMutation({
+    mutationFn: (ids: string[]) => organisationApi.sendRemindersBulk(ids),
+    onSuccess: () => {
+      toast.success('Reminders sent');
+      queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+      setSelectedIds([]);
+    },
+    onError: () => {
+      toast.error('Failed to send reminders');
+    },
+  });
+
   const createParticipantMutation = useMutation({
     mutationFn: (data: typeof newParticipant) =>
       organisationApi.createParticipant(projectId, data),
@@ -520,16 +533,36 @@ function OverviewTab({
             className="pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent w-56"
           />
         </div>
-        {selectedIds.length > 0 && (
-          <Button
-            variant="secondary"
-            onClick={() => sendMagicLinksMutation.mutate(selectedIds)}
-            loading={sendMagicLinksMutation.isPending}
-          >
-            <Send className="w-4 h-4 mr-2" />
-            Send Magic Links ({selectedIds.length})
-          </Button>
-        )}
+        {selectedIds.length > 0 && (() => {
+          // Determine which selected participants need magic links vs reminders
+          const selectedParticipants = participants.filter((p) => selectedIds.includes(p.id));
+          const needsMagicLink = selectedParticipants.filter((p) => !p.lastMagicLinkSentAt);
+          const needsReminder = selectedParticipants.filter((p) => p.lastMagicLinkSentAt && p.status === 'DRAFT');
+          return (
+            <>
+              {needsMagicLink.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={() => sendMagicLinksMutation.mutate(needsMagicLink.map((p) => p.id))}
+                  loading={sendMagicLinksMutation.isPending}
+                >
+                  <Send className="w-4 h-4 mr-2" />
+                  Send Magic Links ({needsMagicLink.length})
+                </Button>
+              )}
+              {needsReminder.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={() => sendRemindersMutation.mutate(needsReminder.map((p) => p.id))}
+                  loading={sendRemindersMutation.isPending}
+                >
+                  <Bell className="w-4 h-4 mr-2" />
+                  Send Reminders ({needsReminder.length})
+                </Button>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Add Participant Modal */}
@@ -614,7 +647,7 @@ function OverviewTab({
                     <th className="px-4 py-3 text-center">Dissem.</th>
                   )}
                   <SortHeader field="amount">Amount</SortHeader>
-                  <th className="px-4 py-3">Last Email</th>
+                  <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -677,10 +710,44 @@ function OverviewTab({
                             }).format(participant.reimbursementSummary.amountToReimburse)
                           : '—'}
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-500">
-                        {participant.lastMagicLinkSentAt
-                          ? formatDate(participant.lastMagicLinkSentAt)
-                          : 'Never'}
+                      <td className="px-4 py-3">
+                        {participant.lastMagicLinkSentAt && participant.status === 'DRAFT' ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              organisationApi.sendReminder(participant.id).then(() => {
+                                toast.success(`Reminder sent to ${participant.firstName}`);
+                              }).catch(() => {
+                                toast.error('Failed to send reminder');
+                              });
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-full transition-colors"
+                            title={`Last email: ${formatDate(participant.lastMagicLinkSentAt)}`}
+                          >
+                            <Bell className="w-3 h-3" />
+                            Remind
+                          </button>
+                        ) : !participant.lastMagicLinkSentAt ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              organisationApi.sendMagicLink(participant.id).then(() => {
+                                toast.success(`Magic link sent to ${participant.firstName}`);
+                                queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+                              }).catch(() => {
+                                toast.error('Failed to send magic link');
+                              });
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 px-2.5 py-1 rounded-full transition-colors"
+                          >
+                            <Send className="w-3 h-3" />
+                            Send Link
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">
+                            {formatDate(participant.lastMagicLinkSentAt)}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <Link

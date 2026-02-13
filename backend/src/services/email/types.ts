@@ -1,7 +1,7 @@
 /**
  * Email service interface
  * Abstraction layer for email sending that can be implemented for different providers
- * (console logging, SMTP, SendGrid, AWS SES, etc.)
+ * (console logging, Postmark, SMTP, SendGrid, AWS SES, etc.)
  */
 
 export interface EmailOptions {
@@ -19,7 +19,7 @@ export interface EmailResult {
 
 export interface EmailService {
   /**
-   * Send an email
+   * Send a raw email
    */
   send(options: EmailOptions): Promise<EmailResult>;
 
@@ -31,5 +31,63 @@ export interface EmailService {
     participantName: string,
     projectName: string,
     magicLink: string
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a welcome email to a newly registered organisation
+   */
+  sendWelcome(
+    to: string,
+    organisationName: string,
+    loginUrl: string
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a password reset email to an organisation
+   */
+  sendPasswordReset(
+    to: string,
+    organisationName: string,
+    resetLink: string
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a submission confirmation email to a participant
+   */
+  sendSubmissionConfirmation(
+    to: string,
+    participantName: string,
+    projectName: string
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a reminder email to a participant who hasn't submitted yet
+   */
+  sendReminder(
+    to: string,
+    participantName: string,
+    projectName: string,
+    magicLink: string,
+    organisationName: string
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a reimbursement approved notification to a participant
+   */
+  sendApprovalNotification(
+    to: string,
+    participantName: string,
+    projectName: string,
+    amountEur: number
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a payment confirmation notification to a participant
+   */
+  sendPaymentNotification(
+    to: string,
+    participantName: string,
+    projectName: string,
+    amountEur: number
   ): Promise<EmailResult>;
 }

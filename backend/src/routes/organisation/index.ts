@@ -1259,6 +1259,93 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
 }));
 
 /**
+ * POST /api/organisation/participants/:id/send-reminder
+ * Send a reminder email to a participant who hasn't submitted yet
+ */
+router.post('/participants/:id/send-reminder', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: { include: { organisation: true } } },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  if (participant.status !== 'DRAFT') {
+    throw new ValidationError('Participant has already submitted their reimbursement');
+  }
+
+  // Send reminder email
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+
+  const emailService = getEmailService();
+  await emailService.sendReminder(
+    participant.email,
+    participant.firstName,
+    participant.project.name,
+    magicLink,
+    participant.project.organisation.name
+  );
+
+  res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/send-reminders-bulk
+ * Send reminder emails to multiple participants who haven't submitted
+ */
+router.post('/participants/send-reminders-bulk', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const { participantIds } = req.body;
+
+  if (!Array.isArray(participantIds) || participantIds.length === 0) {
+    throw new ValidationError('participantIds must be a non-empty array');
+  }
+
+  const results: { id: string; success: boolean }[] = [];
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const emailService = getEmailService();
+
+  for (const id of participantIds) {
+    try {
+      const participant = await prisma.participant.findUnique({
+        where: { id },
+        include: { project: { include: { organisation: true } } },
+      });
+
+      if (!participant || participant.project.organisationId !== org.id || participant.status !== 'DRAFT') {
+        results.push({ id, success: false });
+        continue;
+      }
+
+      const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+      await emailService.sendReminder(
+        participant.email,
+        participant.firstName,
+        participant.project.name,
+        magicLink,
+        participant.project.organisation.name
+      );
+
+      results.push({ id, success: true });
+    } catch {
+      results.push({ id, success: false });
+    }
+  }
+
+  res.json({ results });
+}));
+
+/**
  * POST /api/organisation/participants/:id/approve
  * Approve participant for reimbursement
  */
@@ -1305,6 +1392,16 @@ router.post('/participants/:id/approve', asyncHandler(async (req: Request, res: 
     }),
   ]);
 
+  // Send approval notification email (fire and forget)
+  const approvedAmount = amountToReimburse ?? participant.reimbursementSummary?.amountToReimburse ?? 0;
+  const emailService = getEmailService();
+  emailService.sendApprovalNotification(
+    participant.email,
+    participant.firstName,
+    participant.project.name,
+    approvedAmount
+  ).catch((err) => console.error('[Email] Failed to send approval notification:', err));
+
   res.json({ success: true });
 }));
 
@@ -1318,7 +1415,7 @@ router.post('/participants/:id/mark-paid', asyncHandler(async (req: Request, res
 
   const participant = await prisma.participant.findUnique({
     where: { id: participantId },
-    include: { project: true },
+    include: { project: true, reimbursementSummary: true },
   });
 
   if (!participant) {
@@ -1348,6 +1445,16 @@ router.post('/participants/:id/mark-paid', asyncHandler(async (req: Request, res
       },
     }),
   ]);
+
+  // Send payment notification email (fire and forget)
+  const paidAmount = participant.reimbursementSummary?.amountToReimburse ?? 0;
+  const emailService = getEmailService();
+  emailService.sendPaymentNotification(
+    participant.email,
+    participant.firstName,
+    participant.project.name,
+    paidAmount
+  ).catch((err) => console.error('[Email] Failed to send payment notification:', err));
 
   res.json({ success: true });
 }));

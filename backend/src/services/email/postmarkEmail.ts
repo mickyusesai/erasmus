@@ -1,31 +1,42 @@
+import { ServerClient } from 'postmark';
 import { EmailService, EmailOptions, EmailResult } from './types.js';
-import { v4 as uuidv4 } from 'uuid';
 import * as templates from './templates.js';
 
 /**
- * Console email service for development
- * Logs emails to the console instead of actually sending them
+ * Postmark email service for production
+ * Sends real emails via the Postmark API
  */
-export class ConsoleEmailService implements EmailService {
+export class PostmarkEmailService implements EmailService {
+  private client: ServerClient;
+  private from: string;
+
+  constructor(serverToken: string, from: string) {
+    this.client = new ServerClient(serverToken);
+    this.from = from;
+  }
+
   async send(options: EmailOptions): Promise<EmailResult> {
-    const messageId = uuidv4();
+    try {
+      const result = await this.client.sendEmail({
+        From: this.from,
+        To: options.to,
+        Subject: options.subject,
+        TextBody: options.text,
+        HtmlBody: options.html || undefined,
+        MessageStream: 'outbound',
+      });
 
-    console.log('\n' + '='.repeat(60));
-    console.log('EMAIL (Console Mode - Not Actually Sent)');
-    console.log('='.repeat(60));
-    console.log(`Message ID: ${messageId}`);
-    console.log(`To: ${options.to}`);
-    console.log(`Subject: ${options.subject}`);
-    console.log('-'.repeat(60));
-    console.log('TEXT CONTENT:');
-    console.log(options.text);
-    if (options.html) {
-      console.log('-'.repeat(60));
-      console.log('HTML CONTENT: [omitted in console mode]');
+      return {
+        success: true,
+        messageId: result.MessageID,
+      };
+    } catch (error: any) {
+      console.error('[Postmark] Failed to send email:', error?.message || error);
+      return {
+        success: false,
+        error: error?.message || 'Failed to send email via Postmark',
+      };
     }
-    console.log('='.repeat(60) + '\n');
-
-    return { success: true, messageId };
   }
 
   async sendMagicLink(to: string, participantName: string, projectName: string, magicLink: string): Promise<EmailResult> {

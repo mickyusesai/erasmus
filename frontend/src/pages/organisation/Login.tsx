@@ -67,6 +67,12 @@ export default function OrgLogin() {
                 <LogIn className="w-4 h-4 mr-2" />
                 Sign In
               </Button>
+
+              <div className="text-right">
+                <Link to="/org/forgot-password" className="text-sm text-gray-500 hover:text-primary-600">
+                  Forgot password?
+                </Link>
+              </div>
             </form>
 
             <div className="mt-6 pt-6 border-t border-gray-200 text-center text-sm text-gray-600 space-y-2">
