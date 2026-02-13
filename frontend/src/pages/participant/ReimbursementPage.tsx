@@ -17,7 +17,6 @@ import {
   Car,
   Ship,
   HelpCircle,
-  Shield,
   Loader2,
   Plus,
   AlertTriangle,
@@ -280,14 +279,6 @@ export default function ReimbursementPage() {
           <p className="text-white/80 mt-2">
             Travel reimbursement for {data.project.name}
           </p>
-
-          {/* Privacy Notice */}
-          <div className="mt-6 p-4 bg-white/10 rounded-xl flex items-start gap-3">
-            <Shield className="w-5 h-5 text-white/80 mt-0.5 flex-shrink-0" />
-            <p className="text-sm text-white/80">
-              Your data is handled according to GDPR regulations. Only the project team will have access to your information. Data will be stored for reimbursement and auditing purposes and will be removed after a reasonable period.
-            </p>
-          </div>
 
           {/* Tabs (when dissemination is enabled) */}
           {disseminationEnabled && (
@@ -1292,7 +1283,14 @@ function Step2CheckData({
                     {item.comment && <span className="text-gray-400 ml-1">*</span>}
                   </span>
                   <span className="font-medium text-gray-900">
-                    {formatCurrency(item.amountEur)}
+                    {item.amountIncludedInRoundTrip ? (
+                      <span className="text-gray-400 text-xs italic">— (incl. in outbound)</span>
+                    ) : (
+                      <>
+                        {formatCurrency((item.amountEur || 0) + (item.luggageAmountEur || 0))}
+                        {item.luggageAmountEur ? <span className="text-xs text-sky-600 ml-1">(incl. luggage)</span> : null}
+                      </>
+                    )}
                   </span>
                 </div>
               ))}
@@ -1303,7 +1301,7 @@ function Step2CheckData({
 
             {/* Total with max reimbursement inline */}
             {(() => {
-              const total = data.travelItems.reduce((sum, item) => sum + item.amountEur, 0);
+              const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
 
               return (
                 <div className="flex items-baseline justify-between">
@@ -1981,6 +1979,18 @@ function TravelItemCard({
         </div>
       )}
 
+      {/* Luggage fee indicator */}
+      {item.luggageAmount != null && item.luggageAmount > 0 && (
+        <div className="mb-4 p-2 rounded-lg bg-sky-50 border border-sky-200 flex items-center gap-2">
+          <span className="text-xs font-medium text-sky-700">
+            Luggage fee included
+          </span>
+          <span className="text-xs text-sky-600">
+            ({formatCurrency(item.luggageAmountEur || item.luggageAmount)} added from separate luggage invoice)
+          </span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-4 mb-4">
         <div className={clsx(
@@ -1999,13 +2009,19 @@ function TravelItemCard({
           </p>
         </div>
         <div className="text-right">
-          <p className="font-semibold text-gray-900">
-            {formatCurrency(item.amountEur)}
-          </p>
-          {item.currencyOriginal !== 'EUR' && (
-            <p className="text-xs text-gray-500">
-              {formatCurrency(item.amountOriginal, item.currencyOriginal)}
-            </p>
+          {item.amountIncludedInRoundTrip ? (
+            <p className="text-xs text-purple-600 italic">incl. in outbound</p>
+          ) : (
+            <>
+              <p className="font-semibold text-gray-900">
+                {formatCurrency((item.amountEur || 0) + (item.luggageAmountEur || 0))}
+              </p>
+              {item.currencyOriginal !== 'EUR' && (
+                <p className="text-xs text-gray-500">
+                  {formatCurrency(item.amountOriginal, item.currencyOriginal)}
+                </p>
+              )}
+            </>
           )}
         </div>
         <button
@@ -2081,59 +2097,68 @@ function TravelItemCard({
           value={item.departureDate.split('T')[0]}
           onChange={(e) => onUpdate({ departureDate: e.target.value })}
         />
-        <Input
-          label={<span className="flex items-center gap-1">Amount {amountNeedsAttention && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
-          type="number"
-          step="0.01"
-          value={localAmount}
-          onChange={(e) => setLocalAmount(e.target.value)}
-          onBlur={() => {
-            const parsed = parseFloat(localAmount);
-            if (!isNaN(parsed) && parsed !== item.amountOriginal) {
-              onUpdate({ amountOriginal: parsed });
-            }
-          }}
-          className={amountNeedsAttention ? attentionInputClass : ''}
-        />
-        <Select
-          label="Currency"
-          value={item.currencyOriginal}
-          options={currencyOptions}
-          onChange={(e) => onUpdate({ currencyOriginal: e.target.value })}
-        />
-        {/* Purchase Date - required for non-EUR currencies */}
-        {isNonEurCurrency && (
-          <div className="col-span-1">
-            <Input
-              label={
-                <span className="flex items-center gap-1">
-                  Purchase Date
-                  <span className="text-red-500">*</span>
-                  <span className="text-xs text-gray-400 ml-1">(for exchange rate)</span>
-                </span>
-              }
-              type="date"
-              value={item.purchaseDate?.split('T')[0] || ''}
-              onChange={(e) => onUpdate({ purchaseDate: e.target.value })}
-              required
-            />
-            {conversionInfo && !isConverting && (
-              <p className="text-xs text-gray-500 mt-1">
-                Rate ({conversionInfo.month}/{conversionInfo.year}): 1 {item.currencyOriginal} = {conversionInfo.rate.toFixed(4)} EUR
-              </p>
-            )}
-            {isConverting && (
-              <p className="text-xs text-blue-500 mt-1 flex items-center gap-1">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Converting...
-              </p>
-            )}
-            {isNonEurCurrency && !item.purchaseDate && (
-              <p className="text-xs text-amber-600 mt-1">
-                Purchase date is required for currency conversion
-              </p>
-            )}
+        {item.amountIncludedInRoundTrip ? (
+          <div className="col-span-1 sm:col-span-2 lg:col-span-3 p-3 rounded-lg bg-purple-50 border border-purple-200">
+            <p className="text-sm text-purple-700 font-medium">Round-trip booking</p>
+            <p className="text-xs text-purple-600 mt-1">The price for this return flight is included in the outbound flight. No pricing information needed here.</p>
           </div>
+        ) : (
+          <>
+            <Input
+              label={<span className="flex items-center gap-1">Amount {amountNeedsAttention && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
+              type="number"
+              step="0.01"
+              value={localAmount}
+              onChange={(e) => setLocalAmount(e.target.value)}
+              onBlur={() => {
+                const parsed = parseFloat(localAmount);
+                if (!isNaN(parsed) && parsed !== item.amountOriginal) {
+                  onUpdate({ amountOriginal: parsed });
+                }
+              }}
+              className={amountNeedsAttention ? attentionInputClass : ''}
+            />
+            <Select
+              label="Currency"
+              value={item.currencyOriginal}
+              options={currencyOptions}
+              onChange={(e) => onUpdate({ currencyOriginal: e.target.value })}
+            />
+            {/* Purchase Date - required for non-EUR currencies */}
+            {isNonEurCurrency && (
+              <div className="col-span-1">
+                <Input
+                  label={
+                    <span className="flex items-center gap-1">
+                      Purchase Date
+                      <span className="text-red-500">*</span>
+                      <span className="text-xs text-gray-400 ml-1">(for exchange rate)</span>
+                    </span>
+                  }
+                  type="date"
+                  value={item.purchaseDate?.split('T')[0] || ''}
+                  onChange={(e) => onUpdate({ purchaseDate: e.target.value })}
+                  required
+                />
+                {conversionInfo && !isConverting && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Rate ({conversionInfo.month}/{conversionInfo.year}): 1 {item.currencyOriginal} = {conversionInfo.rate.toFixed(4)} EUR
+                  </p>
+                )}
+                {isConverting && (
+                  <p className="text-xs text-blue-500 mt-1 flex items-center gap-1">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Converting...
+                  </p>
+                )}
+                {isNonEurCurrency && !item.purchaseDate && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    Purchase date is required for currency conversion
+                  </p>
+                )}
+              </div>
+            )}
+          </>
         )}
         {isPlane && (
           <>

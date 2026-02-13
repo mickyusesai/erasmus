@@ -792,6 +792,11 @@ function TravelItemCard({ item }: { item: TravelItem }) {
               {item.amountOriginal} {item.currencyOriginal}
             </p>
           )}
+          {item.luggageAmountEur != null && item.luggageAmountEur > 0 && (
+            <p className="text-xs text-sky-600">
+              +{new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(item.luggageAmountEur)} luggage
+            </p>
+          )}
         </div>
       </div>
       {item.excludedFromReimbursement && (

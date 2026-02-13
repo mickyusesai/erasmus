@@ -161,6 +161,7 @@ model Participant {
   detectedHomeCountry       String?                 // AI-detected home country based on travel patterns
   homeCountryConfidence     Float?                  // Confidence score (0-1) for detected home country
   homeCountryReasoning      String?                 // AI reasoning for the detected home country
+  consolidationSummary      String?                 // AI notes from consolidation for the review AI
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   documents                 Document[]
@@ -269,6 +270,7 @@ enum DocumentType {
   GREEN_TRAVEL_DECLARATION
   HOTEL_INVOICE
   BANK_TRANSACTION
+  LUGGAGE_INVOICE
   OTHER
 }
 
@@ -319,6 +321,7 @@ model TravelItem {
   purchaseDate          DateTime?
   amountEur             Float?                // Nullable: null if price unknown or part of booking
   comment               String?
+  consolidationNotes    String?               // AI notes from consolidation for the review AI (not shown to participant)
   manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
   checked               Boolean               @default(false)  // User confirmed this travel item is correct
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
@@ -328,6 +331,11 @@ model TravelItem {
   priceMissing              Boolean               @default(false)  // True if no price found in any document
   priceSourceDocId          String?               // Document ID where this price was found
   amountIncludedInRoundTrip Boolean               @default(false)  // True if this is return leg with price on outbound
+
+  // Luggage fee merged into this flight
+  luggageAmount         Float?                // Luggage fee amount (in original currency)
+  luggageAmountEur      Float?                // Luggage fee amount in EUR
+  luggageDocumentId     String?               // Document ID of the luggage invoice
 
   // Legacy round-trip fields (kept for compatibility, prefer using TravelBooking)
   isRoundTrip           Boolean               @default(false)

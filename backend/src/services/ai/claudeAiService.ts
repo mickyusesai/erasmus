@@ -306,6 +306,7 @@ Other important notes:
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
       HOTEL_INVOICE: 'hotel invoice',
       BANK_TRANSACTION: 'bank transaction',
+      LUGGAGE_INVOICE: 'luggage invoice',
       OTHER: 'document',
     };
 
@@ -541,6 +542,7 @@ export async function generateParticipantReview(data: {
   detectedHomeCountry: string | null;
   homeCountryConfidence: number | null;
   participantNote: string | null;
+  consolidationSummary: string | null;
   projectCountry: string;
   projectStartDate: string;
   projectEndDate: string;
@@ -569,7 +571,10 @@ export async function generateParticipantReview(data: {
     validationWarnings: string | null;
     documentId: string | null;
     amountIncludedInRoundTrip: boolean;
+    luggageAmount: number | null;
+    luggageAmountEur: number | null;
     comment: string | null;
+    consolidationNotes: string | null;
   }>;
   documents: Array<{
     id: string;
@@ -626,6 +631,7 @@ PARTICIPANT NAME: ${data.participantName}
 PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ project takes place, where participants travel TO)
 PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
 ${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : ''}
+${data.consolidationSummary ? `\n=== CONSOLIDATION AI NOTES ===\nThe AI that processed the uploaded documents left these notes for you:\n${data.consolidationSummary}\n` : ''}
 MAX REIMBURSEMENT FOR ${data.participantCountry}: €${data.maxReimbursementForCountry || 'Not set'}
 TOTAL CLAIMED: €${data.reimbursementSummary?.totalEur || 0}
 BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
@@ -643,6 +649,8 @@ ${data.travelItems.map((item, i) => {
     if (item.routeMatchesCountry === false) flags.push('ROUTE MAY NOT MATCH expected home↔project travel pattern');
     if (item.excludedFromReimbursement) flags.push('Participant excluded this from reimbursement');
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
+    if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
+    if (item.consolidationNotes) flags.push(`Consolidation AI note: ${item.consolidationNotes}`);
     if (item.distanceKm) flags.push(`Car distance: ${item.distanceKm}km`);
     if (item.currencyOriginal && item.currencyOriginal !== 'EUR' && !item.purchaseDate) flags.push('Non-EUR currency but no purchase date for exchange rate');
     if (item.validationWarnings && item.validationWarnings !== '[]') flags.push(`System warnings: ${item.validationWarnings}`);
@@ -692,6 +700,7 @@ INFORMATIONAL (good to know):
 18. If the participant left a note in the PARTICIPANT'S OWN NOTE field above → surface it so the org sees it. Do NOT create a finding about notes if no participant note exists.
 19. If document count vs travel item count seems unusual.
 20. Car travel — flag distance for manual reasonableness check.
+21. If a luggage fee was added to a flight from a separate invoice → inform the org so they can verify the luggage invoice matches the flight.
 
 === RESPONSE FORMAT ===
 

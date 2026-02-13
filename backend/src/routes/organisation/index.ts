@@ -989,6 +989,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     detectedHomeCountry: participant.detectedHomeCountry,
     homeCountryConfidence: participant.homeCountryConfidence,
     participantNote: participant.participantNote,
+    consolidationSummary: participant.consolidationSummary,
     projectCountry: participant.project.country,
     projectStartDate: participant.project.startDate.toISOString().split('T')[0],
     projectEndDate: participant.project.endDate.toISOString().split('T')[0],
@@ -1017,7 +1018,10 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       validationWarnings: item.validationWarnings,
       documentId: item.documentId,
       amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
+      luggageAmount: item.luggageAmount,
+      luggageAmountEur: item.luggageAmountEur,
       comment: item.comment,
+      consolidationNotes: item.consolidationNotes,
     })),
     documents: participant.documents.map((doc) => ({
       id: doc.id,

@@ -1225,6 +1225,10 @@ export interface TravelItem {
   priceAllocation?: number;  // Legacy
   totalGroupPrice?: number;  // Legacy
   amountIncludedInRoundTrip?: boolean;  // True if this leg's amount is included in another leg's round-trip price
+  // Luggage fee merged into this flight
+  luggageAmount?: number;
+  luggageAmountEur?: number;
+  luggageDocumentId?: string;
   // Multi-passenger bookings
   numberOfPassengers?: number;
   participantPortion?: number;
