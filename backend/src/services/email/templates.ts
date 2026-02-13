@@ -26,7 +26,7 @@ function wrapInLayout(content: string): string {
 
 function button(url: string, label: string): string {
   return `<div style="text-align: center; margin: 30px 0;">
-      <a href="${url}" style="display: inline-block; background: linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%); color: white; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 16px;">${label}</a>
+      <a href="${url}" style="display: inline-block; background: linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%); color: #ffffff !important; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 16px; mso-line-height-rule: exactly;" target="_blank"><!--[if mso]><span style="color:#ffffff;">${label}</span><![endif]--><!--[if !mso]><!--><span style="color: #ffffff;">${label}</span><!--<![endif]--></a>
     </div>`;
 }
 
