@@ -9,5 +9,8 @@ ALTER TABLE "TravelItem" ADD COLUMN "luggageDocumentId" TEXT;
 -- AlterTable: Add consolidation notes to TravelItem
 ALTER TABLE "TravelItem" ADD COLUMN "consolidationNotes" TEXT;
 
+-- AlterTable: Add purchase date auto-fill tracking to TravelItem
+ALTER TABLE "TravelItem" ADD COLUMN "purchaseDateAutoFilled" BOOLEAN NOT NULL DEFAULT false;
+
 -- AlterTable: Add consolidation summary to Participant
 ALTER TABLE "Participant" ADD COLUMN "consolidationSummary" TEXT;

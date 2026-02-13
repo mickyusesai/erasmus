@@ -410,6 +410,61 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       throw new Error('Participant not found');
     }
 
+    // Clean up orphaned documents: if there are 0 travel items but documents exist
+    // that are not linked to any travel item, they're orphans from a previous delete cycle.
+    // Keeping them would cause the AI to see duplicate data and create duplicate travel items.
+    const existingTravelItems = participant.travelItems || [];
+    if (existingTravelItems.length === 0 && participant.documents.length > 0) {
+      // Check which documents are NOT linked to any travel item
+      const linkedDocIds = new Set<string>();
+      for (const item of existingTravelItems) {
+        if ((item as any).documentId) linkedDocIds.add((item as any).documentId);
+        if ((item as any).additionalDocumentIds) {
+          try {
+            const ids = JSON.parse((item as any).additionalDocumentIds) as string[];
+            ids.forEach(id => linkedDocIds.add(id));
+          } catch { /* ignore */ }
+        }
+      }
+
+      const orphanedDocs = participant.documents.filter((doc: { id: string }) => !linkedDocIds.has(doc.id));
+      if (orphanedDocs.length > 0) {
+        // Check if there are also recently uploaded documents (within last 5 minutes)
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const recentDocs = participant.documents.filter((doc: any) => new Date(doc.createdAt) >= fiveMinAgo);
+        const oldOrphans = orphanedDocs.filter((doc: any) => new Date(doc.createdAt) < fiveMinAgo);
+
+        if (recentDocs.length > 0 && oldOrphans.length > 0) {
+          // There are both recent uploads AND old orphans — clean up old orphans
+          console.log(`[Consolidation] Cleaning up ${oldOrphans.length} orphaned documents from previous session`);
+          const storage = getStorageService();
+          for (const doc of oldOrphans) {
+            try {
+              await storage.delete((doc as any).storedFilePath);
+            } catch (error) {
+              console.error(`[Consolidation] Failed to delete orphaned file: ${(doc as any).storedFilePath}`, error);
+            }
+            await prisma.document.delete({ where: { id: doc.id } });
+          }
+
+          // Re-fetch participant with cleaned up documents
+          const refreshed = await prisma.participant.findUnique({
+            where: { id: participantId },
+            include: {
+              project: true,
+              documents: { include: { extraction: true } },
+              travelItems: true,
+            },
+          });
+          if (refreshed) {
+            // Update the participant reference with fresh data
+            (participant as any).documents = (refreshed as any).documents;
+            (participant as any).travelItems = (refreshed as any).travelItems;
+          }
+        }
+      }
+    }
+
     // Build extraction map for quick lookup by document ID
     const extractionMap = new Map<string, Record<string, unknown>>();
     for (const doc of participant.documents) {
@@ -796,17 +851,23 @@ Wrong: Two separate items, or doc-2 left unassigned
 - Always output in YYYY-MM-DD format
 
 === WARNING RULES ===
-Only warn about ACTIONABLE problems:
+Warnings are shown DIRECTLY to the participant (not the reviewer). Only include warnings that are:
+- Actionable by the participant
+- Written in friendly, non-technical language
+
+INCLUDE in warnings:
 - Name mismatch between ticket and participant
 - Multi-passenger booking needs portion specified
-- Missing boarding pass for a documented flight
-- Price truly missing (priceMissing=true)
+- Price truly missing (priceMissing=true) — tell participant they need to fill in the amount
 - Country mismatch between profile and travel pattern
 
-Do NOT warn about:
+Do NOT include in warnings (these are handled elsewhere):
 - Travel dates before/after project (normal for travel to/from)
 - Round-trip structure (UI handles this)
-- Matched receipts (those are attached, not warnings)`;
+- Matched receipts (those are attached, not warnings)
+- Conflicting prices between documents (put this in consolidationNotes for the reviewer)
+- Anything addressed to "reviewer", "auditor", or "organisation"
+- Internal document matching decisions (put in consolidationNotes instead)`;
 
     // Build a set of valid document IDs for this participant
     const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
@@ -1046,9 +1107,32 @@ Do NOT warn about:
 
         // CRITICAL: Handle amount - use null if not found, NEVER default to 0
         const baseAmount: number | null = item.amount ?? null;  // Use nullish coalescing to preserve null
+
+        // Auto-fill purchase date from departure date for non-EUR currencies without purchase date
+        let purchaseDateValue = item.purchaseDate ? new Date(item.purchaseDate) : null;
+        let purchaseDateAutoFilled = false;
+        if (!purchaseDateValue && currency !== 'EUR' && baseAmount !== null) {
+          // For return legs of round-trip bookings, use the outbound flight date if available
+          if (item.amountIncludedInRoundTrip === true && item.bookingReference) {
+            // Find outbound leg in the same booking to get its date
+            const outboundItem = (result.travel_items || []).find(
+              (ti: any) => ti.bookingReference === item.bookingReference && ti.amountIncludedInRoundTrip !== true
+            );
+            if (outboundItem?.departureDate) {
+              purchaseDateValue = new Date(outboundItem.departureDate);
+              purchaseDateAutoFilled = true;
+            }
+          }
+          // Fallback to this item's departure date
+          if (!purchaseDateValue && item.departureDate) {
+            purchaseDateValue = new Date(item.departureDate);
+            purchaseDateAutoFilled = true;
+          }
+        }
+
         let amountEur: number | null = baseAmount;
         if (baseAmount !== null && currency !== 'EUR') {
-          const purchaseDateForConversion = item.purchaseDate ? new Date(item.purchaseDate) : new Date();
+          const purchaseDateForConversion = purchaseDateValue || new Date();
           amountEur = await convertToEurService(baseAmount, currency, purchaseDateForConversion);
         }
 
@@ -1090,7 +1174,8 @@ Do NOT warn about:
             flightNumber: item.flightNumber || null,
             amountOriginal: baseAmount,
             currencyOriginal: currency,
-            purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
+            purchaseDate: purchaseDateValue || (item.purchaseDate ? new Date(item.purchaseDate) : null),
+            purchaseDateAutoFilled: purchaseDateAutoFilled,
             amountEur: amountEur,
             comment: item.notes || null,
             consolidationNotes: item.consolidationNotes || null,

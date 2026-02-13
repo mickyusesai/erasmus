@@ -107,12 +107,6 @@ export default function OrgRegister() {
                   Sign in
                 </Link>
               </p>
-              <p>
-                Have an invitation code?{' '}
-                <Link to="/founding-access" className="text-primary-600 hover:text-primary-700 font-medium">
-                  Claim your free project
-                </Link>
-              </p>
             </div>
           </CardContent>
         </Card>

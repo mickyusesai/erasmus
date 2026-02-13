@@ -1229,6 +1229,7 @@ export interface TravelItem {
   luggageAmount?: number;
   luggageAmountEur?: number;
   luggageDocumentId?: string;
+  purchaseDateAutoFilled?: boolean;
   // Multi-passenger bookings
   numberOfPassengers?: number;
   participantPortion?: number;

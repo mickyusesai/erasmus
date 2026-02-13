@@ -573,6 +573,7 @@ export async function generateParticipantReview(data: {
     amountIncludedInRoundTrip: boolean;
     luggageAmount: number | null;
     luggageAmountEur: number | null;
+    purchaseDateAutoFilled: boolean;
     comment: string | null;
     consolidationNotes: string | null;
   }>;
@@ -650,6 +651,7 @@ ${data.travelItems.map((item, i) => {
     if (item.excludedFromReimbursement) flags.push('Participant excluded this from reimbursement');
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
     if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
+    if (item.purchaseDateAutoFilled) flags.push('Purchase date was AUTO-FILLED from flight date (no purchase date found in documents)');
     if (item.consolidationNotes) flags.push(`Consolidation AI note: ${item.consolidationNotes}`);
     if (item.distanceKm) flags.push(`Car distance: ${item.distanceKm}km`);
     if (item.currencyOriginal && item.currencyOriginal !== 'EUR' && !item.purchaseDate) flags.push('Non-EUR currency but no purchase date for exchange rate');
@@ -692,15 +694,14 @@ IMPORTANT (organisation should review):
 12. If a plane travel item is missing its flight number.
 
 INFORMATIONAL (good to know):
-13. Non-EUR currency without purchase date (exchange rate may be approximate).
-14. Travel dates more than 2 days outside project window.
+13. Non-EUR currency without purchase date (exchange rate may be approximate). IMPORTANT: Do NOT flag this for return legs of round-trip bookings (amountIncludedInRoundTrip=true) — those don't need a purchase date since the price is on the outbound leg. Also, if the participant manually filled in the purchase date (manuallyEdited=true), mention that the purchase date was entered by the participant.
+14. Travel dates more than 4 days outside project window. IMPORTANT: 1-4 days before/after project dates is perfectly normal for travel — only flag when it's MORE than 4 days outside the window.
 15. Bank details incomplete (missing IBAN, holder name, or BIC).
 16. Uploaded documents not linked to any travel item.
-17. Round-trip bookings — verify price is counted only once.
-18. If the participant left a note in the PARTICIPANT'S OWN NOTE field above → surface it so the org sees it. Do NOT create a finding about notes if no participant note exists.
-19. If document count vs travel item count seems unusual.
-20. Car travel — flag distance for manual reasonableness check.
-21. If a luggage fee was added to a flight from a separate invoice → inform the org so they can verify the luggage invoice matches the flight.
+17. If the participant left a note in the PARTICIPANT'S OWN NOTE field above → surface it so the org sees it. Do NOT create a finding about notes if no participant note exists.
+18. If document count vs travel item count seems unusual.
+19. Car travel — flag distance for manual reasonableness check.
+20. If a luggage fee was added to a flight from a separate invoice → inform the org so they can verify the luggage invoice matches the flight.
 
 === RESPONSE FORMAT ===
 

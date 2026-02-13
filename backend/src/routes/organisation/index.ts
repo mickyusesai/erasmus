@@ -1020,6 +1020,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
       luggageAmount: item.luggageAmount,
       luggageAmountEur: item.luggageAmountEur,
+      purchaseDateAutoFilled: item.purchaseDateAutoFilled,
       comment: item.comment,
       consolidationNotes: item.consolidationNotes,
     })),

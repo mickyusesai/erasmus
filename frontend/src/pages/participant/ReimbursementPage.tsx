@@ -476,6 +476,7 @@ function Step1Upload({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, filename: '' });
   const [consolidating, setConsolidating] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => participantApi.uploadDocument(token, file),
@@ -705,7 +706,7 @@ function Step1Upload({
         {/* Next Button */}
         <div className="mt-8 flex justify-end">
           <Button
-            onClick={handleContinue}
+            onClick={() => setShowConfirmModal(true)}
             disabled={data.documents.length === 0 || consolidating}
             loading={consolidating}
           >
@@ -713,6 +714,26 @@ function Step1Upload({
             {!consolidating && <ChevronRight className="w-4 h-4 ml-2" />}
           </Button>
         </div>
+
+        {/* Confirmation Modal */}
+        {showConfirmModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Before you continue</h3>
+              <p className="text-sm text-gray-600 mb-6">
+                Did you upload all documents you have? If you also have documents on another device, it's better to upload them first before continuing so the AI has the best possible understanding of your whole journey.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>
+                  Go back
+                </Button>
+                <Button onClick={() => { setShowConfirmModal(false); handleContinue(); }}>
+                  Yes, continue
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
     </>
@@ -976,9 +997,18 @@ function Step2CheckData({
     }
 
     // Add AI consolidation warnings as notifications (friendlier style)
-    // Filter out round-trip warnings as they're shown at the travel item level
+    // Filter out warnings meant for reviewers/organisation, not for participants
     aiWarnings
-      .filter(warning => !warning.toLowerCase().includes('round-trip') && !warning.toLowerCase().includes('round trip'))
+      .filter(warning => {
+        const lower = warning.toLowerCase();
+        // Skip round-trip warnings (shown at travel item level)
+        if (lower.includes('round-trip') || lower.includes('round trip')) return false;
+        // Skip reviewer/auditor-specific messages
+        if (lower.includes('reviewer') || lower.includes('auditor') || lower.includes('verify')) return false;
+        // Skip conflicting totals (internal detail for AI review)
+        if (lower.includes('conflicting total')) return false;
+        return true;
+      })
       .forEach((warning, index) => {
         w.push({
           id: `ai-warning-${index}`,
@@ -1023,15 +1053,26 @@ function Step2CheckData({
       });
     }
 
-    // Check for non-EUR currencies without purchase date
+    // Check for non-EUR currencies without purchase date (skip amountIncludedInRoundTrip items)
     const itemsNeedingPurchaseDate = data.travelItems.filter(
-      t => t.currencyOriginal !== 'EUR' && !t.purchaseDate
+      t => t.currencyOriginal !== 'EUR' && !t.purchaseDate && !t.amountIncludedInRoundTrip
     );
     if (itemsNeedingPurchaseDate.length > 0) {
       w.push({
         id: 'missing-purchase-date',
         type: 'warning',
         message: `${itemsNeedingPurchaseDate.length} travel item(s) with non-EUR currency need a purchase date for exchange rate conversion.`,
+        dismissible: true,
+      });
+    }
+
+    // Notify about auto-filled purchase dates
+    const autoFilledItems = data.travelItems.filter(t => t.purchaseDateAutoFilled);
+    if (autoFilledItems.length > 0) {
+      w.push({
+        id: 'auto-filled-purchase-date',
+        type: 'info',
+        message: `The purchase date for ${autoFilledItems.length} item(s) was automatically set to the flight date because no purchase date was found. You can change this manually if the actual purchase date was different.`,
         dismissible: true,
       });
     }
@@ -1252,17 +1293,14 @@ function Step2CheckData({
                 setParticipantNote(e.target.value);
                 setNoteEdited(true);
               }}
+              onBlur={() => {
+                if (noteEdited) {
+                  noteMutation.mutate(participantNote);
+                }
+              }}
             />
-            {noteEdited && (
-              <div className="mt-2 flex justify-end">
-                <Button
-                  size="sm"
-                  onClick={() => noteMutation.mutate(participantNote)}
-                  loading={noteMutation.isPending}
-                >
-                  Save Note
-                </Button>
-              </div>
+            {noteMutation.isPending && (
+              <p className="mt-1 text-xs text-blue-500">Saving...</p>
             )}
           </div>
 
@@ -1852,9 +1890,10 @@ function TravelItemCard({
 
   // Track previous conversion inputs to avoid re-converting on re-mount when data hasn't changed
   const lastConversionKey = useRef('');
+  const conversionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Trigger conversion only when the conversion inputs actually change
-  useEffect(() => {
+  // Debounced conversion: only triggers after 5 seconds of inactivity or on blur
+  const triggerConversionIfNeeded = useCallback(() => {
     if (!isNonEurCurrency || !item.purchaseDate || !item.amountOriginal) return;
 
     const conversionKey = `${item.currencyOriginal}|${item.amountOriginal}|${item.purchaseDate}`;
@@ -1869,6 +1908,26 @@ function TravelItemCard({
     lastConversionKey.current = conversionKey;
     handleCurrencyConversion();
   }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, item.currencyOriginal, item.amountEur, handleCurrencyConversion]);
+
+  // Set up 5-second debounce timer when inputs change
+  useEffect(() => {
+    if (!isNonEurCurrency || !item.purchaseDate || !item.amountOriginal) return;
+
+    const conversionKey = `${item.currencyOriginal}|${item.amountOriginal}|${item.purchaseDate}`;
+    if (conversionKey === lastConversionKey.current) return;
+
+    // Clear previous timer
+    if (conversionTimerRef.current) clearTimeout(conversionTimerRef.current);
+
+    // Set new 5-second debounce timer
+    conversionTimerRef.current = setTimeout(() => {
+      triggerConversionIfNeeded();
+    }, 5000);
+
+    return () => {
+      if (conversionTimerRef.current) clearTimeout(conversionTimerRef.current);
+    };
+  }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, item.currencyOriginal, triggerConversionIfNeeded]);
 
   return (
     <div className={clsx(
@@ -2097,12 +2156,7 @@ function TravelItemCard({
           value={item.departureDate.split('T')[0]}
           onChange={(e) => onUpdate({ departureDate: e.target.value })}
         />
-        {item.amountIncludedInRoundTrip ? (
-          <div className="col-span-1 sm:col-span-2 lg:col-span-3 p-3 rounded-lg bg-purple-50 border border-purple-200">
-            <p className="text-sm text-purple-700 font-medium">Round-trip booking</p>
-            <p className="text-xs text-purple-600 mt-1">The price for this return flight is included in the outbound flight. No pricing information needed here.</p>
-          </div>
-        ) : (
+        {item.amountIncludedInRoundTrip ? null : (
           <>
             <Input
               label={<span className="flex items-center gap-1">Amount {amountNeedsAttention && <span className="text-amber-500 text-xs">(needs input)</span>}</span>}
@@ -2115,6 +2169,8 @@ function TravelItemCard({
                 if (!isNaN(parsed) && parsed !== item.amountOriginal) {
                   onUpdate({ amountOriginal: parsed });
                 }
+                // Trigger currency conversion on blur
+                setTimeout(() => triggerConversionIfNeeded(), 100);
               }}
               className={amountNeedsAttention ? attentionInputClass : ''}
             />
@@ -2137,7 +2193,10 @@ function TravelItemCard({
                   }
                   type="date"
                   value={item.purchaseDate?.split('T')[0] || ''}
+                  min={`${new Date().getFullYear() - 3}-01-01`}
+                  max={new Date().toISOString().split('T')[0]}
                   onChange={(e) => onUpdate({ purchaseDate: e.target.value })}
+                  onBlur={() => triggerConversionIfNeeded()}
                   required
                 />
                 {conversionInfo && !isConverting && (

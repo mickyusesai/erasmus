@@ -319,6 +319,7 @@ model TravelItem {
   amountOriginal        Float?                // Nullable: null if price unknown or part of booking
   currencyOriginal      String                @default("EUR")
   purchaseDate          DateTime?
+  purchaseDateAutoFilled Boolean              @default(false)  // True if purchase date was auto-filled from flight date
   amountEur             Float?                // Nullable: null if price unknown or part of booking
   comment               String?
   consolidationNotes    String?               // AI notes from consolidation for the review AI (not shown to participant)
