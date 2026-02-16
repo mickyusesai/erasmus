@@ -436,7 +436,6 @@ function OverviewTab({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [showReimbursementWarning, setShowReimbursementWarning] = useState(false);
-  const [pendingEmailAction, setPendingEmailAction] = useState<{ type: 'magic' | 'reminder'; ids: string[] } | null>(null);
 
   const deleteParticipantMutation = useMutation({
     mutationFn: (participantId: string) => organisationApi.deleteParticipant(participantId),
@@ -467,14 +466,13 @@ function OverviewTab({
     },
   });
 
-  const checkReimbursementWarning = (ids: string[], type: 'magic' | 'reminder') => {
-    const selectedParticipants = participants.filter((p) => ids.includes(p.id));
+  const checkReimbursementWarning = (ids: string[], _type: 'magic' | 'reminder') => {
+    const targetParticipants = participants.filter((p) => ids.includes(p.id));
     const countriesWithNoLimit = (countryLimits || [])
       .filter((limit: any) => limit.maxReimbursementAmount === 0)
       .map((limit: any) => limit.country);
-    const hasUnconfigured = selectedParticipants.some((p) => countriesWithNoLimit.includes(p.country));
+    const hasUnconfigured = targetParticipants.some((p) => countriesWithNoLimit.includes(p.country));
     if (hasUnconfigured) {
-      setPendingEmailAction({ type, ids });
       setShowReimbursementWarning(true);
       return true;
     }
@@ -574,20 +572,21 @@ function OverviewTab({
           <Upload className="w-4 h-4 mr-2" />
           Import CSV
         </Button>
-        <a
-          href="/Reimbursement_List_TEMPLATE.csv"
-          download
-          className="relative group"
-        >
-          <Button variant="secondary" type="button" onClick={(e) => e.stopPropagation()}>
-            <Download className="w-4 h-4 mr-2" />
-            Download Template
-          </Button>
-          <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+        <div className="relative group">
+          <a href="/Reimbursement_List_TEMPLATE.csv" download>
+            <button
+              type="button"
+              className="inline-flex items-center justify-center font-medium transition-all duration-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-[0.98] focus:ring-gray-400 px-4 py-2 text-sm"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Download Template
+            </button>
+          </a>
+          <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 pointer-events-none">
             This is a CSV file you can open with Excel or Google Sheets. Copy-paste your participant data (first name, last name, email, country) into the template, then save/export as CSV. Upload it here and your participant list will appear automatically.
             <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-gray-900" />
           </div>
-        </a>
+        </div>
         <div className="flex-1" />
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -788,10 +787,12 @@ function OverviewTab({
                       )}
                       <td className="px-4 py-3 text-gray-600">
                         {participant.reimbursementSummary
-                          ? new Intl.NumberFormat('de-DE', {
-                              style: 'currency',
-                              currency: 'EUR',
-                            }).format(participant.reimbursementSummary.amountToReimburse)
+                          ? participant.reimbursementSummary.maxReimbursementAllowed === 0
+                            ? <span className="text-gray-400 italic">Not set</span>
+                            : new Intl.NumberFormat('de-DE', {
+                                style: 'currency',
+                                currency: 'EUR',
+                              }).format(participant.reimbursementSummary.amountToReimburse)
                           : '—'}
                       </td>
                       <td className="px-4 py-3">
@@ -944,10 +945,7 @@ function OverviewTab({
       {/* Reimbursement Warning Modal */}
       <Modal
         isOpen={showReimbursementWarning}
-        onClose={() => {
-          setShowReimbursementWarning(false);
-          setPendingEmailAction(null);
-        }}
+        onClose={() => setShowReimbursementWarning(false)}
         title="Reimbursement Not Configured"
       >
         <div className="space-y-4">
@@ -960,10 +958,7 @@ function OverviewTab({
           <div className="flex justify-end gap-3 pt-4">
             <Button
               variant="secondary"
-              onClick={() => {
-                setShowReimbursementWarning(false);
-                setPendingEmailAction(null);
-              }}
+              onClick={() => setShowReimbursementWarning(false)}
             >
               Close
             </Button>

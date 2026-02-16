@@ -217,7 +217,7 @@ export function MissingBoardingPassModal({
                 I don't have the boarding pass
               </p>
               <p className="text-sm text-gray-500 mt-1">
-                Sign a Declaration of Travel as a substitute
+                Sign a Declaration on Honor as a substitute
               </p>
             </div>
           </button>

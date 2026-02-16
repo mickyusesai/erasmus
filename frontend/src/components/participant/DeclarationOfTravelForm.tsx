@@ -55,9 +55,17 @@ export function DeclarationOfTravelForm({
 
   // Pre-fill form with travel item data if available
   // Pre-fill organisation fields from project organisation
+  // Determine default reason based on transport mode
+  const initialMode = travelItem?.modeOfTransport || 'PLANE';
+  const getDefaultReason = (mode: TransportMode) => {
+    if (mode === 'CAR') return 'Car travel - invoice not applicable';
+    if (mode === 'TRAIN') return 'Interrail/Eurail pass - individual train tickets not available';
+    return '';
+  };
+
   const [formData, setFormData] = useState({
     name: participantName,
-    modeOfTransport: travelItem?.modeOfTransport || ('PLANE' as TransportMode),
+    modeOfTransport: initialMode as TransportMode,
     fromPlace: travelItem?.fromLocation || '',
     toPlace: travelItem?.toLocation || '',
     travelDate: travelItem?.departureDate
@@ -65,12 +73,17 @@ export function DeclarationOfTravelForm({
       : '',
     flightNumber: travelItem?.flightNumber || '',
     bookingReference: travelItem?.bookingReference || '',
+    licensePlate: '',
+    driverName: '',
+    reason: getDefaultReason(initialMode as TransportMode),
     dateOfBirth: '',
     idNumber: '',
     sendingOrgName: organisation?.name || '',
     sendingOrgOid: organisation?.oid || '',
     sendingOrgAddress: '',
   });
+
+  const isCarTravel = formData.modeOfTransport === 'CAR';
 
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
 
@@ -79,7 +92,7 @@ export function DeclarationOfTravelForm({
       participantApi.createDeclarationOfTravel(token, data),
     onSuccess: () => {
       toast.success('Declaration created and PDF generated');
-      queryClient.invalidateQueries({ queryKey: ['participant'] });
+      queryClient.refetchQueries({ queryKey: ['participant-auth'] });
       onClose();
     },
     onError: (error: Error) => {
@@ -102,14 +115,18 @@ export function DeclarationOfTravelForm({
       fromPlace: formData.fromPlace,
       toPlace: formData.toPlace,
       travelDate: formData.travelDate,
-      flightNumber: formData.flightNumber || undefined,
-      bookingReference: formData.bookingReference || undefined,
+      flightNumber: isCarTravel ? undefined : (formData.flightNumber || undefined),
+      bookingReference: isCarTravel ? undefined : (formData.bookingReference || undefined),
       dateOfBirth: formData.dateOfBirth,
       idNumber: formData.idNumber,
       sendingOrgName: formData.sendingOrgName,
       sendingOrgOid: formData.sendingOrgOid || undefined,
       sendingOrgAddress: formData.sendingOrgAddress,
       signatureDataUrl,
+      reason: formData.reason || undefined,
+      isCarTravel: isCarTravel || undefined,
+      licensePlate: isCarTravel ? (formData.licensePlate || undefined) : undefined,
+      driverName: isCarTravel ? (formData.driverName || undefined) : undefined,
     });
   };
 
@@ -118,18 +135,21 @@ export function DeclarationOfTravelForm({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Declaration of Travel" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title="Declaration on Honor" size="lg">
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Warning */}
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm text-amber-800 font-medium">
-              Only use this if you cannot find your boarding pass
+              {isCarTravel
+                ? 'Declaration on honor for car travel'
+                : 'Only use this if you cannot find your boarding pass'}
             </p>
             <p className="text-xs text-amber-700 mt-1">
-              This declaration is a substitute for a missing boarding pass. Please try to
-              locate your boarding pass first.
+              {isCarTravel
+                ? 'This declaration serves as proof of your car travel since invoices are not applicable for car journeys.'
+                : 'This declaration is a substitute for a missing boarding pass. Please try to locate your boarding pass first.'}
             </p>
           </div>
         </div>
@@ -183,7 +203,12 @@ export function DeclarationOfTravelForm({
                 formData.modeOfTransport === 'PLANE' &&
                 ` with flight number ${formData.flightNumber}`}
               {formData.bookingReference &&
+                !isCarTravel &&
                 ` and booking reference ${formData.bookingReference}`}
+              {isCarTravel && formData.licensePlate &&
+                ` with license plate ${formData.licensePlate}`}
+              {isCarTravel && formData.driverName &&
+                ` (driver: ${formData.driverName})`}
               ."
             </p>
           </CardContent>
@@ -238,20 +263,39 @@ export function DeclarationOfTravelForm({
               onChange={(e) => updateField('travelDate', e.target.value)}
               required
             />
-            {formData.modeOfTransport === 'PLANE' && (
-              <Input
-                label="Flight Number"
-                value={formData.flightNumber}
-                onChange={(e) => updateField('flightNumber', e.target.value)}
-                placeholder="e.g., FR1234"
-              />
+            {isCarTravel ? (
+              <>
+                <Input
+                  label="License Plate"
+                  value={formData.licensePlate}
+                  onChange={(e) => updateField('licensePlate', e.target.value)}
+                  placeholder="e.g., AB-123-CD"
+                />
+                <Input
+                  label="Driver Name (if you were a passenger)"
+                  value={formData.driverName}
+                  onChange={(e) => updateField('driverName', e.target.value)}
+                  placeholder="e.g., John Doe (leave empty if you drove)"
+                />
+              </>
+            ) : (
+              <>
+                {formData.modeOfTransport === 'PLANE' && (
+                  <Input
+                    label="Flight Number"
+                    value={formData.flightNumber}
+                    onChange={(e) => updateField('flightNumber', e.target.value)}
+                    placeholder="e.g., FR1234"
+                  />
+                )}
+                <Input
+                  label="Booking Reference"
+                  value={formData.bookingReference}
+                  onChange={(e) => updateField('bookingReference', e.target.value)}
+                  placeholder="e.g., ABC123"
+                />
+              </>
             )}
-            <Input
-              label="Booking Reference"
-              value={formData.bookingReference}
-              onChange={(e) => updateField('bookingReference', e.target.value)}
-              placeholder="e.g., ABC123"
-            />
           </div>
         </div>
 
@@ -307,6 +351,18 @@ export function DeclarationOfTravelForm({
               />
             </div>
           </div>
+        </div>
+
+        {/* Reason for Declaration */}
+        <div>
+          <h4 className="font-medium text-gray-900 mb-3">Reason for Declaration</h4>
+          <textarea
+            value={formData.reason}
+            onChange={(e) => updateField('reason', e.target.value)}
+            placeholder="Explain why you need this declaration (e.g., lost boarding pass, interrail travel, etc.)"
+            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all resize-none"
+            rows={3}
+          />
         </div>
 
         {/* Signature */}

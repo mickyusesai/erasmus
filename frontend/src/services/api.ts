@@ -1577,7 +1577,7 @@ export interface CityCountryValidationResponse {
   matches: boolean;
 }
 
-// Declaration of Travel types
+// Declaration on Honor (Declaration of Travel) types
 export interface DeclarationOfTravel {
   id: string;
   participantId: string;

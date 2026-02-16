@@ -104,51 +104,100 @@ const erasmusQuotes = [
   { quote: "Whether a party can have much success without a woman present I must ask others to decide.", author: "Erasmus of Rotterdam" },
 ];
 
-// Loading screen component with rotating Erasmus quotes
+// Loading screen component with travel animation, progress stages, and rotating Erasmus quotes
 function ConsolidationLoading() {
   const [quoteIndex, setQuoteIndex] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    const quoteInterval = setInterval(() => {
       setQuoteIndex((prev) => (prev + 1) % erasmusQuotes.length);
-    }, 4000); // Change quote every 4 seconds
+    }, 4000);
+    return () => clearInterval(quoteInterval);
+  }, []);
 
-    return () => clearInterval(interval);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setElapsed((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
   }, []);
 
   const currentQuote = erasmusQuotes[quoteIndex];
 
+  // Progress stages based on elapsed time
+  const getProgressStage = () => {
+    if (elapsed < 15) return { label: 'Analyzing your documents...', progress: 20 };
+    if (elapsed < 40) return { label: 'Extracting travel details...', progress: 45 };
+    if (elapsed < 70) return { label: 'Building your travel journey...', progress: 70 };
+    return { label: 'Almost done, finalizing...', progress: 90 };
+  };
+  const stage = getProgressStage();
+
   return (
     <div className="fixed inset-0 bg-white/95 backdrop-blur-sm z-50 flex items-center justify-center">
+      <style>{`
+        @keyframes fly-plane {
+          0% { left: -10%; }
+          100% { left: 110%; }
+        }
+        .plane-animation {
+          animation: fly-plane 6s linear infinite;
+        }
+        @keyframes dash-travel {
+          to { stroke-dashoffset: -20; }
+        }
+        .dotted-path {
+          stroke-dasharray: 8 6;
+          animation: dash-travel 1.5s linear infinite;
+        }
+      `}</style>
       <div className="max-w-lg mx-auto text-center px-6">
-        {/* Loading spinner */}
-        <div className="relative w-20 h-20 mx-auto mb-8">
-          <div className="absolute inset-0 border-4 border-primary-100 rounded-full" />
-          <div className="absolute inset-0 border-4 border-primary-600 rounded-full border-t-transparent animate-spin" />
-          <FileText className="absolute inset-0 m-auto w-8 h-8 text-primary-600" />
+        {/* Travel-themed animation: plane flying along dotted path */}
+        <div className="relative w-full h-24 mb-6 overflow-hidden">
+          <svg className="absolute inset-0 w-full h-full" viewBox="0 0 400 80" preserveAspectRatio="none">
+            <path
+              d="M 0 40 Q 100 10, 200 40 Q 300 70, 400 40"
+              fill="none"
+              stroke="#c7d2fe"
+              strokeWidth="2"
+              className="dotted-path"
+            />
+          </svg>
+          <div className="plane-animation absolute top-1/2 -translate-y-1/2" style={{ position: 'absolute' }}>
+            <Plane className="w-8 h-8 text-primary-600 -rotate-12" />
+          </div>
         </div>
 
-        {/* Loading message */}
+        {/* Progress stage label */}
         <h3 className="text-xl font-semibold text-gray-900 mb-2">
-          Analyzing your documents...
+          {stage.label}
         </h3>
-        <p className="text-gray-500 mb-8">
-          We're extracting travel information from your documents. This may take a moment.
+
+        {/* Progress bar */}
+        <div className="w-64 h-2 bg-gray-200 rounded-full mx-auto mb-2">
+          <div
+            className="h-2 bg-primary-500 rounded-full transition-all duration-1000 ease-linear"
+            style={{ width: `${stage.progress}%` }}
+          />
+        </div>
+        <p className="text-sm text-gray-500 mb-6">
+          This usually takes 1-2 minutes
         </p>
 
-        {/* Erasmus quote */}
-        <div className="bg-gradient-to-br from-primary-50 to-blue-50 rounded-2xl p-6 border border-primary-100">
-          <p className="text-lg italic text-gray-700 mb-3">
-            "{currentQuote.quote}"
+        {/* Erasmus quote (secondary) */}
+        <div className="bg-gradient-to-br from-primary-50 to-blue-50 rounded-2xl p-5 border border-primary-100">
+          <p className="text-base italic text-gray-700 mb-2">
+            &ldquo;{currentQuote.quote}&rdquo;
           </p>
-          <p className="text-sm text-primary-600 font-medium">
-            — {currentQuote.author}
+          <p className="text-xs text-primary-600 font-medium">
+            &mdash; {currentQuote.author}
           </p>
         </div>
 
         {/* Progress hint */}
         <p className="text-xs text-gray-400 mt-6">
-          Please don't close this page while we process your documents
+          Please don&apos;t close this page while we process your documents
         </p>
       </div>
     </div>
@@ -2736,16 +2785,26 @@ function AddTravelModal({
                             <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onViewDocument(doc);
-                      }}
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium ml-2"
-                    >
-                      View
-                    </button>
+                        <div className="flex items-center gap-1 ml-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onViewDocument(doc);
+                            }}
+                            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteUnlinkedDoc(e, doc.id, doc.originalFilename)}
+                            className="p-1 text-red-400 hover:text-red-600 transition-colors"
+                            title="Delete document"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                   </div>
                 ))}
               </div>
@@ -3083,7 +3142,7 @@ function Step3Confirm({
     mutationFn: (decData: { missingDocumentType: DocumentType; description: string; reason: string; place: string }) =>
       participantApi.createDeclaration(token, decData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      queryClient.refetchQueries({ queryKey: ['participant-auth'] });
       toast.success('Declaration submitted');
       setShowDeclarationModal(false);
     },
@@ -3165,7 +3224,7 @@ function Step3Confirm({
                   </h4>
                   <p className="text-sm text-blue-700 mt-1">
                     The following flights don't have a boarding pass. You can either upload
-                    one or sign a declaration of travel.
+                    one or sign a declaration on honor.
                   </p>
                   <ul className="mt-3 space-y-2">
                     {flightsMissingBoardingPass.map((item) => (
@@ -3388,7 +3447,7 @@ function Step3Confirm({
         isLoading={createDeclarationMutation.isPending}
       />
 
-      {/* Declaration of Travel Modal (for missing boarding pass) */}
+      {/* Declaration on Honor Modal (for missing boarding pass) */}
       {declarationTravelItem && (
         <MissingBoardingPassModal
           isOpen={true}

@@ -1472,7 +1472,7 @@ function TravelItemCard({
                       onBlur={() => {
                         const val = companyNameInput.trim() || null;
                         if (val !== (item.companyName || null)) {
-                          onEdit(item.id, { companyName: val } as Partial<CreateTravelItemData>);
+                          onEdit(item.id, { companyName: val });
                         }
                         setEditingCompanyName(false);
                       }}
@@ -1522,7 +1522,7 @@ function TravelItemCard({
                         onBlur={() => {
                           const val = parseFloat(exchangeRateInput);
                           if (!isNaN(val) && val > 0) {
-                            onEdit(item.id, { exchangeRateOverride: val } as Partial<CreateTravelItemData>);
+                            onEdit(item.id, { exchangeRateOverride: val });
                           }
                           setEditingExchangeRate(false);
                         }}
@@ -1537,7 +1537,7 @@ function TravelItemCard({
                   )}
                   {item.exchangeRateOverride != null && (
                     <button
-                      onClick={() => onEdit(item.id, { exchangeRateOverride: null } as Partial<CreateTravelItemData>)}
+                      onClick={() => onEdit(item.id, { exchangeRateOverride: null })}
                       className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-gray-500 hover:bg-gray-100 transition-colors"
                       title="Reset to automatic rate"
                     >
