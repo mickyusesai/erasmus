@@ -905,7 +905,7 @@ export const organisationApi = {
     return handleResponse<TravelItem>(res);
   },
 
-  updateTravelItem: async (participantId: string, itemId: string, data: Partial<TravelItem>) => {
+  updateTravelItem: async (participantId: string, itemId: string, data: Partial<CreateTravelItemData>) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}`, {
       method: 'PATCH',
       headers: getOrgAuthHeaders(),

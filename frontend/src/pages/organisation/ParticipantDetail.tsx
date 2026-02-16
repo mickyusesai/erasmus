@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -32,11 +32,17 @@ import {
   Pencil,
   Users,
   Navigation,
+  Plus,
+  RotateCcw,
+  Upload,
+  X,
+  Link2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData } from '../../services/api';
 import { clsx } from 'clsx';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -110,6 +116,22 @@ export default function OrgParticipantDetail() {
   const [notesLoaded, setNotesLoaded] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
+
+  // CRUD modal states
+  const [showReopenModal, setShowReopenModal] = useState(false);
+  const [reopenMessage, setReopenMessage] = useState('');
+  const [reopenClearAi, setReopenClearAi] = useState(false);
+  const [reopenClearItems, setReopenClearItems] = useState(false);
+  const [reopenClearDocs, setReopenClearDocs] = useState(false);
+
+  const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const emptyItem: CreateTravelItemData = { modeOfTransport: 'PLANE', fromLocation: '', toLocation: '', departureDate: '', amountOriginal: 0, currencyOriginal: 'EUR', amountEur: 0 };
+  const [newItemData, setNewItemData] = useState<CreateTravelItemData>(emptyItem);
+
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadDocType, setUploadDocType] = useState('OTHER');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('org-token');
@@ -228,6 +250,109 @@ export default function OrgParticipantDetail() {
       else navigate('/org/dashboard');
     },
     onError: (error: Error) => toast.error(error.message || 'Failed to delete participant'),
+  });
+
+  // ── CRUD Mutations ──
+
+  const reopenMutation = useMutation({
+    mutationFn: () => organisationApi.reopenReimbursement(id!, {
+      message: reopenMessage,
+      clearAiReview: reopenClearAi,
+      clearTravelItems: reopenClearItems,
+      clearDocuments: reopenClearDocs,
+    }),
+    onSuccess: () => {
+      toast.success('Reimbursement reopened');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      queryClient.invalidateQueries({ queryKey: ['participant-review', id] });
+      setShowReopenModal(false);
+      setReopenMessage('');
+      setReopenClearAi(false);
+      setReopenClearItems(false);
+      setReopenClearDocs(false);
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to reopen'),
+  });
+
+  const createTravelItemMutation = useMutation({
+    mutationFn: async (data: CreateTravelItemData) => {
+      await organisationApi.createTravelItem(id!, data);
+      await organisationApi.recalculateSummary(id!);
+    },
+    onSuccess: () => {
+      toast.success('Travel item added');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      setShowAddItemModal(false);
+      setNewItemData(emptyItem);
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to create travel item'),
+  });
+
+  const updateTravelItemMutation = useMutation({
+    mutationFn: async ({ itemId, data }: { itemId: string; data: Partial<CreateTravelItemData> }) => {
+      await organisationApi.updateTravelItem(id!, itemId, data);
+      await organisationApi.recalculateSummary(id!);
+    },
+    onSuccess: () => {
+      toast.success('Travel item updated');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to update travel item'),
+  });
+
+  const deleteTravelItemMutation = useMutation({
+    mutationFn: async (itemId: string) => {
+      await organisationApi.deleteTravelItem(id!, itemId);
+      await organisationApi.recalculateSummary(id!);
+    },
+    onSuccess: () => {
+      toast.success('Travel item deleted');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to delete travel item'),
+  });
+
+  const uploadDocumentMutation = useMutation({
+    mutationFn: async ({ file, docType }: { file: File; docType: string }) => {
+      await organisationApi.uploadDocument(id!, file, docType);
+    },
+    onSuccess: () => {
+      toast.success('Document uploaded');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      setShowUploadModal(false);
+      setUploadFile(null);
+      setUploadDocType('OTHER');
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to upload document'),
+  });
+
+  const deleteDocumentMutation = useMutation({
+    mutationFn: (docId: string) => organisationApi.deleteDocument(id!, docId),
+    onSuccess: () => {
+      toast.success('Document deleted');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to delete document'),
+  });
+
+  const linkDocumentMutation = useMutation({
+    mutationFn: ({ itemId, docId }: { itemId: string; docId: string }) =>
+      organisationApi.linkDocument(id!, itemId, docId),
+    onSuccess: () => {
+      toast.success('Document linked');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to link document'),
+  });
+
+  const unlinkDocumentMutation = useMutation({
+    mutationFn: ({ itemId, docId }: { itemId: string; docId: string }) =>
+      organisationApi.unlinkDocument(id!, itemId, docId),
+    onSuccess: () => {
+      toast.success('Document unlinked');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to unlink document'),
   });
 
   const toggleExpand = useCallback((itemId: string) => {
@@ -408,7 +533,16 @@ export default function OrgParticipantDetail() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <h3 className="font-semibold text-gray-900">Travel Items</h3>
-                    <span className="text-sm text-gray-400">{participant.travelItems.length} items</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-400">{participant.travelItems.length} items</span>
+                      <button
+                        onClick={() => setShowAddItemModal(true)}
+                        className="p-1.5 rounded-lg bg-primary-50 text-primary-600 hover:bg-primary-100 transition-colors"
+                        title="Add travel item"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -425,6 +559,16 @@ export default function OrgParticipantDetail() {
                           onToggleFinding={(findingId) => toggleFindingMutation.mutate({ findingId })}
                           docsById={docsById}
                           participantId={participant.id}
+                          allDocuments={participant.documents}
+                          onEdit={(itemId, data) => updateTravelItemMutation.mutate({ itemId, data })}
+                          onDelete={(itemId) => {
+                            if (confirm('Delete this travel item? This cannot be undone.')) {
+                              deleteTravelItemMutation.mutate(itemId);
+                            }
+                          }}
+                          onLinkDocument={(itemId, docId) => linkDocumentMutation.mutate({ itemId, docId })}
+                          onUnlinkDocument={(itemId, docId) => unlinkDocumentMutation.mutate({ itemId, docId })}
+                          isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending}
                         />
                       ))}
                     </div>
@@ -439,14 +583,32 @@ export default function OrgParticipantDetail() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <h3 className="font-semibold text-gray-900">All Documents</h3>
-                    <span className="text-sm text-gray-400">{participant.documents.length} files</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-400">{participant.documents.length} files</span>
+                      <button
+                        onClick={() => setShowUploadModal(true)}
+                        className="p-1.5 rounded-lg bg-primary-50 text-primary-600 hover:bg-primary-100 transition-colors"
+                        title="Upload document"
+                      >
+                        <Upload className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
                   {participant.documents.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {participant.documents.map((doc) => (
-                        <DocumentChip key={doc.id} document={doc} participantId={participant.id} />
+                        <DocumentChip
+                          key={doc.id}
+                          document={doc}
+                          participantId={participant.id}
+                          onDelete={() => {
+                            if (confirm(`Delete "${doc.renamedFilename}"? This cannot be undone.`)) {
+                              deleteDocumentMutation.mutate(doc.id);
+                            }
+                          }}
+                        />
                       ))}
                     </div>
                   ) : (
@@ -618,6 +780,12 @@ export default function OrgParticipantDetail() {
                         Mark as Paid
                       </Button>
                     )}
+                    {(participant.status === 'PARTICIPANT_COMPLETE' || participant.status === 'ADMIN_APPROVED') && (
+                      <Button variant="secondary" className="w-full" onClick={() => setShowReopenModal(true)}>
+                        <RotateCcw className="w-4 h-4 mr-2" />
+                        Reopen Reimbursement
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -686,8 +854,203 @@ export default function OrgParticipantDetail() {
             </div>
           </div>
         </div>
+
+        {/* ── Reopen Modal ── */}
+        <Modal isOpen={showReopenModal} onClose={() => setShowReopenModal(false)} title="Reopen Reimbursement">
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              This will set the participant's status back to Draft and allow them to edit and resubmit their reimbursement.
+            </p>
+            <div>
+              <label className="label">Message to participant *</label>
+              <textarea
+                value={reopenMessage}
+                onChange={(e) => setReopenMessage(e.target.value)}
+                placeholder="Explain what needs to be changed..."
+                className="input min-h-[100px] resize-y"
+                rows={4}
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">Optionally clear data:</p>
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={reopenClearAi} onChange={(e) => setReopenClearAi(e.target.checked)} className="rounded border-gray-300" />
+                Clear AI review findings
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={reopenClearItems} onChange={(e) => setReopenClearItems(e.target.checked)} className="rounded border-gray-300" />
+                Clear travel items
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={reopenClearDocs} onChange={(e) => setReopenClearDocs(e.target.checked)} className="rounded border-gray-300" />
+                Clear documents
+              </label>
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="secondary" onClick={() => setShowReopenModal(false)}>Cancel</Button>
+              <Button
+                onClick={() => reopenMutation.mutate()}
+                loading={reopenMutation.isPending}
+                disabled={!reopenMessage.trim()}
+              >
+                <RotateCcw className="w-4 h-4 mr-2" />
+                Reopen
+              </Button>
+            </div>
+          </div>
+        </Modal>
+
+        {/* ── Add Travel Item Modal ── */}
+        <Modal isOpen={showAddItemModal} onClose={() => setShowAddItemModal(false)} title="Add Travel Item" size="lg">
+          <TravelItemForm
+            data={newItemData}
+            onChange={setNewItemData}
+            onSubmit={() => createTravelItemMutation.mutate(newItemData)}
+            onCancel={() => { setShowAddItemModal(false); setNewItemData(emptyItem); }}
+            loading={createTravelItemMutation.isPending}
+            submitLabel="Add Travel Item"
+          />
+        </Modal>
+
+        {/* ── Upload Document Modal ── */}
+        <Modal isOpen={showUploadModal} onClose={() => { setShowUploadModal(false); setUploadFile(null); }} title="Upload Document">
+          <div className="space-y-4">
+            <div>
+              <label className="label">Document type</label>
+              <select
+                value={uploadDocType}
+                onChange={(e) => setUploadDocType(e.target.value)}
+                className="input"
+              >
+                {Object.entries(docTypeLabels).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">File</label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.gif,.webp"
+                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                className="input text-sm file:mr-4 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+              />
+            </div>
+            {uploadFile && (
+              <p className="text-sm text-gray-500">
+                Selected: {uploadFile.name} ({(uploadFile.size / 1024).toFixed(0)} KB)
+              </p>
+            )}
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="secondary" onClick={() => { setShowUploadModal(false); setUploadFile(null); }}>Cancel</Button>
+              <Button
+                onClick={() => uploadFile && uploadDocumentMutation.mutate({ file: uploadFile, docType: uploadDocType })}
+                loading={uploadDocumentMutation.isPending}
+                disabled={!uploadFile}
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Upload
+              </Button>
+            </div>
+          </div>
+        </Modal>
       </div>
     </div>
+  );
+}
+
+// ── TravelItemForm (shared between Add and Edit) ──────────────
+
+function TravelItemForm({
+  data,
+  onChange,
+  onSubmit,
+  onCancel,
+  loading,
+  submitLabel,
+}: {
+  data: CreateTravelItemData;
+  onChange: (data: CreateTravelItemData) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  loading: boolean;
+  submitLabel: string;
+}) {
+  const update = (field: string, value: string | number | undefined) => {
+    onChange({ ...data, [field]: value });
+  };
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="label">Mode of transport *</label>
+          <select value={data.modeOfTransport} onChange={(e) => update('modeOfTransport', e.target.value)} className="input">
+            <option value="PLANE">Plane</option>
+            <option value="TRAIN">Train</option>
+            <option value="BUS">Bus</option>
+            <option value="CAR">Car</option>
+            <option value="FERRY">Ferry</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Currency</label>
+          <input type="text" value={data.currencyOriginal} onChange={(e) => update('currencyOriginal', e.target.value)} className="input" />
+        </div>
+        <div>
+          <label className="label">From *</label>
+          <input type="text" value={data.fromLocation} onChange={(e) => update('fromLocation', e.target.value)} className="input" required />
+        </div>
+        <div>
+          <label className="label">To *</label>
+          <input type="text" value={data.toLocation} onChange={(e) => update('toLocation', e.target.value)} className="input" required />
+        </div>
+        <div>
+          <label className="label">Departure date *</label>
+          <input type="date" value={data.departureDate} onChange={(e) => update('departureDate', e.target.value)} className="input" required />
+        </div>
+        <div>
+          <label className="label">Arrival date</label>
+          <input type="date" value={data.arrivalDate || ''} onChange={(e) => update('arrivalDate', e.target.value || undefined)} className="input" />
+        </div>
+        <div>
+          <label className="label">Amount (EUR) *</label>
+          <input type="number" step="0.01" value={data.amountEur} onChange={(e) => update('amountEur', parseFloat(e.target.value) || 0)} className="input" required />
+        </div>
+        <div>
+          <label className="label">Amount (original currency)</label>
+          <input type="number" step="0.01" value={data.amountOriginal} onChange={(e) => update('amountOriginal', parseFloat(e.target.value) || 0)} className="input" />
+        </div>
+        {data.modeOfTransport === 'PLANE' && (
+          <div>
+            <label className="label">Flight number</label>
+            <input type="text" value={data.flightNumber || ''} onChange={(e) => update('flightNumber', e.target.value || undefined)} className="input" />
+          </div>
+        )}
+        <div>
+          <label className="label">Booking reference</label>
+          <input type="text" value={data.bookingReference || ''} onChange={(e) => update('bookingReference', e.target.value || undefined)} className="input" />
+        </div>
+        {data.modeOfTransport === 'CAR' && (
+          <div>
+            <label className="label">Distance (km)</label>
+            <input type="number" value={data.distanceKm || ''} onChange={(e) => update('distanceKm', parseFloat(e.target.value) || undefined)} className="input" />
+          </div>
+        )}
+      </div>
+      <div>
+        <label className="label">Comment</label>
+        <textarea value={data.comment || ''} onChange={(e) => update('comment', e.target.value || undefined)} className="input resize-y min-h-[60px]" rows={2} />
+      </div>
+      <div className="flex justify-end gap-3 pt-2">
+        <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>
+        <Button type="submit" loading={loading} disabled={!data.fromLocation || !data.toLocation || !data.departureDate}>
+          {submitLabel}
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -784,7 +1147,7 @@ function FindingItem({
 
 // ── DocumentChip (compact view for All Documents section) ─────
 
-function DocumentChip({ document, participantId }: { document: Document; participantId: string }) {
+function DocumentChip({ document, participantId, onDelete }: { document: Document; participantId: string; onDelete?: () => void }) {
   const handleView = async () => {
     try {
       const { url } = await organisationApi.getDocumentUrl(participantId, document.id);
@@ -795,23 +1158,31 @@ function DocumentChip({ document, participantId }: { document: Document; partici
   };
 
   return (
-    <button
-      onClick={handleView}
-      className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left group"
-    >
-      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate">{document.renamedFilename}</p>
-        <p className="text-xs text-gray-500">{docTypeLabels[document.documentType] || document.documentType}</p>
-      </div>
-      <ExternalLink className="w-3 h-3 text-gray-300 group-hover:text-primary-500 flex-shrink-0" />
-    </button>
+    <div className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left group">
+      <button onClick={handleView} className="flex items-center gap-2 flex-1 min-w-0">
+        <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-900 truncate">{document.renamedFilename}</p>
+          <p className="text-xs text-gray-500">{docTypeLabels[document.documentType] || document.documentType}</p>
+        </div>
+        <ExternalLink className="w-3 h-3 text-gray-300 group-hover:text-primary-500 flex-shrink-0" />
+      </button>
+      {onDelete && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="p-1 rounded hover:bg-red-100 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+          title="Delete document"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
   );
 }
 
 // ── InlineDocumentCard (inside expanded travel item) ──────────
 
-function InlineDocumentCard({ document, participantId }: { document: Document; participantId: string }) {
+function InlineDocumentCard({ document, participantId, onUnlink }: { document: Document; participantId: string; onUnlink?: () => void }) {
   const handleView = async () => {
     try {
       const { url } = await organisationApi.getDocumentUrl(participantId, document.id);
@@ -822,17 +1193,25 @@ function InlineDocumentCard({ document, participantId }: { document: Document; p
   };
 
   return (
-    <button
-      onClick={handleView}
-      className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg hover:border-primary-300 hover:bg-primary-50 transition-colors text-left group"
-    >
-      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium text-gray-800 truncate">{document.renamedFilename}</p>
-        <p className="text-xs text-gray-400">{docTypeLabels[document.documentType] || document.documentType}</p>
-      </div>
-      <ExternalLink className="w-3 h-3 text-gray-300 group-hover:text-primary-500 flex-shrink-0" />
-    </button>
+    <div className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg hover:border-primary-300 hover:bg-primary-50 transition-colors text-left group">
+      <button onClick={handleView} className="flex items-center gap-2 flex-1 min-w-0">
+        <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-gray-800 truncate">{document.renamedFilename}</p>
+          <p className="text-xs text-gray-400">{docTypeLabels[document.documentType] || document.documentType}</p>
+        </div>
+        <ExternalLink className="w-3 h-3 text-gray-300 group-hover:text-primary-500 flex-shrink-0" />
+      </button>
+      {onUnlink && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onUnlink(); }}
+          className="p-0.5 rounded hover:bg-red-100 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+          title="Unlink from travel item"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -847,6 +1226,12 @@ function TravelItemCard({
   onToggleFinding,
   docsById,
   participantId,
+  allDocuments,
+  onEdit,
+  onDelete,
+  onLinkDocument,
+  onUnlinkDocument,
+  isMutating,
 }: {
   item: TravelItem;
   expanded: boolean;
@@ -856,10 +1241,34 @@ function TravelItemCard({
   onToggleFinding: (findingId: string) => void;
   docsById: Record<string, Document>;
   participantId: string;
+  allDocuments: Document[];
+  onEdit: (itemId: string, data: Partial<CreateTravelItemData>) => void;
+  onDelete: (itemId: string) => void;
+  onLinkDocument: (itemId: string, docId: string) => void;
+  onUnlinkDocument: (itemId: string, docId: string) => void;
+  isMutating: boolean;
 }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState<CreateTravelItemData>({
+    modeOfTransport: item.modeOfTransport,
+    fromLocation: item.fromLocation,
+    toLocation: item.toLocation,
+    departureDate: item.departureDate ? new Date(item.departureDate).toISOString().split('T')[0] : '',
+    arrivalDate: item.arrivalDate ? new Date(item.arrivalDate).toISOString().split('T')[0] : undefined,
+    amountOriginal: item.amountOriginal,
+    currencyOriginal: item.currencyOriginal,
+    amountEur: item.amountEur,
+    flightNumber: item.flightNumber || undefined,
+    bookingReference: item.bookingReference || undefined,
+    distanceKm: item.distanceKm || undefined,
+    comment: item.comment || undefined,
+  });
+  const [showLinkDropdown, setShowLinkDropdown] = useState(false);
+
   const Icon = transportIcons[item.modeOfTransport];
   const linkedDocIds = getLinkedDocIds(item);
   const linkedDocs = linkedDocIds.map(id => docsById[id]).filter(Boolean);
+  const unlinkedDocs = allDocuments.filter(d => !linkedDocIds.includes(d.id));
   const warnings = parseValidationWarnings(item.validationWarnings);
 
   const uncheckedCriticalCount = findings.filter(f => f.severity === 'critical' && !f.checked).length;
@@ -957,80 +1366,159 @@ function TravelItemCard({
       {/* Expanded details */}
       {expanded && (
         <div className="px-4 pb-4 space-y-4 border-t border-gray-200 pt-4">
-          {/* Detail grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-            <DetailField label="Mode" value={item.modeOfTransport} />
-            <DetailField label="Departure" value={formatDate(item.departureDate)} />
-            {item.arrivalDate && <DetailField label="Arrival" value={formatDate(item.arrivalDate)} />}
-            {item.purchaseDate && (
-              <DetailField
-                label="Purchase Date"
-                value={`${formatDate(item.purchaseDate)}${item.purchaseDateAutoFilled ? ' (auto)' : ''}`}
-              />
-            )}
-            {item.flightNumber && <DetailField label="Flight #" value={item.flightNumber} />}
-            {item.bookingReference && <DetailField label="Booking Ref" value={item.bookingReference} />}
-            <DetailField label="Amount (EUR)" value={formatCurrency(item.amountEur)} />
-            {item.currencyOriginal !== 'EUR' && (
-              <DetailField label={`Amount (${item.currencyOriginal})`} value={`${item.amountOriginal}`} />
-            )}
-            {item.manuallyEdited && item.originalAmountFromAi != null && (
-              <DetailField label="AI Original Amount" value={formatCurrency(item.originalAmountFromAi)} highlight="orange" />
-            )}
-            {item.numberOfPassengers && item.numberOfPassengers > 1 && (
-              <>
-                <DetailField label="Passengers" value={`${item.numberOfPassengers}`} />
-                {item.participantPortion != null && (
-                  <DetailField label="Claimed Portion" value={`${(item.participantPortion * 100).toFixed(0)}%`} />
-                )}
-              </>
-            )}
-            {item.distanceKm && <DetailField label="Distance" value={`${item.distanceKm} km`} />}
-            {item.isDriverCarpool && <DetailField label="Driver/Carpool" value="Yes" />}
-            {item.luggageAmountEur != null && item.luggageAmountEur > 0 && (
-              <DetailField label="Luggage Fee" value={formatCurrency(item.luggageAmountEur)} />
-            )}
-            {item.amountIncludedInRoundTrip && (
-              <DetailField label="Round-trip" value="Price on outbound leg" />
-            )}
+          {/* Action buttons */}
+          <div className="flex gap-2 justify-end">
+            <button
+              onClick={() => setIsEditing(!isEditing)}
+              className={clsx(
+                'flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors',
+                isEditing ? 'bg-gray-200 text-gray-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+              )}
+            >
+              <Pencil className="w-3 h-3" />
+              {isEditing ? 'Cancel' : 'Edit'}
+            </button>
+            <button
+              onClick={() => onDelete(item.id)}
+              disabled={isMutating}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-red-50 text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50"
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete
+            </button>
           </div>
 
-          {/* Comment */}
-          {item.comment && (
-            <div className="text-sm">
-              <p className="text-gray-500 text-xs mb-1">Participant comment</p>
-              <p className="text-gray-700 italic bg-white rounded-lg px-3 py-2 border border-gray-100">{item.comment}</p>
-            </div>
-          )}
+          {isEditing ? (
+            <TravelItemForm
+              data={editData}
+              onChange={setEditData}
+              onSubmit={() => {
+                onEdit(item.id, editData);
+                setIsEditing(false);
+              }}
+              onCancel={() => setIsEditing(false)}
+              loading={isMutating}
+              submitLabel="Save Changes"
+            />
+          ) : (
+            <>
+              {/* Detail grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                <DetailField label="Mode" value={item.modeOfTransport} />
+                <DetailField label="Departure" value={formatDate(item.departureDate)} />
+                {item.arrivalDate && <DetailField label="Arrival" value={formatDate(item.arrivalDate)} />}
+                {item.purchaseDate && (
+                  <DetailField
+                    label="Purchase Date"
+                    value={`${formatDate(item.purchaseDate)}${item.purchaseDateAutoFilled ? ' (auto)' : ''}`}
+                  />
+                )}
+                {item.flightNumber && <DetailField label="Flight #" value={item.flightNumber} />}
+                {item.bookingReference && <DetailField label="Booking Ref" value={item.bookingReference} />}
+                <DetailField label="Amount (EUR)" value={formatCurrency(item.amountEur)} />
+                {item.currencyOriginal !== 'EUR' && (
+                  <DetailField label={`Amount (${item.currencyOriginal})`} value={`${item.amountOriginal}`} />
+                )}
+                {item.manuallyEdited && item.originalAmountFromAi != null && (
+                  <DetailField label="AI Original Amount" value={formatCurrency(item.originalAmountFromAi)} highlight="orange" />
+                )}
+                {item.numberOfPassengers && item.numberOfPassengers > 1 && (
+                  <>
+                    <DetailField label="Passengers" value={`${item.numberOfPassengers}`} />
+                    {item.participantPortion != null && (
+                      <DetailField label="Claimed Portion" value={`${(item.participantPortion * 100).toFixed(0)}%`} />
+                    )}
+                  </>
+                )}
+                {item.distanceKm && <DetailField label="Distance" value={`${item.distanceKm} km`} />}
+                {item.isDriverCarpool && <DetailField label="Driver/Carpool" value="Yes" />}
+                {item.luggageAmountEur != null && item.luggageAmountEur > 0 && (
+                  <DetailField label="Luggage Fee" value={formatCurrency(item.luggageAmountEur)} />
+                )}
+                {item.amountIncludedInRoundTrip && (
+                  <DetailField label="Round-trip" value="Price on outbound leg" />
+                )}
+              </div>
 
-          {/* Consolidation notes (from AI) */}
-          {item.consolidationNotes && (
-            <div className="text-sm">
-              <p className="text-gray-500 text-xs mb-1">AI consolidation note</p>
-              <p className="text-gray-500 italic text-xs bg-gray-100 rounded-lg px-3 py-2">{item.consolidationNotes}</p>
-            </div>
-          )}
+              {/* Comment */}
+              {item.comment && (
+                <div className="text-sm">
+                  <p className="text-gray-500 text-xs mb-1">Participant comment</p>
+                  <p className="text-gray-700 italic bg-white rounded-lg px-3 py-2 border border-gray-100">{item.comment}</p>
+                </div>
+              )}
 
-          {/* Validation warnings */}
-          {warnings.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {warnings.map((w, i) => (
-                <span key={i} className="px-2 py-1 rounded text-xs bg-amber-50 text-amber-700 border border-amber-200">
-                  {w}
-                </span>
-              ))}
-            </div>
+              {/* Consolidation notes (from AI) */}
+              {item.consolidationNotes && (
+                <div className="text-sm">
+                  <p className="text-gray-500 text-xs mb-1">AI consolidation note</p>
+                  <p className="text-gray-500 italic text-xs bg-gray-100 rounded-lg px-3 py-2">{item.consolidationNotes}</p>
+                </div>
+              )}
+
+              {/* Validation warnings */}
+              {warnings.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {warnings.map((w, i) => (
+                    <span key={i} className="px-2 py-1 rounded text-xs bg-amber-50 text-amber-700 border border-amber-200">
+                      {w}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
           {/* Linked Documents */}
           <div>
-            <p className="text-xs font-medium text-gray-500 mb-2">
-              Linked Documents ({linkedDocs.length})
-            </p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-medium text-gray-500">
+                Linked Documents ({linkedDocs.length})
+              </p>
+              <div className="relative">
+                <button
+                  onClick={() => setShowLinkDropdown(!showLinkDropdown)}
+                  disabled={unlinkedDocs.length === 0}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-primary-600 hover:bg-primary-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={unlinkedDocs.length === 0 ? 'All documents are already linked' : 'Link a document'}
+                >
+                  <Link2 className="w-3 h-3" />
+                  Link
+                </button>
+                {showLinkDropdown && unlinkedDocs.length > 0 && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowLinkDropdown(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-64 max-h-48 overflow-y-auto">
+                      {unlinkedDocs.map((doc) => (
+                        <button
+                          key={doc.id}
+                          onClick={() => {
+                            onLinkDocument(item.id, doc.id);
+                            setShowLinkDropdown(false);
+                          }}
+                          className="w-full px-3 py-2 text-left hover:bg-gray-50 flex items-center gap-2 text-sm"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-gray-900 truncate text-xs">{doc.renamedFilename}</p>
+                            <p className="text-gray-400 text-xs">{docTypeLabels[doc.documentType] || doc.documentType}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
             {linkedDocs.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {linkedDocs.map((doc) => (
-                  <InlineDocumentCard key={doc.id} document={doc} participantId={participantId} />
+                  <InlineDocumentCard
+                    key={doc.id}
+                    document={doc}
+                    participantId={participantId}
+                    onUnlink={() => onUnlinkDocument(item.id, doc.id)}
+                  />
                 ))}
               </div>
             ) : (
