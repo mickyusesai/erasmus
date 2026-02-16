@@ -717,7 +717,8 @@ IMPORTANT RULES:
   try {
     const response = await client.chat.completions.create({
       model: 'gpt-5.2',
-      max_completion_tokens: 4000,
+      max_completion_tokens: 8000,
+      reasoning_effort: 'high',
       messages: [{ role: 'user', content: prompt }],
     } as any);
 

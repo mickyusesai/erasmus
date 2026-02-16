@@ -277,6 +277,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       const response = await this.client.chat.completions.create({
         model: this.model,
         max_completion_tokens: 2000, // Light extraction - keep it fast
+        reasoning_effort: 'low',
         messages: [
           {
             role: 'user',
@@ -960,7 +961,8 @@ Do NOT include in warnings (these are handled elsewhere):
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_completion_tokens: 8000,
+        max_completion_tokens: 16000,
+        reasoning_effort: 'high',
         messages: [
           {
             role: 'user',
