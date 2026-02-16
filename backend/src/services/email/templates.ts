@@ -26,7 +26,15 @@ function wrapInLayout(content: string): string {
 
 function button(url: string, label: string): string {
   return `<div style="text-align: center; margin: 30px 0;">
-      <a href="${url}" style="display: inline-block; background: linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%); color: #ffffff !important; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 16px; mso-line-height-rule: exactly;" target="_blank"><!--[if mso]><span style="color:#ffffff;">${label}</span><![endif]--><!--[if !mso]><!--><span style="color: #ffffff;">${label}</span><!--<![endif]--></a>
+      <!--[if mso]>
+      <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${url}" style="height:48px;v-text-anchor:middle;width:220px;" arcsize="17%" fillcolor="#8b5cf6" stroke="false">
+        <w:anchorlock/>
+        <center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:600;">${label}</center>
+      </v:roundrect>
+      <![endif]-->
+      <!--[if !mso]><!-->
+      <a href="${url}" style="display: inline-block; background-color: #8b5cf6; background: linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%); color: #ffffff !important; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 16px;" target="_blank"><span style="color: #ffffff;">${label}</span></a>
+      <!--<![endif]-->
     </div>`;
 }
 

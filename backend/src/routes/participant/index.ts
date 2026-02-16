@@ -71,6 +71,8 @@ const updateTravelItemSchema = z.object({
   // Car travel specific
   distanceKm: z.number().nullable().optional(),
   isDriverCarpool: z.boolean().optional(),
+  // Company / airline name
+  companyName: z.string().nullable().optional(),
 });
 
 const declarationOnHonorSchema = z.object({
@@ -95,6 +97,10 @@ interface DeclarationOfTravelInput {
   sendingOrgOid?: string | null;
   sendingOrgAddress: string;
   signatureDataUrl: string;
+  reason?: string | null;
+  isCarTravel?: boolean;
+  licensePlate?: string | null;
+  driverName?: string | null;
 }
 
 const declarationOfTravelSchema = z.object({
@@ -112,6 +118,11 @@ const declarationOfTravelSchema = z.object({
   sendingOrgOid: z.string().nullable().optional(),
   sendingOrgAddress: z.string().min(1, 'Sending organisation address is required'),
   signatureDataUrl: z.string().min(1, 'Signature is required'),
+  // New fields for car travel and reason
+  reason: z.string().nullable().optional(),
+  isCarTravel: z.boolean().optional(),
+  licensePlate: z.string().nullable().optional(),
+  driverName: z.string().nullable().optional(),
 });
 
 // Wrap async route handlers
@@ -540,9 +551,10 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
   // If amount is being changed, mark as manually edited
   if (isAmountChange) {
     updateData.manuallyEdited = true;
-    // Store original AI amount if not already set
+    // Store original AI amount and currency if not already set
     if (!current.originalAmountFromAi) {
       updateData.originalAmountFromAi = current.amountOriginal;
+      updateData.originalCurrencyFromAi = current.currencyOriginal;
     }
   }
 
@@ -1077,6 +1089,10 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
     sendingOrgOid: data.sendingOrgOid,
     sendingOrgAddress: data.sendingOrgAddress,
     signatureDataUrl: data.signatureDataUrl,
+    reason: data.reason,
+    isCarTravel: data.isCarTravel,
+    licensePlate: data.licensePlate,
+    driverName: data.driverName,
   });
 
   // Create the declaration record
@@ -1098,6 +1114,10 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
       sendingOrgAddress: data.sendingOrgAddress,
       signatureDataUrl: data.signatureDataUrl,
       generatedPdfPath: filePath,
+      reason: data.reason || null,
+      isCarTravel: data.isCarTravel || false,
+      licensePlate: data.licensePlate || null,
+      driverName: data.driverName || null,
     },
   });
 

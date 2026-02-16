@@ -13,7 +13,6 @@ export default function ProjectCreate() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [venueAddress, setVenueAddress] = useState('');
-  const [carRatePerKm, setCarRatePerKm] = useState('0.22');
 
   // Check if logged in
   useEffect(() => {
@@ -38,7 +37,6 @@ export default function ProjectCreate() {
       venueAddress: venueAddress || undefined,
       startDate,
       endDate,
-      carRatePerKm: parseFloat(carRatePerKm),
     }),
     onSuccess: (data) => {
       toast.success(`Project created! Used ${data.creditUsed === 'FOUNDING' ? 'founding credit' : data.creditUsed === 'ANNUAL' ? 'annual license' : '1 credit'}.`);
@@ -221,26 +219,6 @@ export default function ProjectCreate() {
                   className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
               </div>
-            </div>
-
-            <div>
-              <label htmlFor="carRatePerKm" className="block text-sm font-medium text-gray-700 mb-1">
-                Car Rate per KM (EUR) *
-              </label>
-              <input
-                id="carRatePerKm"
-                type="number"
-                step="0.01"
-                min="0"
-                value={carRatePerKm}
-                onChange={(e) => setCarRatePerKm(e.target.value)}
-                required
-                disabled={!canCreate}
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Standard Erasmus+ rate is €0.22 per km
-              </p>
             </div>
 
             <div className="flex gap-4 pt-4">

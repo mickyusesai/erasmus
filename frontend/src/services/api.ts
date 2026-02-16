@@ -806,6 +806,15 @@ export const organisationApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  bulkDeleteParticipants: async (ids: string[]) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/bulk-delete`, {
+      method: 'POST',
+      headers: { ...getOrgAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    return handleResponse<{ success: boolean; deletedCount: number }>(res);
+  },
+
   sendMagicLink: async (participantId: string) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/send-magic-link`, {
       method: 'POST',
@@ -1370,6 +1379,10 @@ export interface TravelItem {
   checked?: boolean;
   // Exclusion from reimbursement
   excludedFromReimbursement?: boolean;
+  // Currency and company info
+  originalCurrencyFromAi?: string | null;
+  exchangeRateOverride?: number | null;
+  companyName?: string | null;
 }
 
 export type TransportMode = 'PLANE' | 'TRAIN' | 'BUS' | 'CAR' | 'FERRY' | 'OTHER';
@@ -1393,6 +1406,9 @@ export interface CreateTravelItemData {
   // Car travel specific
   distanceKm?: number;
   isDriverCarpool?: boolean;
+  // Organisation overrides
+  exchangeRateOverride?: number | null;
+  companyName?: string | null;
 }
 
 export interface Declaration {
@@ -1578,6 +1594,10 @@ export interface DeclarationOfTravel {
   sendingOrgName: string;
   sendingOrgOid?: string;
   sendingOrgAddress: string;
+  reason?: string | null;
+  isCarTravel?: boolean;
+  licensePlate?: string | null;
+  driverName?: string | null;
   signatureDataUrl: string;
   signedAt: string;
   generatedPdfPath?: string;
@@ -1606,6 +1626,10 @@ export interface CreateDeclarationOfTravelData {
   sendingOrgOid?: string;
   sendingOrgAddress: string;
   signatureDataUrl: string;
+  reason?: string;
+  isCarTravel?: boolean;
+  licensePlate?: string;
+  driverName?: string;
 }
 
 // Dissemination types

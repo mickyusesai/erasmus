@@ -22,6 +22,7 @@ import {
   Share2,
   Search,
   Bell,
+  Download,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -211,6 +212,7 @@ export default function OrgProjectDetail() {
               project={project}
               projectId={id!}
               participants={participants}
+              countryLimits={countryLimits || []}
             />
           )}
           {activeTab === 'settings' && (
@@ -283,11 +285,13 @@ function ProgressIcon({ status }: { status: ProgressStatus }) {
 function OverviewTab({
   project,
   projectId,
-  participants
+  participants,
+  countryLimits
 }: {
   project: any;
   projectId: string;
   participants: OrgParticipant[];
+  countryLimits: any[];
 }) {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -429,6 +433,54 @@ function OverviewTab({
     },
   });
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [showReimbursementWarning, setShowReimbursementWarning] = useState(false);
+  const [pendingEmailAction, setPendingEmailAction] = useState<{ type: 'magic' | 'reminder'; ids: string[] } | null>(null);
+
+  const deleteParticipantMutation = useMutation({
+    mutationFn: (participantId: string) => organisationApi.deleteParticipant(participantId),
+    onSuccess: () => {
+      toast.success('Participant deleted');
+      queryClient.invalidateQueries({ queryKey: ['org-project'] });
+      queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits'] });
+      setShowDeleteConfirm(null);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete participant');
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => organisationApi.bulkDeleteParticipants(ids),
+    onSuccess: (data) => {
+      toast.success(`Deleted ${data.deletedCount} participants`);
+      queryClient.invalidateQueries({ queryKey: ['org-project'] });
+      queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits'] });
+      setSelectedIds([]);
+      setShowBulkDeleteConfirm(false);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete participants');
+    },
+  });
+
+  const checkReimbursementWarning = (ids: string[], type: 'magic' | 'reminder') => {
+    const selectedParticipants = participants.filter((p) => ids.includes(p.id));
+    const countriesWithNoLimit = (countryLimits || [])
+      .filter((limit: any) => limit.maxReimbursementAmount === 0)
+      .map((limit: any) => limit.country);
+    const hasUnconfigured = selectedParticipants.some((p) => countriesWithNoLimit.includes(p.country));
+    if (hasUnconfigured) {
+      setPendingEmailAction({ type, ids });
+      setShowReimbursementWarning(true);
+      return true;
+    }
+    return false;
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
@@ -522,6 +574,20 @@ function OverviewTab({
           <Upload className="w-4 h-4 mr-2" />
           Import CSV
         </Button>
+        <a
+          href="/Reimbursement_List_TEMPLATE.csv"
+          download
+          className="relative group"
+        >
+          <Button variant="secondary" type="button" onClick={(e) => e.stopPropagation()}>
+            <Download className="w-4 h-4 mr-2" />
+            Download Template
+          </Button>
+          <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+            This is a CSV file you can open with Excel or Google Sheets. Copy-paste your participant data (first name, last name, email, country) into the template, then save/export as CSV. Upload it here and your participant list will appear automatically.
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-gray-900" />
+          </div>
+        </a>
         <div className="flex-1" />
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -543,7 +609,12 @@ function OverviewTab({
               {needsMagicLink.length > 0 && (
                 <Button
                   variant="secondary"
-                  onClick={() => sendMagicLinksMutation.mutate(needsMagicLink.map((p) => p.id))}
+                  onClick={() => {
+                    const ids = needsMagicLink.map((p) => p.id);
+                    if (!checkReimbursementWarning(ids, 'magic')) {
+                      sendMagicLinksMutation.mutate(ids);
+                    }
+                  }}
                   loading={sendMagicLinksMutation.isPending}
                 >
                   <Send className="w-4 h-4 mr-2" />
@@ -553,13 +624,26 @@ function OverviewTab({
               {needsReminder.length > 0 && (
                 <Button
                   variant="secondary"
-                  onClick={() => sendRemindersMutation.mutate(needsReminder.map((p) => p.id))}
+                  onClick={() => {
+                    const ids = needsReminder.map((p) => p.id);
+                    if (!checkReimbursementWarning(ids, 'reminder')) {
+                      sendRemindersMutation.mutate(ids);
+                    }
+                  }}
                   loading={sendRemindersMutation.isPending}
                 >
                   <Bell className="w-4 h-4 mr-2" />
                   Send Reminders ({needsReminder.length})
                 </Button>
               )}
+              <Button
+                variant="danger"
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                loading={bulkDeleteMutation.isPending}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Selected ({selectedIds.length})
+              </Button>
             </>
           );
         })()}
@@ -715,6 +799,7 @@ function OverviewTab({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (checkReimbursementWarning([participant.id], 'reminder')) return;
                               organisationApi.sendReminder(participant.id).then(() => {
                                 toast.success(`Reminder sent to ${participant.firstName}`);
                               }).catch(() => {
@@ -731,6 +816,7 @@ function OverviewTab({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (checkReimbursementWarning([participant.id], 'magic')) return;
                               organisationApi.sendMagicLink(participant.id).then(() => {
                                 toast.success(`Magic link sent to ${participant.firstName}`);
                                 queryClient.invalidateQueries({ queryKey: ['org-participants'] });
@@ -750,12 +836,24 @@ function OverviewTab({
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <Link
-                          to={`/org/participants/${participant.id}`}
-                          className="text-primary-600 hover:text-primary-700 text-sm font-medium"
-                        >
-                          View
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            to={`/org/participants/${participant.id}`}
+                            className="text-primary-600 hover:text-primary-700 text-sm font-medium"
+                          >
+                            View
+                          </Link>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowDeleteConfirm(participant.id);
+                            }}
+                            className="p-1 text-gray-400 hover:text-red-600 rounded transition-colors"
+                            title="Delete participant"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -790,6 +888,88 @@ function OverviewTab({
         onClose={() => setShowImportModal(false)}
         projectId={projectId}
       />
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={!!showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(null)}
+        title="Delete Participant"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600">
+            Are you sure you want to delete this participant? This will permanently remove all their data, uploaded documents, and reimbursement records. This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button variant="secondary" onClick={() => setShowDeleteConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => showDeleteConfirm && deleteParticipantMutation.mutate(showDeleteConfirm)}
+              loading={deleteParticipantMutation.isPending}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Bulk Delete Confirmation Modal */}
+      <Modal
+        isOpen={showBulkDeleteConfirm}
+        onClose={() => setShowBulkDeleteConfirm(false)}
+        title="Delete Selected Participants"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600">
+            Are you sure you want to delete {selectedIds.length} selected participant{selectedIds.length !== 1 ? 's' : ''}? This will permanently remove all their data, uploaded documents, and reimbursement records. This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button variant="secondary" onClick={() => setShowBulkDeleteConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => bulkDeleteMutation.mutate(selectedIds)}
+              loading={bulkDeleteMutation.isPending}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete {selectedIds.length} Participant{selectedIds.length !== 1 ? 's' : ''}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reimbursement Warning Modal */}
+      <Modal
+        isOpen={showReimbursementWarning}
+        onClose={() => {
+          setShowReimbursementWarning(false);
+          setPendingEmailAction(null);
+        }}
+        title="Reimbursement Not Configured"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800">
+              Some countries don't have a maximum reimbursement amount configured yet. Please go to the Settings tab to configure the reimbursement limits before sending emails, otherwise participants will not see their reimbursement amount.
+            </p>
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowReimbursementWarning(false);
+                setPendingEmailAction(null);
+              }}
+            >
+              Close
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -1024,7 +1204,7 @@ function SettingsTab({
                           <Input
                             type="number"
                             placeholder="Amount"
-                            className="w-24 text-sm"
+                            className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             onBlur={(e) => {
                               const amount = parseFloat(e.target.value);
                               if (amount > 0) {
@@ -1054,7 +1234,7 @@ function SettingsTab({
                         <Input
                           type="number"
                           value={limit.maxReimbursementAmount}
-                          className="w-24 text-sm"
+                          className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           onChange={(e) => {
                             const amount = parseFloat(e.target.value);
                             if (amount >= 0) {

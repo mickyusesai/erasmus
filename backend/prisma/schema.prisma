@@ -277,6 +277,7 @@ enum DocumentType {
   HOTEL_INVOICE
   BANK_TRANSACTION
   LUGGAGE_INVOICE
+  INTERRAIL_PASS
   OTHER
 }
 
@@ -332,6 +333,9 @@ model TravelItem {
   manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
   checked               Boolean               @default(false)  // User confirmed this travel item is correct
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
+  originalCurrencyFromAi String?              // AI-detected currency before participant edits
+  exchangeRateOverride  Float?               // Manual exchange rate override set by organisation
+  companyName           String?              // Airline name, train company, bus company, etc.
 
   // Price editability for this leg
   priceEditable             Boolean               @default(true)   // False if part of booking with only total price
@@ -523,6 +527,14 @@ model DeclarationOfTravel {
   sendingOrgName          String
   sendingOrgOid           String?
   sendingOrgAddress       String
+
+  // Car travel specific
+  isCarTravel             Boolean     @default(false)  // Whether this declaration is for car/carpool travel
+  licensePlate            String?     // Car license plate (for car declarations)
+  driverName              String?     // Driver name (for carpool passenger declarations)
+
+  // Reason / explanation
+  reason                  String?     // Participant's reason/explanation for the declaration
 
   // Signature
   signatureDataUrl        String      // Base64 encoded signature image

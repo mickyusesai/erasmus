@@ -165,6 +165,7 @@ Carefully determine the document type:
 3. OTHER DOCUMENTS:
    - FUEL_RECEIPT: Gas station receipt
    - GREEN_TRAVEL_DECLARATION: Declaration for green travel
+   - INTERRAIL_PASS: Interrail or Eurail pass (multi-day rail travel pass)
    - OTHER: Anything else
 
 CRITICAL: Bank transactions and payment screenshots are NOT tickets!
@@ -219,7 +220,7 @@ PRICE EXTRACTION:
 Extract ALL information you can find. Respond with ONLY a JSON object:
 {
   "documentLanguage": "Croatian" | "English" | "Dutch" | "German" | "French" | "Polish" | "Spanish" | "Italian" | "other",
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "LUGGAGE_INVOICE" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
   "confidence": 0.0-1.0,
   "reasoning": "Brief explanation: 1) What language is this document in? 2) How did you identify the document type? 3) Key information extracted",
 
@@ -744,6 +745,17 @@ When a LUGGAGE_INVOICE document is detected (separate luggage/baggage fee invoic
 - The total flight amount should NOT include the luggage fee — keep them separate for transparency
 - If you cannot match the luggage invoice to any flight, add it to unassigned_documents
 
+RULE 15: INTERRAIL PASS - CREATE TWO TRAVEL ITEMS
+When an INTERRAIL_PASS document is detected (Interrail or Eurail multi-day rail pass):
+- Create TWO travel items from this single document: one for the outbound journey and one for the return journey
+- Both travel items should have modeOfTransport: "TRAIN"
+- Both items should have the SAME document linked (the Interrail pass document ID in linkedDocumentIds)
+- Use the participant's home country and the project location to infer the outbound route (home → project) and return route (project → home)
+- Put the FULL pass price on the OUTBOUND leg; set amount to 0 on the RETURN leg with "amountIncludedInRoundTrip": true
+- Set "priceEditable": false on the return leg
+- On BOTH travel items, set "validationWarnings": ["Interrail pass — Declaration on Honor required as proof of actual train travel"]
+- If departure/return dates are not clear from the pass, use the project start and end dates as reasonable defaults
+
 === OUTPUT FORMAT ===
 
 Respond with ONLY a JSON object:
@@ -788,6 +800,7 @@ Respond with ONLY a JSON object:
       "luggageAmount": null or 25.00 (amount from separate luggage invoice, if matched),
       "luggageCurrency": null or "EUR" (currency of the luggage invoice),
       "luggageDocumentId": null or "<UUID of luggage invoice document>",
+      "validationWarnings": ["Array of warning strings for this specific travel item, e.g. Interrail declaration required. null if none."],
       "consolidationNotes": "Brief note for the review AI explaining key decisions, e.g. why a price was chosen, how documents were matched, any ambiguities noticed. null if nothing noteworthy."
     }
   ],
@@ -1145,6 +1158,20 @@ Do NOT include in warnings (these are handled elsewhere):
         // Handle amountIncludedInRoundTrip - if true, this is return leg with price on outbound
         const amountIncludedInRoundTrip = item.amountIncludedInRoundTrip === true;
 
+        // Derive companyName from document extraction (airline, busCompany, or merchantName)
+        let companyName: string | null = null;
+        if (primaryDocId) {
+          const docExtractionForCompany = await prisma.documentExtraction.findUnique({
+            where: { documentId: primaryDocId },
+          });
+          if (docExtractionForCompany) {
+            companyName = docExtractionForCompany.airline
+              || docExtractionForCompany.busCompany
+              || docExtractionForCompany.merchantName
+              || null;
+          }
+        }
+
         // Handle luggage fee merged into this flight
         const luggageAmount = item.luggageAmount ?? null;
         const luggageCurrency = item.luggageCurrency || currency;
@@ -1181,6 +1208,11 @@ Do NOT include in warnings (these are handled elsewhere):
             consolidationNotes: item.consolidationNotes || null,
             manuallyEdited: false,
             originalAmountFromAi: baseAmount,
+            originalCurrencyFromAi: currency,
+            companyName: companyName,
+            validationWarnings: item.validationWarnings && Array.isArray(item.validationWarnings) && item.validationWarnings.length > 0
+              ? JSON.stringify(item.validationWarnings)
+              : null,
             priceEditable: item.priceEditable !== false, // Default to true
             priceMissing: item.priceMissing === true,
             priceSourceDocId: priceSourceDocId,
@@ -1270,6 +1302,7 @@ Do NOT include in warnings (these are handled elsewhere):
       GREEN_TRAVEL_DECLARATION: 'GREEN_TRAVEL_DECLARATION',
       BANK_TRANSACTION: 'BANK_TRANSACTION',
       LUGGAGE_INVOICE: 'LUGGAGE_INVOICE',
+      INTERRAIL_PASS: 'INTERRAIL_PASS',
     };
     return (mapping[type] || 'OTHER') as DocumentType;
   }

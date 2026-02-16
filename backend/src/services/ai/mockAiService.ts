@@ -127,6 +127,7 @@ export class MockAiService implements TravelDocumentAiService {
       HOTEL_INVOICE: 'hotel invoice',
       BANK_TRANSACTION: 'bank transaction',
       LUGGAGE_INVOICE: 'luggage invoice',
+      INTERRAIL_PASS: 'interrail pass',
       OTHER: 'document',
     };
 

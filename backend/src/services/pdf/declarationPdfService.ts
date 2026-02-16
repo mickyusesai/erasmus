@@ -16,6 +16,12 @@ interface DeclarationData {
   sendingOrgOid?: string | null;
   sendingOrgAddress: string;
   signatureDataUrl: string;
+  // New fields
+  reason?: string | null;
+  isCarTravel?: boolean;
+  licensePlate?: string | null;
+  driverName?: string | null;
+  distanceKm?: number | null;
 }
 
 /**
@@ -45,7 +51,7 @@ function getTransportModeDisplay(mode: string): string {
 }
 
 /**
- * Generate a Declaration of Travel PDF
+ * Generate a Declaration on Honor PDF
  */
 export async function generateDeclarationPdf(
   participantId: string,
@@ -89,29 +95,58 @@ export async function generateDeclarationPdf(
       doc.on('error', reject);
 
       // Title
-      doc.fontSize(18).font('Helvetica-Bold').text('DECLARATION OF TRAVEL', { align: 'center' });
+      doc.fontSize(18).font('Helvetica-Bold').text('DECLARATION ON HONOR', { align: 'center' });
       doc.moveDown(2);
 
-      // Declaration text
+      // Declaration text varies by transport mode
       const transportMode = getTransportModeDisplay(data.modeOfTransport);
-      let declarationText = `I, ${data.name}, hereby declare that I took the ${transportMode} from ${data.fromPlace} to ${data.toPlace} on ${formatDate(data.travelDate)}`;
+      let declarationText: string;
 
-      // Add flight number if applicable
-      if (data.flightNumber && data.modeOfTransport === 'PLANE') {
-        declarationText += ` with flight number ${data.flightNumber}`;
+      if (data.isCarTravel || data.modeOfTransport === 'CAR') {
+        // Car travel declaration
+        declarationText = `I, ${data.name}, hereby declare on my honor that I traveled by ${transportMode} from ${data.fromPlace} to ${data.toPlace} on ${formatDate(data.travelDate)}.`;
+
+        if (data.licensePlate) {
+          declarationText += ` The vehicle license plate number is ${data.licensePlate}.`;
+        }
+        if (data.driverName) {
+          declarationText += ` The driver of the vehicle was ${data.driverName}.`;
+        }
+        if (data.distanceKm) {
+          declarationText += ` The total distance traveled was approximately ${data.distanceKm} km.`;
+        }
+      } else {
+        // Standard travel declaration
+        declarationText = `I, ${data.name}, hereby declare on my honor that I took the ${transportMode} from ${data.fromPlace} to ${data.toPlace} on ${formatDate(data.travelDate)}`;
+
+        // Add flight number if applicable
+        if (data.flightNumber && data.modeOfTransport === 'PLANE') {
+          declarationText += ` with flight number ${data.flightNumber}`;
+        }
+
+        // Add booking reference if available
+        if (data.bookingReference) {
+          declarationText += ` and booking reference ${data.bookingReference}`;
+        }
+
+        declarationText += '.';
       }
-
-      // Add booking reference if available
-      if (data.bookingReference) {
-        declarationText += ` and booking reference ${data.bookingReference}`;
-      }
-
-      declarationText += '.';
 
       doc.fontSize(12).font('Helvetica').text(declarationText, {
         align: 'justify',
         lineGap: 4,
       });
+
+      // Reason for declaration
+      if (data.reason) {
+        doc.moveDown(1);
+        doc.fontSize(12).font('Helvetica-Bold').text('Reason for this declaration:');
+        doc.moveDown(0.3);
+        doc.fontSize(12).font('Helvetica').text(data.reason, {
+          align: 'justify',
+          lineGap: 3,
+        });
+      }
 
       doc.moveDown(2);
 
@@ -184,7 +219,7 @@ export async function generateDeclarationPdf(
       doc.moveDown(3);
       doc.fontSize(9).font('Helvetica-Oblique').fillColor('#666666');
       doc.text(
-        'This declaration is provided in lieu of a boarding pass that could not be obtained. ' +
+        'This declaration on honor is provided as a sworn statement. ' +
         'The undersigned confirms that the above information is true and accurate to the best of their knowledge.',
         {
           align: 'center',

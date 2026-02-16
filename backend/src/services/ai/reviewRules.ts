@@ -125,7 +125,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'info',
     label: 'Exchange Rate',
     description: 'Non-EUR currency without purchase date for exchange rate',
-    prompt: 'Non-EUR currency without purchase date (exchange rate may be approximate). IMPORTANT: Do NOT flag this for return legs of round-trip bookings (amountIncludedInRoundTrip=true) — those don\'t need a purchase date since the price is on the outbound leg. Also, if the participant manually filled in the purchase date (manuallyEdited=true), mention that the purchase date was entered by the participant.',
+    prompt: 'Non-EUR currency without purchase date (exchange rate may be approximate). IMPORTANT: Do NOT flag this if the travel item already has a purchaseDate value — only flag when purchaseDate is actually null/missing. Do NOT flag this for return legs of round-trip bookings (amountIncludedInRoundTrip=true) — those don\'t need a purchase date since the price is on the outbound leg. Also, if the participant manually filled in the purchase date (manuallyEdited=true), mention that the purchase date was entered by the participant.',
     enabled: true,
   },
   {

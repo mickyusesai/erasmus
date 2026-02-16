@@ -1008,6 +1008,9 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       purchaseDate: item.purchaseDate?.toISOString().split('T')[0] || null,
       manuallyEdited: item.manuallyEdited,
       originalAmountFromAi: item.originalAmountFromAi,
+      originalCurrencyFromAi: item.originalCurrencyFromAi,
+      exchangeRateOverride: item.exchangeRateOverride,
+      companyName: item.companyName,
       checked: item.checked,
       priceMissing: item.priceMissing,
       routeMatchesCountry: item.routeMatchesCountry,
@@ -1164,6 +1167,48 @@ router.delete('/participants/:id', asyncHandler(async (req: Request, res: Respon
   ]);
 
   res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/bulk-delete
+ * Delete multiple participants at once
+ */
+router.post('/participants/bulk-delete', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const { ids } = req.body as { ids: string[] };
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new ValidationError('ids must be a non-empty array');
+  }
+
+  // Verify all participants belong to this organisation
+  const participants = await prisma.participant.findMany({
+    where: { id: { in: ids } },
+    include: { project: true },
+  });
+
+  for (const p of participants) {
+    if (p.project.organisationId !== org.id) {
+      throw new ForbiddenError('Access denied to one or more participants');
+    }
+  }
+
+  // Delete all in a transaction
+  for (const participantId of ids) {
+    await prisma.$transaction([
+      prisma.aiReviewFinding.deleteMany({ where: { participantId } }),
+      prisma.changeLogEntry.deleteMany({ where: { participantId } }),
+      prisma.declarationOfTravel.deleteMany({ where: { participantId } }),
+      prisma.declarationOnHonor.deleteMany({ where: { participantId } }),
+      prisma.travelItem.deleteMany({ where: { participantId } }),
+      prisma.document.deleteMany({ where: { participantId } }),
+      prisma.reimbursementSummary.deleteMany({ where: { participantId } }),
+      prisma.socialMediaPost.deleteMany({ where: { participantId } }),
+      prisma.participant.delete({ where: { id: participantId } }),
+    ]);
+  }
+
+  res.json({ success: true, deletedCount: ids.length });
 }));
 
 /**
@@ -1538,6 +1583,7 @@ const orgCreateTravelItemSchema = z.object({
   amountEur: z.number(),
   comment: z.string().nullable().optional(),
   documentId: z.string().nullable().optional(),
+  companyName: z.string().nullable().optional(),
 });
 
 const orgUpdateTravelItemSchema = z.object({
@@ -1554,6 +1600,8 @@ const orgUpdateTravelItemSchema = z.object({
   amountEur: z.number().optional(),
   comment: z.string().nullable().optional(),
   excludedFromReimbursement: z.boolean().optional(),
+  exchangeRateOverride: z.number().nullable().optional(),
+  companyName: z.string().nullable().optional(),
 });
 
 /** Helper: verify org owns participant */
@@ -1615,9 +1663,23 @@ router.patch('/participants/:id/travel-items/:itemId', asyncHandler(async (req: 
   const current = await prisma.travelItem.findUnique({ where: { id: req.params.itemId } });
   if (!current || current.participantId !== participantId) throw new NotFoundError('Travel item not found');
 
+  // Handle exchange rate override: recalculate amountEur
+  const updateData = { ...result.data } as Record<string, unknown>;
+  if ('exchangeRateOverride' in result.data) {
+    if (result.data.exchangeRateOverride != null && current.amountOriginal != null) {
+      // Manual override: amountEur = amountOriginal * overrideRate
+      updateData.amountEur = current.amountOriginal * result.data.exchangeRateOverride;
+    } else if (result.data.exchangeRateOverride === null && current.amountOriginal != null && current.currencyOriginal !== 'EUR') {
+      // Cleared override: recalculate with auto rate
+      const { getAiService: getAi } = await import('../../services/ai/index.js');
+      const ai = getAi();
+      updateData.amountEur = await ai.convertToEur(current.amountOriginal, current.currencyOriginal, current.purchaseDate ?? undefined);
+    }
+  }
+
   const travelItem = await prisma.travelItem.update({
     where: { id: req.params.itemId },
-    data: result.data,
+    data: updateData,
   });
 
   // Create changelog entries for changed fields

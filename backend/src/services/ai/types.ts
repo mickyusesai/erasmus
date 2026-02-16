@@ -15,6 +15,7 @@ export const DocumentType = {
   HOTEL_INVOICE: 'HOTEL_INVOICE',
   BANK_TRANSACTION: 'BANK_TRANSACTION',
   LUGGAGE_INVOICE: 'LUGGAGE_INVOICE',
+  INTERRAIL_PASS: 'INTERRAIL_PASS',
   OTHER: 'OTHER',
 } as const;
 export type DocumentType = typeof DocumentType[keyof typeof DocumentType];

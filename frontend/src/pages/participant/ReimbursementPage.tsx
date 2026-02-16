@@ -879,6 +879,14 @@ function Step2CheckData({
       // Optimistically remove from the cache
       queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
         if (!old) return old;
+
+        // Also optimistically update reimbursement summary
+        const deletedItem = old.travelItems.find((item: TravelItem) => item.id === id);
+        const deletedAmount = (!deletedItem?.excludedFromReimbursement && deletedItem?.amountEur) ? deletedItem.amountEur : 0;
+        const newTotalEur = (old.reimbursementSummary?.totalEur || 0) - deletedAmount;
+        const maxAllowed = old.reimbursementSummary?.maxReimbursementAllowed || 0;
+        const newAmountToReimburse = maxAllowed > 0 ? Math.min(newTotalEur, maxAllowed) : newTotalEur;
+
         return {
           ...old,
           travelItems: old.travelItems.filter((item: TravelItem) => item.id !== id),
@@ -886,6 +894,7 @@ function Step2CheckData({
           documents: shouldDeleteDocs
             ? old.documents.filter((doc: Document) => !docIdsToRemove.includes(doc.id))
             : old.documents,
+          reimbursementSummary: old.reimbursementSummary ? { ...old.reimbursementSummary, totalEur: newTotalEur, amountToReimburse: newAmountToReimburse } : null,
         };
       });
       return { previousData };
@@ -902,7 +911,9 @@ function Step2CheckData({
         ? 'Travel item and linked documents removed'
         : 'Travel item removed');
     },
-    // No onSettled refetch - optimistic update is sufficient
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+    },
   });
 
   const toggleCheckedMutation = useMutation({
@@ -1847,6 +1858,7 @@ function TravelItemCard({
   const [localTo, setLocalTo] = useState(item.toLocation);
   const [localFlightNumber, setLocalFlightNumber] = useState(item.flightNumber || '');
   const [localBookingRef, setLocalBookingRef] = useState(item.bookingReference || '');
+  const [localCompanyName, setLocalCompanyName] = useState(item.companyName || '');
   const [localAmount, setLocalAmount] = useState(String(item.amountOriginal || ''));
   const [localDistanceKm, setLocalDistanceKm] = useState(String(item.distanceKm || ''));
   const [localParticipantPortion, setLocalParticipantPortion] = useState(String(item.participantPortion || ''));
@@ -1857,6 +1869,7 @@ function TravelItemCard({
     setLocalTo(item.toLocation);
     setLocalFlightNumber(item.flightNumber || '');
     setLocalBookingRef(item.bookingReference || '');
+    setLocalCompanyName(item.companyName || '');
     setLocalAmount(String(item.amountOriginal || ''));
     setLocalDistanceKm(String(item.distanceKm || ''));
     setLocalParticipantPortion(String(item.participantPortion || ''));
@@ -2253,6 +2266,13 @@ function TravelItemCard({
             />
           </>
         )}
+        <Input
+          label="Company / Airline"
+          value={localCompanyName}
+          onChange={(e) => setLocalCompanyName(e.target.value)}
+          onBlur={() => localCompanyName !== (item.companyName || '') && onUpdate({ companyName: localCompanyName })}
+          placeholder="e.g., Ryanair, Deutsche Bahn"
+        />
         {/* Car travel specific fields */}
         {item.modeOfTransport === 'CAR' && (
           <>
@@ -2505,6 +2525,26 @@ function AddTravelModal({
     },
   });
 
+  // Mutation to delete an unlinked document
+  const deleteUnlinkedDocMutation = useMutation({
+    mutationFn: (docId: string) => participantApi.deleteDocument(token, docId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      toast.success('Document deleted');
+    },
+    onError: () => {
+      toast.error('Failed to delete document');
+    },
+  });
+
+  const handleDeleteUnlinkedDoc = (e: React.MouseEvent, docId: string, docName: string) => {
+    e.stopPropagation();
+    if (window.confirm(`Delete document "${docName}"? This cannot be undone.`)) {
+      if (selectedExistingDocId === docId) setSelectedExistingDocId('');
+      deleteUnlinkedDocMutation.mutate(docId);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (mode === 'link') {
@@ -2578,16 +2618,26 @@ function AddTravelModal({
                         <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onViewDocument(doc);
-                      }}
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium ml-2"
-                    >
-                      View
-                    </button>
+                    <div className="flex items-center gap-1 ml-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onViewDocument(doc);
+                        }}
+                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        View
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteUnlinkedDoc(e, doc.id, doc.originalFilename)}
+                        className="p-1 text-red-400 hover:text-red-600 transition-colors"
+                        title="Delete document"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

@@ -59,6 +59,15 @@ function formatCurrency(amount: number): string {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 }
 
+function formatAiOriginalAmount(amount: number, originalCurrencyFromAi?: string | null, currencyOriginal?: string): string {
+  const currency = originalCurrencyFromAi || currencyOriginal || 'EUR';
+  try {
+    return new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(amount);
+  } catch {
+    return `${new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)} ${currency}`;
+  }
+}
+
 const transportIcons: Record<TransportMode, React.ElementType> = {
   PLANE: Plane,
   TRAIN: Train,
@@ -210,14 +219,6 @@ export default function OrgParticipantDetail() {
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
     },
     onError: () => toast.error('Failed to send magic link'),
-  });
-
-  const markAiCheckOkMutation = useMutation({
-    mutationFn: () => organisationApi.markAiCheckOk(id!),
-    onSuccess: () => {
-      toast.success('AI check marked as OK');
-      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
-    },
   });
 
   const approveMutation = useMutation({
@@ -501,7 +502,7 @@ export default function OrgParticipantDetail() {
                 </div>
                 <div>
                   <p className="text-white/70 text-sm">Max Allowed</p>
-                  <p className="text-2xl font-bold text-white">{formatCurrency(participant.maxReimbursementForCountry || 0)}</p>
+                  <p className="text-2xl font-bold text-white">{participant.maxReimbursementForCountry ? formatCurrency(participant.maxReimbursementForCountry) : 'Not set'}</p>
                 </div>
                 <div>
                   <p className="text-white/70 text-sm">To Reimburse</p>
@@ -762,12 +763,6 @@ export default function OrgParticipantDetail() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {!summary?.aiCheckOk && (
-                      <Button variant="secondary" className="w-full" onClick={() => markAiCheckOkMutation.mutate()} loading={markAiCheckOkMutation.isPending}>
-                        <CheckCircle className="w-4 h-4 mr-2" />
-                        Mark AI Check OK
-                      </Button>
-                    )}
                     {participant.status === 'PARTICIPANT_COMPLETE' && (
                       <Button className="w-full" onClick={() => approveMutation.mutate()} loading={approveMutation.isPending}>
                         <CheckCircle className="w-4 h-4 mr-2" />
@@ -1264,6 +1259,10 @@ function TravelItemCard({
     comment: item.comment || undefined,
   });
   const [showLinkDropdown, setShowLinkDropdown] = useState(false);
+  const [exchangeRateInput, setExchangeRateInput] = useState('');
+  const [editingExchangeRate, setEditingExchangeRate] = useState(false);
+  const [editingCompanyName, setEditingCompanyName] = useState(false);
+  const [companyNameInput, setCompanyNameInput] = useState(item.companyName || '');
 
   const Icon = transportIcons[item.modeOfTransport];
   const linkedDocIds = getLinkedDocIds(item);
@@ -1307,7 +1306,7 @@ function TravelItemCard({
             <span className="font-medium text-gray-900">{item.toLocation}</span>
             {/* Status badges inline */}
             {item.manuallyEdited && (
-              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700" title={`AI detected ${formatCurrency(item.originalAmountFromAi || 0)}`}>
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700" title={`AI detected ${formatAiOriginalAmount(item.originalAmountFromAi || 0, item.originalCurrencyFromAi, item.currencyOriginal)}`}>
                 <Pencil className="w-2.5 h-2.5 inline mr-0.5" />Edited
               </span>
             )}
@@ -1325,6 +1324,7 @@ function TravelItemCard({
             <span>{formatDate(item.departureDate)}{item.arrivalDate ? ` - ${formatDate(item.arrivalDate)}` : ''}</span>
             {item.flightNumber && <span>Flight: {item.flightNumber}</span>}
             {item.bookingReference && <span>Ref: {item.bookingReference}</span>}
+            {item.companyName && <span>{item.companyName}</span>}
             {item.distanceKm && <span>{item.distanceKm} km</span>}
             {item.numberOfPassengers && item.numberOfPassengers > 1 && (
               <span className="text-amber-600">
@@ -1420,7 +1420,7 @@ function TravelItemCard({
                   <DetailField label={`Amount (${item.currencyOriginal})`} value={`${item.amountOriginal}`} />
                 )}
                 {item.manuallyEdited && item.originalAmountFromAi != null && (
-                  <DetailField label="AI Original Amount" value={formatCurrency(item.originalAmountFromAi)} highlight="orange" />
+                  <DetailField label="AI Original Amount" value={formatAiOriginalAmount(item.originalAmountFromAi, item.originalCurrencyFromAi, item.currencyOriginal)} highlight="orange" />
                 )}
                 {item.numberOfPassengers && item.numberOfPassengers > 1 && (
                   <>
@@ -1438,7 +1438,115 @@ function TravelItemCard({
                 {item.amountIncludedInRoundTrip && (
                   <DetailField label="Round-trip" value="Price on outbound leg" />
                 )}
+                {item.companyName && !editingCompanyName && (
+                  <div>
+                    <p className="text-gray-400 text-xs">Company</p>
+                    <p
+                      className="font-medium text-sm text-gray-900 cursor-pointer hover:text-primary-600"
+                      onClick={() => { setCompanyNameInput(item.companyName || ''); setEditingCompanyName(true); }}
+                      title="Click to edit"
+                    >
+                      {item.companyName}
+                    </p>
+                  </div>
+                )}
+                {!item.companyName && !editingCompanyName && (
+                  <div>
+                    <p className="text-gray-400 text-xs">Company</p>
+                    <p
+                      className="font-medium text-sm text-gray-400 cursor-pointer hover:text-primary-600 italic"
+                      onClick={() => { setCompanyNameInput(''); setEditingCompanyName(true); }}
+                      title="Click to add"
+                    >
+                      Not set
+                    </p>
+                  </div>
+                )}
+                {editingCompanyName && (
+                  <div>
+                    <p className="text-gray-400 text-xs">Company</p>
+                    <input
+                      type="text"
+                      value={companyNameInput}
+                      onChange={(e) => setCompanyNameInput(e.target.value)}
+                      onBlur={() => {
+                        const val = companyNameInput.trim() || null;
+                        if (val !== (item.companyName || null)) {
+                          onEdit(item.id, { companyName: val } as Partial<CreateTravelItemData>);
+                        }
+                        setEditingCompanyName(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') setEditingCompanyName(false);
+                      }}
+                      autoFocus
+                      className="font-medium text-sm text-gray-900 bg-white border border-gray-300 rounded px-1.5 py-0.5 w-full focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    />
+                  </div>
+                )}
               </div>
+
+              {/* Exchange Rate Override (non-EUR items only) */}
+              {item.currencyOriginal !== 'EUR' && (
+                <div className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-200 text-sm">
+                  <span className="text-gray-500 whitespace-nowrap">Exchange rate ({item.currencyOriginal} &rarr; EUR):</span>
+                  <span className="font-medium text-gray-900">
+                    {(() => {
+                      const rate = item.exchangeRateOverride ?? (item.amountOriginal && item.amountOriginal > 0 ? item.amountEur / item.amountOriginal : null);
+                      return rate != null ? rate.toFixed(6) : '-';
+                    })()}
+                  </span>
+                  {item.exchangeRateOverride != null && (
+                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">manual</span>
+                  )}
+                  {!editingExchangeRate ? (
+                    <button
+                      onClick={() => {
+                        const currentRate = item.exchangeRateOverride ?? (item.amountOriginal && item.amountOriginal > 0 ? item.amountEur / item.amountOriginal : 0);
+                        setExchangeRateInput(currentRate ? currentRate.toFixed(6) : '');
+                        setEditingExchangeRate(true);
+                      }}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-primary-600 hover:bg-primary-50 transition-colors"
+                    >
+                      <Pencil className="w-3 h-3" />
+                      Override
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        step="0.000001"
+                        value={exchangeRateInput}
+                        onChange={(e) => setExchangeRateInput(e.target.value)}
+                        onBlur={() => {
+                          const val = parseFloat(exchangeRateInput);
+                          if (!isNaN(val) && val > 0) {
+                            onEdit(item.id, { exchangeRateOverride: val } as Partial<CreateTravelItemData>);
+                          }
+                          setEditingExchangeRate(false);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          if (e.key === 'Escape') setEditingExchangeRate(false);
+                        }}
+                        autoFocus
+                        className="w-28 text-sm font-medium text-gray-900 bg-white border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      />
+                    </div>
+                  )}
+                  {item.exchangeRateOverride != null && (
+                    <button
+                      onClick={() => onEdit(item.id, { exchangeRateOverride: null } as Partial<CreateTravelItemData>)}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                      title="Reset to automatic rate"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Reset
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Comment */}
               {item.comment && (
