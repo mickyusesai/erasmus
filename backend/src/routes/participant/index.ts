@@ -217,6 +217,8 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       detectedHomeCountry: data?.detectedHomeCountry,
       homeCountryConfidence: data?.homeCountryConfidence,
       homeCountryReasoning: data?.homeCountryReasoning,
+      reopenedAt: data?.reopenedAt,
+      reopenMessage: data?.reopenMessage,
     },
     project: {
       ...data?.project,
@@ -1351,7 +1353,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         bankDetailsComplete: !!(fullParticipant.bankAccountIban && fullParticipant.bankAccountHolderName && fullParticipant.bankAccountBic),
       });
 
-      // Store findings in DB
+      // Store findings in DB (including travelItemId link)
       if (findings.length > 0) {
         await prisma.aiReviewFinding.createMany({
           data: findings.map((f) => ({
@@ -1359,6 +1361,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
             severity: f.severity,
             message: f.message,
             category: f.category,
+            travelItemId: (f as any).travelItemId || null,
           })),
         });
       }

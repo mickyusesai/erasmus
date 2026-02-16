@@ -895,6 +895,91 @@ export const organisationApi = {
     return handleResponse<{ findings: ReviewFinding[] }>(res);
   },
 
+  // Travel Item CRUD
+  createTravelItem: async (participantId: string, data: CreateTravelItemData) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
+  updateTravelItem: async (participantId: string, itemId: string, data: Partial<TravelItem>) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
+  deleteTravelItem: async (participantId: string, itemId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  // Document management
+  uploadDocument: async (participantId: string, file: File, documentType: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('documentType', documentType);
+    const token = localStorage.getItem('org-token');
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/documents/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    return handleResponse<Document>(res);
+  },
+
+  deleteDocument: async (participantId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/documents/${documentId}`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  linkDocument: async (participantId: string, itemId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}/link-document`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ documentId }),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  unlinkDocument: async (participantId: string, itemId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}/link-document`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ documentId }),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  recalculateSummary: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/recalculate-summary`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ summary: ReimbursementSummary }>(res);
+  },
+
+  // Reopen reimbursement
+  reopenReimbursement: async (participantId: string, data: { message: string; clearAiReview?: boolean; clearTravelItems?: boolean; clearDocuments?: boolean }) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/reopen`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
   // Country Limits
   getCountryLimits: async (projectId: string) => {
     const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits`, {
@@ -1152,6 +1237,8 @@ export interface Participant {
   country: string;
   status: ParticipantStatus;
   lastMagicLinkSentAt?: string;
+  reopenedAt?: string;
+  reopenMessage?: string;
   project?: {
     name: string;
     country: string;
@@ -1254,6 +1341,11 @@ export interface TravelItem {
   purchaseDate?: string;
   amountEur: number;
   comment?: string;
+  consolidationNotes?: string;
+  // Edit tracking
+  manuallyEdited?: boolean;
+  originalAmountFromAi?: number;
+  priceMissing?: boolean;
   // Round-trip bookings
   isRoundTrip?: boolean;
   tripGroupId?: string;  // Legacy
@@ -1336,6 +1428,7 @@ export interface ReviewFinding {
   message: string;
   category: string;
   checked: boolean;
+  travelItemId?: string | null;
   createdAt: string;
 }
 
@@ -1402,6 +1495,8 @@ export interface ParticipantAuthResponse {
     detectedHomeCountry?: string | null;
     homeCountryConfidence?: number | null;
     homeCountryReasoning?: string | null;
+    reopenedAt?: string;
+    reopenMessage?: string;
   };
   project: {
     id: string;

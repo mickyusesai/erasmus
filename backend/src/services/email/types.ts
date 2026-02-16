@@ -90,4 +90,14 @@ export interface EmailService {
     projectName: string,
     amountEur: number
   ): Promise<EmailResult>;
+
+  /**
+   * Send a notification that reimbursement has been reopened
+   */
+  sendReopenNotification(
+    to: string,
+    participantName: string,
+    projectName: string,
+    message: string
+  ): Promise<EmailResult>;
 }

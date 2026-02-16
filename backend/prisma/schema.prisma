@@ -166,6 +166,8 @@ model Participant {
   homeCountryConfidence     Float?                  // Confidence score (0-1) for detected home country
   homeCountryReasoning      String?                 // AI reasoning for the detected home country
   consolidationSummary      String?                 // AI notes from consolidation for the review AI
+  reopenedAt                DateTime?               // When the reimbursement was last reopened by the organisation
+  reopenMessage             String?                 // Organisation's message to participant explaining what to fix
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   documents                 Document[]
@@ -366,6 +368,7 @@ model TravelItem {
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
   declarationsOfTravel  DeclarationOfTravel[]
+  aiReviewFindings      AiReviewFinding[]
 }
 
 enum TransportMode {
@@ -409,6 +412,7 @@ model ChangeLogEntry {
 enum UserType {
   PARTICIPANT
   ADMIN
+  ORGANISATION
 }
 
 // AI Review Finding - generated once when participant submits, checkable by org
@@ -416,6 +420,8 @@ model AiReviewFinding {
   id            String      @id @default(uuid())
   participantId String
   participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  travelItemId  String?
+  travelItem    TravelItem? @relation(fields: [travelItemId], references: [id], onDelete: SetNull)
   severity      String      // 'critical' | 'important' | 'info'
   message       String
   category      String

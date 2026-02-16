@@ -90,4 +90,13 @@ export class ConsoleEmailService implements EmailService {
       html: templates.paymentHtml(participantName, projectName, amountEur),
     });
   }
+
+  async sendReopenNotification(to: string, participantName: string, projectName: string, message: string): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.reopenSubject(projectName),
+      text: templates.reopenText(participantName, projectName, message),
+      html: templates.reopenHtml(participantName, projectName, message),
+    });
+  }
 }

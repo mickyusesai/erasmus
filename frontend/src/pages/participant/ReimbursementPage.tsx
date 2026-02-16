@@ -332,6 +332,23 @@ export default function ReimbursementPage() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto px-4 -mt-6">
+        {/* Reopen banner - shown when organisation reopened the reimbursement */}
+        {data.participant.reopenMessage && data.participant.status === 'DRAFT' && (
+          <div className="mb-4 mt-2 bg-amber-50 border border-amber-300 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800">Your reimbursement was reopened</p>
+                <p className="text-amber-700 text-sm mt-1">The organisation has asked you to make changes:</p>
+                <div className="mt-2 bg-white border border-amber-200 rounded-lg px-3 py-2 text-sm text-gray-700 whitespace-pre-wrap">
+                  {data.participant.reopenMessage}
+                </div>
+                <p className="text-amber-600 text-xs mt-2">Please make the requested changes and submit again.</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'dissemination' ? (
           <Card className="mt-6">
             <CardContent className="p-6">

@@ -356,3 +356,40 @@ export function paymentHtml(participantName: string, projectName: string, amount
     ${infoBox('The payment has been initiated to the bank account you provided. Please allow a few business days for it to appear in your account.')}
   `);
 }
+
+// =============================================================================
+// REOPEN NOTIFICATION
+// =============================================================================
+
+export function reopenSubject(projectName: string): string {
+  return `Action Required - Your Reimbursement Needs Changes - ${projectName}`;
+}
+
+export function reopenText(participantName: string, projectName: string, message: string): string {
+  return `Hello ${participantName},
+
+Your travel reimbursement for "${projectName}" has been reopened by the organisation.
+
+Message from the organisation:
+"${message}"
+
+Please log in using your original link and make the requested changes, then submit again.
+
+Best regards,
+The ${projectName} Team
+
+---
+This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+}
+
+export function reopenHtml(participantName: string, projectName: string, message: string): string {
+  return wrapInLayout(`
+    <p>Hello <strong>${participantName}</strong>,</p>
+    ${warningBox('Your reimbursement for <strong>"' + projectName + '"</strong> has been reopened and needs changes.')}
+    <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin: 20px 0;">
+      <p style="font-size: 13px; color: #6b7280; margin: 0 0 8px 0; font-weight: 600;">Message from the organisation:</p>
+      <p style="margin: 0; color: #374151; white-space: pre-wrap;">${message}</p>
+    </div>
+    ${infoBox('Please open your original reimbursement link and make the requested changes, then submit again.')}
+  `);
+}

@@ -529,6 +529,7 @@ export interface ReviewFinding {
   severity: 'critical' | 'important' | 'info';
   message: string;
   category: string;
+  travelItemIndex?: number | null;  // 1-based index into travel items array (null = general finding)
 }
 
 /**
@@ -613,7 +614,7 @@ export async function generateParticipantReview(data: {
     amountToReimburse: number | null;
   } | null;
   bankDetailsComplete: boolean;
-}): Promise<ReviewFinding[]> {
+}): Promise<(ReviewFinding & { travelItemId?: string | null })[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
@@ -621,6 +622,13 @@ export async function generateParticipantReview(data: {
 
   const { default: OpenAI } = await import('openai');
   const client = new OpenAI({ apiKey });
+
+  // Build rules section from configurable rules
+  const { buildRulesPrompt } = await import('./reviewRules.js');
+  const rulesSection = buildRulesPrompt({
+    participantCountry: data.participantCountry,
+    projectCountry: data.projectCountry,
+  });
 
   const prompt = `You are an AI reviewer for an Erasmus+ travel reimbursement system. You review a participant's complete data and produce an actionable checklist for the organisation administrator.
 
@@ -677,38 +685,14 @@ ${data.changeLogEntries.slice(0, 30).map((e) => `[${e.userType}] ${e.fieldName}:
 
 Review ALL the data above and report ONLY findings that actually apply. Go through these checks:
 
-CRITICAL (organisation must take action):
-1. If a Declaration of Travel exists → tell org to verify the declaration PDF (check that route, date, and flight number are correct). This is NOT a "missing document" — it's a replacement that needs verification.
-2. If a Declaration on Honor exists → tell org to verify the sworn statement and decide if it's acceptable.
-3. If a participant MANUALLY CHANGED AN AMOUNT from what the AI detected → flag the specific item with both amounts. This could be legitimate (AI was wrong) or suspicious.
-4. If a travel item has PRICE MISSING → flag it, can't reimburse without amount.
-5. If a travel item has NO DOCUMENT LINKED → flag it, no proof of travel.
-
-IMPORTANT (organisation should review):
-6. If a route doesn't seem to match the expected home (${data.participantCountry}) ↔ project (${data.projectCountry}) travel pattern. IMPORTANT: Match cities to countries generously — for example Chisinau=Moldova, Skopje=North Macedonia, Brussels=Belgium, Amsterdam/Eindhoven=Netherlands, etc. A travel item from Chisinau to Amsterdam is a VALID route for a Moldovan participant traveling to The Netherlands. Only flag truly unrelated routes (e.g., a side trip to a country unrelated to both home and project).
-7. If AI-detected home country differs from the participant's stated home country (${data.participantCountry}) — compare ONLY these two, do NOT confuse with the project country.
-8. If any document extraction has confidence below 70% → the extracted data might be wrong. IMPORTANT: Be precise with numbers — 72% is NOT below 70%. Only flag if the confidence is ACTUALLY below 70%.
-9. If a booking has multiple passengers (numberOfPassengers > 1) → verify the claimed portion is fair. IMPORTANT: If numberOfPassengers is 1, it's a single person. A single person buying an outbound + inbound ticket is NOT "multiple passengers" — that's just a round-trip. Only flag when numberOfPassengers is explicitly > 1.
-10. If total claimed exceeds the country reimbursement limit.
-11. If the changelog shows the participant changed important fields like amounts, routes, or dates (NOT just filling in empty fields — only flag actual changes from one value to another). Use the correct category: "Flight Edit" for flight numbers, "Route Edit" for locations, "Amount Edit" for prices. IMPORTANT: Do NOT flag changes to bank details fields (IBAN, BIC, account holder name, bank name, personal address fields) — participants always fill these in themselves, so any "change" is just them entering their data.
-12. If a plane travel item is missing its flight number.
-
-INFORMATIONAL (good to know):
-13. Non-EUR currency without purchase date (exchange rate may be approximate). IMPORTANT: Do NOT flag this for return legs of round-trip bookings (amountIncludedInRoundTrip=true) — those don't need a purchase date since the price is on the outbound leg. Also, if the participant manually filled in the purchase date (manuallyEdited=true), mention that the purchase date was entered by the participant.
-14. Travel dates more than 4 days outside project window. IMPORTANT: 1-4 days before/after project dates is perfectly normal for travel — only flag when it's MORE than 4 days outside the window.
-15. Bank details incomplete (missing IBAN, holder name, or BIC).
-16. Uploaded documents not linked to any travel item.
-17. If the participant left a note in the PARTICIPANT'S OWN NOTE field above → surface it so the org sees it. Do NOT create a finding about notes if no participant note exists.
-18. If document count vs travel item count seems unusual.
-19. Car travel — flag distance for manual reasonableness check.
-20. If a luggage fee was added to a flight from a separate invoice → inform the org so they can verify the luggage invoice matches the flight.
-
+${rulesSection}
 === RESPONSE FORMAT ===
 
 Return a JSON array. Each finding:
 - "severity": "critical" | "important" | "info"
 - "message": Clear, specific sentence (max 20 words). Mention routes, amounts, flight numbers when relevant.
 - "category": Accurate 2-3 word label. Examples: "Declaration Check", "Amount Changed", "Flight Edit", "Missing Price", "No Document", "Route Mismatch", "Shared Booking", "Participant Note", "Bank Details", "Car Distance"
+- "travelItemIndex": The 1-based index number of the travel item this finding relates to (from the TRAVEL ITEMS list above), or null if the finding is general / not about a specific travel item.
 
 IMPORTANT RULES:
 - ONLY report PROBLEMS or things that need attention. NEVER report things that are fine/correct/matching/within limits.
@@ -724,6 +708,7 @@ IMPORTANT RULES:
 - numberOfPassengers=1 means ONE person, which is normal. Only flag shared bookings when numberOfPassengers is GREATER than 1.
 - If everything is fine: [{"severity":"info","message":"All checks passed — data looks complete and consistent.","category":"All Clear"}]
 - Maximum 12 findings, prioritize critical > important > info
+- travelItemIndex MUST be a valid 1-based index from the TRAVEL ITEMS list, or null. Do NOT guess.
 - Return ONLY the JSON array`;
 
   try {
@@ -741,10 +726,23 @@ IMPORTANT RULES:
       return [{ severity: 'info', message: 'Unable to parse AI review response.', category: 'System' }];
     }
 
-    const findings: ReviewFinding[] = JSON.parse(jsonMatch[0]);
-    return findings.filter(
-      (f) => f.severity && f.message && f.category
-    );
+    const rawFindings: Array<ReviewFinding & { travelItemIndex?: number | null }> = JSON.parse(jsonMatch[0]);
+    // Map travelItemIndex (1-based) to travelItemId, then strip the index
+    const findings: (ReviewFinding & { travelItemId?: string | null })[] = rawFindings
+      .filter((f) => f.severity && f.message && f.category)
+      .map((f) => {
+        let travelItemId: string | null = null;
+        if (f.travelItemIndex != null && f.travelItemIndex >= 1 && f.travelItemIndex <= data.travelItems.length) {
+          travelItemId = data.travelItems[f.travelItemIndex - 1].id;
+        }
+        return {
+          severity: f.severity,
+          message: f.message,
+          category: f.category,
+          travelItemId,
+        };
+      });
+    return findings;
   } catch (error) {
     console.error('[AI Review] Failed to generate participant review:', error);
     return [{ severity: 'info', message: 'Unable to generate review at this time.', category: 'System' }];

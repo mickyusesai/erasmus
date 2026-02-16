@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -27,6 +27,11 @@ import {
   CreditCard,
   MapPin,
   Building2,
+  ChevronDown,
+  ChevronUp,
+  Pencil,
+  Users,
+  Navigation,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -34,13 +39,18 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding } from '../../services/api';
 import { clsx } from 'clsx';
 
-// Helper function to format dates as DD-MM-YYYY (European format)
+// ── Helpers ────────────────────────────────────────────────────
+
 function formatDate(dateInput: string | Date): string {
   const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
   const day = date.getDate().toString().padStart(2, '0');
   const month = (date.getMonth() + 1).toString().padStart(2, '0');
   const year = date.getFullYear();
   return `${day}-${month}-${year}`;
+}
+
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 }
 
 const transportIcons: Record<TransportMode, React.ElementType> = {
@@ -52,19 +62,58 @@ const transportIcons: Record<TransportMode, React.ElementType> = {
   OTHER: HelpCircle,
 };
 
+const docTypeLabels: Record<string, string> = {
+  FLIGHT_INVOICE: 'Flight Invoice',
+  FLIGHT_BOARDING_PASS: 'Boarding Pass',
+  TRAIN_TICKET: 'Train Ticket',
+  BUS_TICKET: 'Bus Ticket',
+  FUEL_RECEIPT: 'Fuel Receipt',
+  GREEN_TRAVEL_DECLARATION: 'Green Travel',
+  HOTEL_INVOICE: 'Hotel Invoice',
+  LUGGAGE_INVOICE: 'Luggage Invoice',
+  BANK_TRANSACTION: 'Bank Transaction',
+  OTHER: 'Other',
+};
+
+function getLinkedDocIds(item: TravelItem): string[] {
+  const ids: string[] = [];
+  if (item.documentId) ids.push(item.documentId);
+  if (item.additionalDocumentIds) {
+    try {
+      const parsed = JSON.parse(item.additionalDocumentIds);
+      if (Array.isArray(parsed)) ids.push(...parsed);
+    } catch { /* ignore */ }
+  }
+  if (item.luggageDocumentId && !ids.includes(item.luggageDocumentId)) {
+    ids.push(item.luggageDocumentId);
+  }
+  return ids;
+}
+
+function parseValidationWarnings(warnings?: string): string[] {
+  if (!warnings || warnings === '[]') return [];
+  try {
+    const parsed = JSON.parse(warnings);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// ── Main Component ─────────────────────────────────────────────
+
 export default function OrgParticipantDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [internalNotes, setInternalNotes] = useState('');
   const [notesLoaded, setNotesLoaded] = useState(false);
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
 
-  // Check if logged in
   useEffect(() => {
     const token = localStorage.getItem('org-token');
-    if (!token) {
-      navigate('/org/login');
-    }
+    if (!token) navigate('/org/login');
   }, [navigate]);
 
   const { data, isLoading, error } = useQuery({
@@ -74,7 +123,6 @@ export default function OrgParticipantDetail() {
     retry: false,
   });
 
-  // Initialize internal notes from participant data
   useEffect(() => {
     if (data?.participant && !notesLoaded) {
       setInternalNotes(data.participant.notesInternal || '');
@@ -89,6 +137,25 @@ export default function OrgParticipantDetail() {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Auto-expand travel items that have critical findings
+  useEffect(() => {
+    if (reviewData?.findings) {
+      const criticalItemIds = new Set<string>();
+      for (const f of reviewData.findings) {
+        if (f.travelItemId && (f.severity === 'critical' || f.severity === 'important') && !f.checked) {
+          criticalItemIds.add(f.travelItemId);
+        }
+      }
+      if (criticalItemIds.size > 0) {
+        setExpandedItems(prev => {
+          const next = new Set(prev);
+          criticalItemIds.forEach(id => next.add(id));
+          return next;
+        });
+      }
+    }
+  }, [reviewData?.findings]);
+
   const toggleFindingMutation = useMutation({
     mutationFn: ({ findingId }: { findingId: string }) =>
       organisationApi.toggleReviewFinding(id!, findingId),
@@ -102,9 +169,7 @@ export default function OrgParticipantDetail() {
         };
       });
     },
-    onError: () => {
-      toast.error('Failed to update finding');
-    },
+    onError: () => toast.error('Failed to update finding'),
   });
 
   const refreshReviewMutation = useMutation({
@@ -113,9 +178,7 @@ export default function OrgParticipantDetail() {
       queryClient.setQueryData(['participant-review', id], { findings: result.findings });
       toast.success('AI review refreshed');
     },
-    onError: () => {
-      toast.error('Failed to refresh AI review');
-    },
+    onError: () => toast.error('Failed to refresh AI review'),
   });
 
   const sendMagicLinkMutation = useMutation({
@@ -124,9 +187,7 @@ export default function OrgParticipantDetail() {
       toast.success('Magic link sent');
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
     },
-    onError: () => {
-      toast.error('Failed to send magic link');
-    },
+    onError: () => toast.error('Failed to send magic link'),
   });
 
   const markAiCheckOkMutation = useMutation({
@@ -155,33 +216,54 @@ export default function OrgParticipantDetail() {
 
   const updateNotesMutation = useMutation({
     mutationFn: (notes: string) => organisationApi.updateParticipant(id!, { notesInternal: notes }),
-    onSuccess: () => {
-      toast.success('Notes saved');
-    },
-    onError: () => {
-      toast.error('Failed to save notes');
-    },
+    onSuccess: () => toast.success('Notes saved'),
+    onError: () => toast.error('Failed to save notes'),
   });
 
   const deleteParticipantMutation = useMutation({
     mutationFn: () => organisationApi.deleteParticipant(id!),
     onSuccess: () => {
       toast.success('Participant deleted');
-      if (participant?.project?.id) {
-        navigate(`/org/projects/${participant.project.id}`);
-      } else {
-        navigate('/org/dashboard');
-      }
+      if (participant?.project?.id) navigate(`/org/projects/${participant.project.id}`);
+      else navigate('/org/dashboard');
     },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Failed to delete participant');
-    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to delete participant'),
   });
+
+  const toggleExpand = useCallback((itemId: string) => {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }, []);
+
+  const scrollToTravelItem = useCallback((travelItemId: string) => {
+    // Expand the item first
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      next.add(travelItemId);
+      return next;
+    });
+    // Highlight and scroll
+    setHighlightedItemId(travelItemId);
+    setTimeout(() => {
+      const el = document.getElementById(`travel-item-${travelItemId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+    // Remove highlight after animation
+    setTimeout(() => setHighlightedItemId(null), 2500);
+  }, []);
+
+  // ── Loading / Error states ──
 
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <div className="max-w-6xl mx-auto px-4 py-8">
+        <div className="max-w-7xl mx-auto px-4 py-8">
           <div className="animate-pulse space-y-6">
             <div className="h-8 w-48 bg-gray-200 rounded-lg" />
             <div className="h-64 bg-gray-200 rounded-2xl" />
@@ -196,10 +278,7 @@ export default function OrgParticipantDetail() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white p-8 rounded-lg shadow-md text-center">
           <p className="text-red-600 mb-4">Participant not found or access denied.</p>
-          <Link
-            to="/org/dashboard"
-            className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-          >
+          <Link to="/org/dashboard" className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700">
             Back to Dashboard
           </Link>
         </div>
@@ -213,6 +292,21 @@ export default function OrgParticipantDetail() {
   const allChecked = findings.length > 0 && findings.every((f: ReviewFinding) => f.checked);
   const checkedCount = findings.filter((f: ReviewFinding) => f.checked).length;
 
+  // Build a lookup: travelItemId -> findings for that item
+  const findingsByItem: Record<string, ReviewFinding[]> = {};
+  for (const f of findings) {
+    if (f.travelItemId) {
+      if (!findingsByItem[f.travelItemId]) findingsByItem[f.travelItemId] = [];
+      findingsByItem[f.travelItemId].push(f);
+    }
+  }
+
+  // Build a document lookup
+  const docsById: Record<string, Document> = {};
+  for (const doc of participant.documents) {
+    docsById[doc.id] = doc;
+  }
+
   const handleRefreshReview = () => {
     if (checkedCount > 0) {
       if (!confirm('This will delete all current review findings and your check progress, and generate a new AI review. Are you sure?')) {
@@ -224,9 +318,9 @@ export default function OrgParticipantDetail() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-6xl mx-auto px-4 py-8">
+      <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="space-y-6 animate-fadeIn">
-          {/* Header */}
+          {/* ── Header ── */}
           <div className="flex items-start gap-4">
             <Link
               to={`/org/projects/${participant.project.id}`}
@@ -272,96 +366,91 @@ export default function OrgParticipantDetail() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Main Content */}
-            <div className="lg:col-span-2 space-y-6">
-              {/* Summary Card */}
-              <Card variant="gradient">
-                <CardContent>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                    <div>
-                      <p className="text-white/70 text-sm">Total (EUR)</p>
-                      <p className="text-2xl font-bold text-white">
-                        {new Intl.NumberFormat('de-DE', {
-                          style: 'currency',
-                          currency: 'EUR',
-                        }).format(summary?.totalEur || 0)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-white/70 text-sm">Max Allowed</p>
-                      <p className="text-2xl font-bold text-white">
-                        {new Intl.NumberFormat('de-DE', {
-                          style: 'currency',
-                          currency: 'EUR',
-                        }).format(participant.maxReimbursementForCountry || 0)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-white/70 text-sm">To Reimburse</p>
-                      <p className="text-2xl font-bold text-white">
-                        {new Intl.NumberFormat('de-DE', {
-                          style: 'currency',
-                          currency: 'EUR',
-                        }).format(summary?.amountToReimburse || 0)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-white/70 text-sm">Status</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        {summary?.aiCheckOk ? (
-                          <CheckCircle className="w-5 h-5 text-emerald-300" />
-                        ) : (
-                          <HelpCircle className="w-5 h-5 text-amber-300" />
-                        )}
-                        <span className="text-white font-medium">
-                          {summary?.aiCheckOk ? 'AI Check OK' : 'Needs Review'}
-                        </span>
-                      </div>
-                    </div>
+          {/* ── Summary Card ── */}
+          <Card variant="gradient">
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                <div>
+                  <p className="text-white/70 text-sm">Total (EUR)</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(summary?.totalEur || 0)}</p>
+                </div>
+                <div>
+                  <p className="text-white/70 text-sm">Max Allowed</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(participant.maxReimbursementForCountry || 0)}</p>
+                </div>
+                <div>
+                  <p className="text-white/70 text-sm">To Reimburse</p>
+                  <p className="text-2xl font-bold text-white">{formatCurrency(summary?.amountToReimburse || 0)}</p>
+                </div>
+                <div>
+                  <p className="text-white/70 text-sm">Status</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    {summary?.aiCheckOk ? (
+                      <CheckCircle className="w-5 h-5 text-emerald-300" />
+                    ) : (
+                      <HelpCircle className="w-5 h-5 text-amber-300" />
+                    )}
+                    <span className="text-white font-medium">
+                      {summary?.aiCheckOk ? 'AI Check OK' : 'Needs Review'}
+                    </span>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-              {/* Documents */}
+          {/* ── Two Column Layout ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* ── Main Column (2/3) ── */}
+            <div className="lg:col-span-2 space-y-6">
+              {/* Travel Items */}
               <Card>
                 <CardHeader>
-                  <h3 className="font-semibold text-gray-900">Documents</h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-gray-900">Travel Items</h3>
+                    <span className="text-sm text-gray-400">{participant.travelItems.length} items</span>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  {participant.documents.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {participant.documents.map((doc) => (
-                        <DocumentCard
-                          key={doc.id}
-                          document={doc}
+                  {participant.travelItems.length > 0 ? (
+                    <div className="space-y-3">
+                      {participant.travelItems.map((item) => (
+                        <TravelItemCard
+                          key={item.id}
+                          item={item}
+                          expanded={expandedItems.has(item.id)}
+                          highlighted={highlightedItemId === item.id}
+                          onToggleExpand={() => toggleExpand(item.id)}
+                          findings={findingsByItem[item.id] || []}
+                          onToggleFinding={(findingId) => toggleFindingMutation.mutate({ findingId })}
+                          docsById={docsById}
                           participantId={participant.id}
                         />
                       ))}
                     </div>
                   ) : (
-                    <p className="text-gray-500 text-center py-6">No documents uploaded</p>
+                    <p className="text-gray-500 text-center py-6">No travel items</p>
                   )}
                 </CardContent>
               </Card>
 
-              {/* Travel Items */}
+              {/* All Documents (collapsed overview) */}
               <Card>
                 <CardHeader>
-                  <h3 className="font-semibold text-gray-900">Travel Items</h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-gray-900">All Documents</h3>
+                    <span className="text-sm text-gray-400">{participant.documents.length} files</span>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  {participant.travelItems.length > 0 ? (
-                    <div className="space-y-4">
-                      {participant.travelItems.map((item) => (
-                        <TravelItemCard
-                          key={item.id}
-                          item={item}
-                        />
+                  {participant.documents.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {participant.documents.map((doc) => (
+                        <DocumentChip key={doc.id} document={doc} participantId={participant.id} />
                       ))}
                     </div>
                   ) : (
-                    <p className="text-gray-500 text-center py-6">No travel items</p>
+                    <p className="text-gray-500 text-center py-6">No documents uploaded</p>
                   )}
                 </CardContent>
               </Card>
@@ -373,7 +462,6 @@ export default function OrgParticipantDetail() {
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    {/* Bank Account */}
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-1">
                         <CreditCard className="w-4 h-4" />
@@ -381,15 +469,11 @@ export default function OrgParticipantDetail() {
                       </div>
                       <div className="text-sm">
                         <p className="text-gray-500">IBAN</p>
-                        <p className="font-mono text-gray-900">
-                          {participant.bankAccountIban || '-'}
-                        </p>
+                        <p className="font-mono text-gray-900">{participant.bankAccountIban || '-'}</p>
                       </div>
                       <div className="text-sm">
                         <p className="text-gray-500">Account Holder</p>
-                        <p className="text-gray-900">
-                          {participant.bankAccountHolderName || '-'}
-                        </p>
+                        <p className="text-gray-900">{participant.bankAccountHolderName || '-'}</p>
                       </div>
                       {participant.bankAccountBic && (
                         <div className="text-sm">
@@ -404,8 +488,6 @@ export default function OrgParticipantDetail() {
                         </div>
                       )}
                     </div>
-
-                    {/* Personal Address */}
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-1">
                         <MapPin className="w-4 h-4" />
@@ -443,8 +525,8 @@ export default function OrgParticipantDetail() {
               </Card>
             </div>
 
-            {/* Sidebar */}
-            <div className="space-y-6">
+            {/* ── Sidebar (1/3) ── */}
+            <div className="space-y-6 lg:sticky lg:top-8 lg:self-start">
               {/* AI Review Findings */}
               {participant.status !== 'DRAFT' && (
                 <Card className={clsx(
@@ -454,19 +536,14 @@ export default function OrgParticipantDetail() {
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Sparkles className={clsx(
-                          'w-4 h-4',
-                          allChecked ? 'text-emerald-500' : 'text-indigo-500'
-                        )} />
+                        <Sparkles className={clsx('w-4 h-4', allChecked ? 'text-emerald-500' : 'text-indigo-500')} />
                         <h3 className="font-semibold text-gray-900">AI Review</h3>
                       </div>
                       <div className="flex items-center gap-2">
                         {findings.length > 0 && (
                           <span className={clsx(
                             'text-xs font-medium px-2 py-0.5 rounded-full',
-                            allChecked
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-gray-100 text-gray-600'
+                            allChecked ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'
                           )}>
                             {checkedCount}/{findings.length}
                           </span>
@@ -477,10 +554,7 @@ export default function OrgParticipantDetail() {
                           className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
                           title="Regenerate AI review"
                         >
-                          <RefreshCw className={clsx(
-                            'w-3.5 h-3.5',
-                            refreshReviewMutation.isPending && 'animate-spin'
-                          )} />
+                          <RefreshCw className={clsx('w-3.5 h-3.5', refreshReviewMutation.isPending && 'animate-spin')} />
                         </button>
                       </div>
                     </div>
@@ -491,32 +565,25 @@ export default function OrgParticipantDetail() {
                         <Loader2 className="w-4 h-4 animate-spin" />
                         <span>{refreshReviewMutation.isPending ? 'Regenerating review...' : 'Loading review...'}</span>
                       </div>
-                    ) : allChecked && findings.length > 0 ? (
+                    ) : findings.length > 0 ? (
                       <>
-                        <div className="flex items-center gap-2 p-2 bg-emerald-50 rounded-lg text-sm text-emerald-700 mb-3">
-                          <CheckCircle className="w-4 h-4 flex-shrink-0" />
-                          <span className="font-medium">All items reviewed</span>
-                        </div>
+                        {allChecked && (
+                          <div className="flex items-center gap-2 p-2 bg-emerald-50 rounded-lg text-sm text-emerald-700 mb-3">
+                            <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                            <span className="font-medium">All items reviewed</span>
+                          </div>
+                        )}
                         <div className="space-y-1.5">
                           {findings.map((finding: ReviewFinding) => (
                             <FindingItem
                               key={finding.id}
                               finding={finding}
                               onToggle={() => toggleFindingMutation.mutate({ findingId: finding.id })}
+                              onNavigate={finding.travelItemId ? () => scrollToTravelItem(finding.travelItemId!) : undefined}
                             />
                           ))}
                         </div>
                       </>
-                    ) : findings.length > 0 ? (
-                      <div className="space-y-1.5">
-                        {findings.map((finding: ReviewFinding) => (
-                          <FindingItem
-                            key={finding.id}
-                            finding={finding}
-                            onToggle={() => toggleFindingMutation.mutate({ findingId: finding.id })}
-                          />
-                        ))}
-                      </div>
                     ) : (
                       <p className="text-gray-500 text-sm py-2">
                         No review findings yet. Findings are generated when the participant submits.
@@ -534,34 +601,19 @@ export default function OrgParticipantDetail() {
                 <CardContent>
                   <div className="space-y-3">
                     {!summary?.aiCheckOk && (
-                      <Button
-                        variant="secondary"
-                        className="w-full"
-                        onClick={() => markAiCheckOkMutation.mutate()}
-                        loading={markAiCheckOkMutation.isPending}
-                      >
+                      <Button variant="secondary" className="w-full" onClick={() => markAiCheckOkMutation.mutate()} loading={markAiCheckOkMutation.isPending}>
                         <CheckCircle className="w-4 h-4 mr-2" />
                         Mark AI Check OK
                       </Button>
                     )}
-
                     {participant.status === 'PARTICIPANT_COMPLETE' && (
-                      <Button
-                        className="w-full"
-                        onClick={() => approveMutation.mutate()}
-                        loading={approveMutation.isPending}
-                      >
+                      <Button className="w-full" onClick={() => approveMutation.mutate()} loading={approveMutation.isPending}>
                         <CheckCircle className="w-4 h-4 mr-2" />
                         Approve Reimbursement
                       </Button>
                     )}
-
                     {participant.status === 'ADMIN_APPROVED' && !summary?.paid && (
-                      <Button
-                        className="w-full"
-                        onClick={() => markPaidMutation.mutate()}
-                        loading={markPaidMutation.isPending}
-                      >
+                      <Button className="w-full" onClick={() => markPaidMutation.mutate()} loading={markPaidMutation.isPending}>
                         <Euro className="w-4 h-4 mr-2" />
                         Mark as Paid
                       </Button>
@@ -570,21 +622,19 @@ export default function OrgParticipantDetail() {
                 </CardContent>
               </Card>
 
-              {/* Participant Note (from the participant) */}
+              {/* Participant Note */}
               {participant.participantNote && (
                 <Card className="border-blue-200 bg-blue-50">
                   <CardHeader>
                     <h3 className="font-semibold text-blue-800">Note from Participant</h3>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-blue-700 text-sm whitespace-pre-wrap">
-                      {participant.participantNote}
-                    </p>
+                    <p className="text-blue-700 text-sm whitespace-pre-wrap">{participant.participantNote}</p>
                   </CardContent>
                 </Card>
               )}
 
-              {/* Internal Notes (organisation-only) */}
+              {/* Internal Notes */}
               <Card>
                 <CardHeader>
                   <div className="flex items-center gap-2">
@@ -616,9 +666,7 @@ export default function OrgParticipantDetail() {
                     <h3 className="font-semibold text-red-600">Danger Zone</h3>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-gray-600 text-sm mb-3">
-                      Delete this participant and all their data.
-                    </p>
+                    <p className="text-gray-600 text-sm mb-3">Delete this participant and all their data.</p>
                     <Button
                       variant="danger"
                       className="w-full"
@@ -643,33 +691,46 @@ export default function OrgParticipantDetail() {
   );
 }
 
-function FindingItem({ finding, onToggle }: { finding: ReviewFinding; onToggle: () => void }) {
+// ── FindingItem ────────────────────────────────────────────────
+
+function FindingItem({
+  finding,
+  onToggle,
+  onNavigate,
+}: {
+  finding: ReviewFinding;
+  onToggle: () => void;
+  onNavigate?: () => void;
+}) {
   return (
-    <button
-      onClick={onToggle}
-      className={clsx(
-        'flex items-start gap-2 p-2 rounded-lg text-sm w-full text-left transition-colors',
-        finding.checked
-          ? 'bg-gray-50 opacity-60'
-          : finding.severity === 'critical'
-            ? 'bg-red-50 hover:bg-red-100'
-            : finding.severity === 'important'
-              ? 'bg-amber-50 hover:bg-amber-100'
-              : 'bg-gray-50 hover:bg-gray-100',
-      )}
-    >
-      <div className={clsx(
-        'w-4 h-4 rounded border mt-0.5 flex-shrink-0 flex items-center justify-center transition-colors',
-        finding.checked
-          ? 'bg-emerald-500 border-emerald-500'
-          : finding.severity === 'critical'
-            ? 'border-red-300'
-            : finding.severity === 'important'
-              ? 'border-amber-300'
-              : 'border-gray-300',
-      )}>
+    <div className={clsx(
+      'flex items-start gap-2 p-2 rounded-lg text-sm w-full text-left transition-colors',
+      finding.checked
+        ? 'bg-gray-50 opacity-60'
+        : finding.severity === 'critical'
+          ? 'bg-red-50'
+          : finding.severity === 'important'
+            ? 'bg-amber-50'
+            : 'bg-gray-50',
+    )}>
+      {/* Checkbox */}
+      <button
+        onClick={onToggle}
+        className={clsx(
+          'w-4 h-4 rounded border mt-0.5 flex-shrink-0 flex items-center justify-center transition-colors',
+          finding.checked
+            ? 'bg-emerald-500 border-emerald-500'
+            : finding.severity === 'critical'
+              ? 'border-red-300 hover:bg-red-100'
+              : finding.severity === 'important'
+                ? 'border-amber-300 hover:bg-amber-100'
+                : 'border-gray-300 hover:bg-gray-100',
+        )}
+      >
         {finding.checked && <Check className="w-3 h-3 text-white" />}
-      </div>
+      </button>
+
+      {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           {!finding.checked && (
@@ -693,6 +754,16 @@ function FindingItem({ finding, onToggle }: { finding: ReviewFinding; onToggle: 
           )}>
             {finding.category}
           </span>
+          {/* Navigate arrow for item-linked findings */}
+          {onNavigate && !finding.checked && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onNavigate(); }}
+              className="ml-auto p-0.5 rounded hover:bg-white/60 text-gray-400 hover:text-indigo-600 transition-colors"
+              title="Jump to travel item"
+            >
+              <Navigation className="w-3 h-3" />
+            </button>
+          )}
         </div>
         <p className={clsx(
           'mt-1',
@@ -707,23 +778,14 @@ function FindingItem({ finding, onToggle }: { finding: ReviewFinding; onToggle: 
           {finding.message}
         </p>
       </div>
-    </button>
+    </div>
   );
 }
 
-function DocumentCard({ document, participantId }: { document: Document; participantId: string }) {
-  const docTypeLabels: Record<string, string> = {
-    FLIGHT_INVOICE: 'Flight Invoice',
-    FLIGHT_BOARDING_PASS: 'Boarding Pass',
-    TRAIN_TICKET: 'Train Ticket',
-    BUS_TICKET: 'Bus Ticket',
-    FUEL_RECEIPT: 'Fuel Receipt',
-    GREEN_TRAVEL_DECLARATION: 'Green Travel Declaration',
-    HOTEL_INVOICE: 'Hotel Invoice',
-    OTHER: 'Other',
-  };
+// ── DocumentChip (compact view for All Documents section) ─────
 
-  const handleViewDocument = async () => {
+function DocumentChip({ document, participantId }: { document: Document; participantId: string }) {
+  const handleView = async () => {
     try {
       const { url } = await organisationApi.getDocumentUrl(participantId, document.id);
       window.open(url, '_blank');
@@ -733,77 +795,285 @@ function DocumentCard({ document, participantId }: { document: Document; partici
   };
 
   return (
-    <div className="p-4 bg-gray-50 rounded-xl">
-      <div className="flex items-start gap-3">
+    <button
+      onClick={handleView}
+      className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left group"
+    >
+      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-900 truncate">{document.renamedFilename}</p>
+        <p className="text-xs text-gray-500">{docTypeLabels[document.documentType] || document.documentType}</p>
+      </div>
+      <ExternalLink className="w-3 h-3 text-gray-300 group-hover:text-primary-500 flex-shrink-0" />
+    </button>
+  );
+}
+
+// ── InlineDocumentCard (inside expanded travel item) ──────────
+
+function InlineDocumentCard({ document, participantId }: { document: Document; participantId: string }) {
+  const handleView = async () => {
+    try {
+      const { url } = await organisationApi.getDocumentUrl(participantId, document.id);
+      window.open(url, '_blank');
+    } catch {
+      toast.error('Failed to get document URL');
+    }
+  };
+
+  return (
+    <button
+      onClick={handleView}
+      className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg hover:border-primary-300 hover:bg-primary-50 transition-colors text-left group"
+    >
+      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-medium text-gray-800 truncate">{document.renamedFilename}</p>
+        <p className="text-xs text-gray-400">{docTypeLabels[document.documentType] || document.documentType}</p>
+      </div>
+      <ExternalLink className="w-3 h-3 text-gray-300 group-hover:text-primary-500 flex-shrink-0" />
+    </button>
+  );
+}
+
+// ── TravelItemCard (enhanced, expandable, with linked docs) ──
+
+function TravelItemCard({
+  item,
+  expanded,
+  highlighted,
+  onToggleExpand,
+  findings,
+  onToggleFinding,
+  docsById,
+  participantId,
+}: {
+  item: TravelItem;
+  expanded: boolean;
+  highlighted: boolean;
+  onToggleExpand: () => void;
+  findings: ReviewFinding[];
+  onToggleFinding: (findingId: string) => void;
+  docsById: Record<string, Document>;
+  participantId: string;
+}) {
+  const Icon = transportIcons[item.modeOfTransport];
+  const linkedDocIds = getLinkedDocIds(item);
+  const linkedDocs = linkedDocIds.map(id => docsById[id]).filter(Boolean);
+  const warnings = parseValidationWarnings(item.validationWarnings);
+
+  const uncheckedCriticalCount = findings.filter(f => f.severity === 'critical' && !f.checked).length;
+  const uncheckedImportantCount = findings.filter(f => f.severity === 'important' && !f.checked).length;
+  const hasUncheckedFindings = uncheckedCriticalCount > 0 || uncheckedImportantCount > 0;
+
+  // Determine left border color based on worst unchecked finding severity
+  const borderColor = uncheckedCriticalCount > 0
+    ? 'border-l-red-500'
+    : uncheckedImportantCount > 0
+      ? 'border-l-amber-500'
+      : '';
+
+  return (
+    <div
+      id={`travel-item-${item.id}`}
+      className={clsx(
+        'rounded-xl border transition-all duration-300',
+        borderColor ? `border-l-4 ${borderColor}` : 'border-gray-200',
+        highlighted && 'ring-2 ring-indigo-400 ring-offset-2 bg-indigo-50/50',
+        !highlighted && 'bg-gray-50',
+      )}
+    >
+      {/* Collapsed header (always visible) */}
+      <button
+        onClick={onToggleExpand}
+        className="w-full p-4 flex items-start gap-4 text-left"
+      >
         <div className="w-10 h-10 rounded-lg bg-white border border-gray-200 flex items-center justify-center flex-shrink-0">
-          <FileText className="w-5 h-5 text-gray-400" />
+          <Icon className="w-5 h-5 text-gray-500" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-gray-900 truncate">{document.renamedFilename}</p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {docTypeLabels[document.documentType] || document.documentType} &middot;{' '}
-            {(document.fileSize / 1024).toFixed(1)} KB
-          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-gray-900">{item.fromLocation}</span>
+            <span className="text-gray-400">&rarr;</span>
+            <span className="font-medium text-gray-900">{item.toLocation}</span>
+            {/* Status badges inline */}
+            {item.manuallyEdited && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700" title={`AI detected ${formatCurrency(item.originalAmountFromAi || 0)}`}>
+                <Pencil className="w-2.5 h-2.5 inline mr-0.5" />Edited
+              </span>
+            )}
+            {item.priceMissing && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">No price</span>
+            )}
+            {item.routeMatchesCountry === false && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Route mismatch</span>
+            )}
+            {item.excludedFromReimbursement && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">Excluded</span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
+            <span>{formatDate(item.departureDate)}{item.arrivalDate ? ` - ${formatDate(item.arrivalDate)}` : ''}</span>
+            {item.flightNumber && <span>Flight: {item.flightNumber}</span>}
+            {item.bookingReference && <span>Ref: {item.bookingReference}</span>}
+            {item.distanceKm && <span>{item.distanceKm} km</span>}
+            {item.numberOfPassengers && item.numberOfPassengers > 1 && (
+              <span className="text-amber-600">
+                <Users className="w-3 h-3 inline mr-0.5" />
+                {item.numberOfPassengers} passengers
+              </span>
+            )}
+          </div>
+          {/* Inline finding count badges */}
+          {hasUncheckedFindings && (
+            <div className="flex gap-1.5 mt-1.5">
+              {uncheckedCriticalCount > 0 && (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-red-100 text-red-700">
+                  <AlertTriangle className="w-3 h-3" /> {uncheckedCriticalCount}
+                </span>
+              )}
+              {uncheckedImportantCount > 0 && (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700">
+                  <AlertCircle className="w-3 h-3" /> {uncheckedImportantCount}
+                </span>
+              )}
+            </div>
+          )}
         </div>
-      </div>
-      <div className="flex gap-2 mt-3">
-        <button
-          onClick={handleViewDocument}
-          className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
-        >
-          <ExternalLink className="w-3 h-3" />
-          View
-        </button>
-      </div>
+        <div className="text-right flex-shrink-0">
+          <p className="font-semibold text-gray-900">{formatCurrency(item.amountEur)}</p>
+          {item.currencyOriginal !== 'EUR' && (
+            <p className="text-xs text-gray-500">{item.amountOriginal} {item.currencyOriginal}</p>
+          )}
+          {item.luggageAmountEur != null && item.luggageAmountEur > 0 && (
+            <p className="text-xs text-sky-600">+{formatCurrency(item.luggageAmountEur)} luggage</p>
+          )}
+        </div>
+        <div className="flex-shrink-0 mt-1">
+          {expanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+        </div>
+      </button>
+
+      {/* Expanded details */}
+      {expanded && (
+        <div className="px-4 pb-4 space-y-4 border-t border-gray-200 pt-4">
+          {/* Detail grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+            <DetailField label="Mode" value={item.modeOfTransport} />
+            <DetailField label="Departure" value={formatDate(item.departureDate)} />
+            {item.arrivalDate && <DetailField label="Arrival" value={formatDate(item.arrivalDate)} />}
+            {item.purchaseDate && (
+              <DetailField
+                label="Purchase Date"
+                value={`${formatDate(item.purchaseDate)}${item.purchaseDateAutoFilled ? ' (auto)' : ''}`}
+              />
+            )}
+            {item.flightNumber && <DetailField label="Flight #" value={item.flightNumber} />}
+            {item.bookingReference && <DetailField label="Booking Ref" value={item.bookingReference} />}
+            <DetailField label="Amount (EUR)" value={formatCurrency(item.amountEur)} />
+            {item.currencyOriginal !== 'EUR' && (
+              <DetailField label={`Amount (${item.currencyOriginal})`} value={`${item.amountOriginal}`} />
+            )}
+            {item.manuallyEdited && item.originalAmountFromAi != null && (
+              <DetailField label="AI Original Amount" value={formatCurrency(item.originalAmountFromAi)} highlight="orange" />
+            )}
+            {item.numberOfPassengers && item.numberOfPassengers > 1 && (
+              <>
+                <DetailField label="Passengers" value={`${item.numberOfPassengers}`} />
+                {item.participantPortion != null && (
+                  <DetailField label="Claimed Portion" value={`${(item.participantPortion * 100).toFixed(0)}%`} />
+                )}
+              </>
+            )}
+            {item.distanceKm && <DetailField label="Distance" value={`${item.distanceKm} km`} />}
+            {item.isDriverCarpool && <DetailField label="Driver/Carpool" value="Yes" />}
+            {item.luggageAmountEur != null && item.luggageAmountEur > 0 && (
+              <DetailField label="Luggage Fee" value={formatCurrency(item.luggageAmountEur)} />
+            )}
+            {item.amountIncludedInRoundTrip && (
+              <DetailField label="Round-trip" value="Price on outbound leg" />
+            )}
+          </div>
+
+          {/* Comment */}
+          {item.comment && (
+            <div className="text-sm">
+              <p className="text-gray-500 text-xs mb-1">Participant comment</p>
+              <p className="text-gray-700 italic bg-white rounded-lg px-3 py-2 border border-gray-100">{item.comment}</p>
+            </div>
+          )}
+
+          {/* Consolidation notes (from AI) */}
+          {item.consolidationNotes && (
+            <div className="text-sm">
+              <p className="text-gray-500 text-xs mb-1">AI consolidation note</p>
+              <p className="text-gray-500 italic text-xs bg-gray-100 rounded-lg px-3 py-2">{item.consolidationNotes}</p>
+            </div>
+          )}
+
+          {/* Validation warnings */}
+          {warnings.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {warnings.map((w, i) => (
+                <span key={i} className="px-2 py-1 rounded text-xs bg-amber-50 text-amber-700 border border-amber-200">
+                  {w}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Linked Documents */}
+          <div>
+            <p className="text-xs font-medium text-gray-500 mb-2">
+              Linked Documents ({linkedDocs.length})
+            </p>
+            {linkedDocs.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {linkedDocs.map((doc) => (
+                  <InlineDocumentCard key={doc.id} document={doc} participantId={participantId} />
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 px-3 py-2 bg-red-50 rounded-lg text-xs text-red-600 border border-red-200">
+                <AlertTriangle className="w-3 h-3" />
+                No documents linked to this travel item
+              </div>
+            )}
+          </div>
+
+          {/* Inline findings for this item */}
+          {findings.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-gray-500 mb-2">
+                AI Findings for this item ({findings.filter(f => !f.checked).length} open)
+              </p>
+              <div className="space-y-1.5">
+                {findings.map((finding) => (
+                  <FindingItem
+                    key={finding.id}
+                    finding={finding}
+                    onToggle={() => onToggleFinding(finding.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function TravelItemCard({ item }: { item: TravelItem }) {
-  const Icon = transportIcons[item.modeOfTransport];
+// ── DetailField helper ─────────────────────────────────────────
 
+function DetailField({ label, value, highlight }: { label: string; value: string; highlight?: 'orange' | 'red' }) {
   return (
-    <div className="p-4 bg-gray-50 rounded-xl">
-      <div className="flex items-start gap-4">
-        <div className="w-10 h-10 rounded-lg bg-white border border-gray-200 flex items-center justify-center flex-shrink-0">
-          <Icon className="w-5 h-5 text-gray-500" />
-        </div>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-gray-900">{item.fromLocation}</span>
-            <span className="text-gray-400">&rarr;</span>
-            <span className="font-medium text-gray-900">{item.toLocation}</span>
-          </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
-            <span>{formatDate(item.departureDate)}</span>
-            {item.flightNumber && <span>Flight: {item.flightNumber}</span>}
-            {item.bookingReference && <span>Ref: {item.bookingReference}</span>}
-          </div>
-        </div>
-        <div className="text-right">
-          <p className="font-semibold text-gray-900">
-            {new Intl.NumberFormat('de-DE', {
-              style: 'currency',
-              currency: 'EUR',
-            }).format(item.amountEur)}
-          </p>
-          {item.currencyOriginal !== 'EUR' && (
-            <p className="text-xs text-gray-500">
-              {item.amountOriginal} {item.currencyOriginal}
-            </p>
-          )}
-          {item.luggageAmountEur != null && item.luggageAmountEur > 0 && (
-            <p className="text-xs text-sky-600">
-              +{new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(item.luggageAmountEur)} luggage
-            </p>
-          )}
-        </div>
-      </div>
-      {item.excludedFromReimbursement && (
-        <div className="mt-2 text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
-          Excluded from reimbursement
-        </div>
-      )}
+    <div>
+      <p className="text-gray-400 text-xs">{label}</p>
+      <p className={clsx(
+        'font-medium text-sm',
+        highlight === 'orange' ? 'text-orange-600' : highlight === 'red' ? 'text-red-600' : 'text-gray-900',
+      )}>{value}</p>
     </div>
   );
 }
