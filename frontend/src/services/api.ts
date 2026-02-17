@@ -2,7 +2,7 @@ const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
     this.name = 'ApiError';
@@ -410,6 +410,15 @@ export const participantApi = {
       method: 'DELETE',
     });
     return handleResponse<{ success: boolean }>(res);
+  },
+
+  setNoReimbursement: async (token: string, noReimbursement: boolean) => {
+    const res = await fetch(`${API_BASE}/participant/no-reimbursement?token=${token}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noReimbursement }),
+    });
+    return handleResponse<{ noReimbursement: boolean }>(res);
   },
 
   markComplete: async (token: string) => {
@@ -1245,6 +1254,7 @@ export interface Participant {
   email: string;
   country: string;
   status: ParticipantStatus;
+  noReimbursement?: boolean;
   lastMagicLinkSentAt?: string;
   reopenedAt?: string;
   reopenMessage?: string;
@@ -1513,6 +1523,7 @@ export interface ParticipantAuthResponse {
     homeCountryReasoning?: string | null;
     reopenedAt?: string;
     reopenMessage?: string;
+    noReimbursement?: boolean;
   };
   project: {
     id: string;

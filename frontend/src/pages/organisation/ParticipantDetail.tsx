@@ -1065,11 +1065,13 @@ function FindingItem({
       'flex items-start gap-2 p-2 rounded-lg text-sm w-full text-left transition-colors',
       finding.checked
         ? 'bg-gray-50 opacity-60'
-        : finding.severity === 'critical'
-          ? 'bg-red-50'
-          : finding.severity === 'important'
-            ? 'bg-amber-50'
-            : 'bg-gray-50',
+        : finding.category === 'All Clear'
+          ? 'bg-emerald-50'
+          : finding.severity === 'critical'
+            ? 'bg-red-50'
+            : finding.severity === 'important'
+              ? 'bg-amber-50'
+              : 'bg-gray-50',
     )}>
       {/* Checkbox */}
       <button
@@ -1092,7 +1094,9 @@ function FindingItem({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           {!finding.checked && (
-            finding.severity === 'critical' ? (
+            finding.category === 'All Clear' ? (
+              <CheckCircle className="w-3 h-3 text-emerald-500 flex-shrink-0" />
+            ) : finding.severity === 'critical' ? (
               <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />
             ) : finding.severity === 'important' ? (
               <AlertCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
@@ -1104,11 +1108,13 @@ function FindingItem({
             'px-1.5 py-0.5 rounded text-xs font-medium',
             finding.checked
               ? 'bg-gray-100 text-gray-500'
-              : finding.severity === 'critical'
-                ? 'bg-red-100 text-red-700'
-                : finding.severity === 'important'
-                  ? 'bg-amber-100 text-amber-700'
-                  : 'bg-gray-100 text-gray-600',
+              : finding.category === 'All Clear'
+                ? 'bg-emerald-100 text-emerald-700'
+                : finding.severity === 'critical'
+                  ? 'bg-red-100 text-red-700'
+                  : finding.severity === 'important'
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-gray-100 text-gray-600',
           )}>
             {finding.category}
           </span>
@@ -1127,11 +1133,13 @@ function FindingItem({
           'mt-1',
           finding.checked
             ? 'text-gray-400 line-through'
-            : finding.severity === 'critical'
-              ? 'text-red-800'
-              : finding.severity === 'important'
-                ? 'text-amber-800'
-                : 'text-gray-600',
+            : finding.category === 'All Clear'
+              ? 'text-emerald-700'
+              : finding.severity === 'critical'
+                ? 'text-red-800'
+                : finding.severity === 'important'
+                  ? 'text-amber-800'
+                  : 'text-gray-600',
         )}>
           {finding.message}
         </p>

@@ -11,13 +11,9 @@ import {
   Settings,
   FileText,
   AlertTriangle,
-  CheckCircle,
   UserPlus,
   ChevronUp,
   ChevronDown,
-  FileX,
-  ShieldCheck,
-  Banknote,
   Users,
   Share2,
   Search,
@@ -263,25 +259,6 @@ function getProgressStatus(participant: OrgParticipant): { status: ProgressStatu
   return { status: 'has_docs', label: 'In progress' };
 }
 
-function ProgressIcon({ status }: { status: ProgressStatus }) {
-  const iconMap: Record<ProgressStatus, { icon: React.ElementType; bgColor: string; iconColor: string }> = {
-    no_docs: { icon: FileX, bgColor: 'bg-gray-100', iconColor: 'text-gray-400' },
-    has_docs: { icon: FileText, bgColor: 'bg-blue-100', iconColor: 'text-blue-600' },
-    missing_items: { icon: AlertTriangle, bgColor: 'bg-amber-100', iconColor: 'text-amber-600' },
-    complete: { icon: CheckCircle, bgColor: 'bg-emerald-100', iconColor: 'text-emerald-600' },
-    approved: { icon: ShieldCheck, bgColor: 'bg-purple-100', iconColor: 'text-purple-600' },
-    paid: { icon: Banknote, bgColor: 'bg-emerald-100', iconColor: 'text-emerald-600' },
-  };
-
-  const { icon: Icon, bgColor, iconColor } = iconMap[status];
-
-  return (
-    <div className={clsx('inline-flex items-center justify-center w-7 h-7 rounded-full', bgColor)}>
-      <Icon className={clsx('w-4 h-4', iconColor)} />
-    </div>
-  );
-}
-
 function OverviewTab({
   project,
   projectId,
@@ -296,8 +273,24 @@ function OverviewTab({
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [sortField, setSortField] = useState<SortField>('name');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const sortStorageKey = `participant-sort-${projectId}`;
+  const [sortField, setSortField] = useState<SortField>(() => {
+    try {
+      const saved = localStorage.getItem(sortStorageKey);
+      if (saved) return (JSON.parse(saved).field as SortField) || 'name';
+    } catch { /* ignore */ }
+    return 'name';
+  });
+  const [sortDirection, setSortDirection] = useState<SortDirection>(() => {
+    try {
+      const saved = localStorage.getItem(sortStorageKey);
+      if (saved) return (JSON.parse(saved).direction as SortDirection) || 'asc';
+    } catch { /* ignore */ }
+    return 'asc';
+  });
+  useEffect(() => {
+    localStorage.setItem(sortStorageKey, JSON.stringify({ field: sortField, direction: sortDirection }));
+  }, [sortField, sortDirection, sortStorageKey]);
   const [searchQuery, setSearchQuery] = useState('');
   const queryClient = useQueryClient();
 
@@ -725,7 +718,6 @@ function OverviewTab({
                   <SortHeader field="name">Name</SortHeader>
                   <SortHeader field="country">Country</SortHeader>
                   <SortHeader field="status">Status</SortHeader>
-                  <SortHeader field="check">Progress</SortHeader>
                   {disseminationEnabled && (
                     <th className="px-4 py-3 text-center">Dissem.</th>
                   )}
@@ -736,7 +728,6 @@ function OverviewTab({
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sortedParticipants.map((participant) => {
-                  const progress = getProgressStatus(participant);
                   return (
                     <tr key={participant.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
@@ -759,12 +750,6 @@ function OverviewTab({
                       <td className="px-4 py-3 text-gray-600">{participant.country}</td>
                       <td className="px-4 py-3">
                         <StatusBadge status={participant.status} />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <ProgressIcon status={progress.status} />
-                          <span className="text-xs text-gray-500">{progress.label}</span>
-                        </div>
                       </td>
                       {disseminationEnabled && (
                         <td className="px-4 py-3">

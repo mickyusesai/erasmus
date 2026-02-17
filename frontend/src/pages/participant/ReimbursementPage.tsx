@@ -43,6 +43,7 @@ import {
   DocumentType,
   Document,
   DeclarationOfTravel,
+  ApiError,
 } from '../../services/api';
 import { clsx } from 'clsx';
 
@@ -105,7 +106,7 @@ const erasmusQuotes = [
 ];
 
 // Loading screen component with travel animation, progress stages, and rotating Erasmus quotes
-function ConsolidationLoading() {
+function ConsolidationLoading({ documentCount = 1 }: { documentCount?: number }) {
   const [quoteIndex, setQuoteIndex] = useState(0);
   const [elapsed, setElapsed] = useState(0);
 
@@ -125,11 +126,19 @@ function ConsolidationLoading() {
 
   const currentQuote = erasmusQuotes[quoteIndex];
 
-  // Progress stages based on elapsed time
+  // Estimate total time based on document count (~30s per doc, min 60s, max 300s)
+  const estimatedSeconds = Math.max(60, Math.min(300, documentCount * 30));
+  const estimatedMinutes = Math.ceil(estimatedSeconds / 60);
+  const timeEstimate = estimatedMinutes <= 1
+    ? 'about a minute'
+    : `about ${estimatedMinutes} minutes`;
+
+  // Progress stages scaled proportionally to estimated time
+  const factor = estimatedSeconds / 120;
   const getProgressStage = () => {
-    if (elapsed < 15) return { label: 'Analyzing your documents...', progress: 20 };
-    if (elapsed < 40) return { label: 'Extracting travel details...', progress: 45 };
-    if (elapsed < 70) return { label: 'Building your travel journey...', progress: 70 };
+    if (elapsed < 15 * factor) return { label: 'Analyzing your documents...', progress: 20 };
+    if (elapsed < 40 * factor) return { label: 'Extracting travel details...', progress: 45 };
+    if (elapsed < 70 * factor) return { label: 'Building your travel journey...', progress: 70 };
     return { label: 'Almost done, finalizing...', progress: 90 };
   };
   const stage = getProgressStage();
@@ -182,7 +191,7 @@ function ConsolidationLoading() {
           />
         </div>
         <p className="text-sm text-gray-500 mb-6">
-          This usually takes 1-2 minutes
+          This usually takes {timeEstimate}
         </p>
 
         {/* Erasmus quote (secondary) */}
@@ -254,6 +263,7 @@ type ActiveTab = 'reimbursement' | 'dissemination';
 export default function ReimbursementPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
   const [hasSetInitialStep, setHasSetInitialStep] = useState(false);
@@ -270,7 +280,12 @@ export default function ReimbursementPage() {
     queryKey: ['participant-auth'],
     queryFn: () => participantApi.authenticate(token!),
     enabled: !!token,
-    retry: false,
+    retry: (failureCount, err) => {
+      // Retry up to 3 times on transient server errors (5xx), never on 4xx (invalid token)
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) return false;
+      return failureCount < 3;
+    },
+    retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 10000),
   });
 
   // Set initial step based on whether travel items already exist
@@ -415,7 +430,22 @@ export default function ReimbursementPage() {
               <Step1Upload
                 data={data}
                 token={token}
-                onNext={() => setCurrentStep(2)}
+                onNext={async () => {
+                  if (data.participant.noReimbursement) {
+                    // Skip steps 2 & 3 — mark complete directly
+                    try {
+                      const result = await participantApi.markComplete(token);
+                      if ('success' in result && result.success) {
+                        queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+                        toast.success('Submitted successfully!');
+                      }
+                    } catch {
+                      toast.error('Failed to submit');
+                    }
+                  } else {
+                    setCurrentStep(2);
+                  }
+                }}
                 onAiWarnings={setAiConsolidationWarnings}
               />
             )}
@@ -661,8 +691,52 @@ function Step1Upload({
   return (
     <>
       {/* Show loading screen with Erasmus quotes during consolidation */}
-      {consolidating && <ConsolidationLoading />}
+      {consolidating && <ConsolidationLoading documentCount={data.documents.length} />}
 
+      {/* No-reimbursement option */}
+      <Card className="mb-4">
+        <CardContent className="py-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={data.participant.noReimbursement || false}
+              onChange={async (e) => {
+                try {
+                  await participantApi.setNoReimbursement(token, e.target.checked);
+                  queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+                } catch {
+                  toast.error('Failed to update preference');
+                }
+              }}
+              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-5 w-5"
+            />
+            <div>
+              <p className="font-medium text-gray-900">I don't need travel reimbursement</p>
+              <p className="text-sm text-gray-500">Select this if you didn't travel or don't need to claim travel costs. You can still participate in dissemination activities.</p>
+            </div>
+          </label>
+        </CardContent>
+      </Card>
+
+      {data.participant.noReimbursement ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4">
+              <Info className="w-8 h-8 text-blue-600" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">No reimbursement needed</h3>
+            <p className="text-gray-500 max-w-md mx-auto mb-6">
+              You've indicated that you don't need travel reimbursement. You can still complete dissemination activities if required by the project.
+            </p>
+            <button
+              onClick={onNext}
+              className="px-6 py-3 bg-primary-600 text-white rounded-xl font-medium hover:bg-primary-700 transition-colors"
+            >
+              Continue
+            </button>
+          </CardContent>
+        </Card>
+      ) : (
       <Card>
         <CardHeader>
           <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
@@ -802,6 +876,7 @@ function Step1Upload({
         )}
       </CardContent>
     </Card>
+      )}
     </>
   );
 }
@@ -1073,27 +1148,7 @@ function Step2CheckData({
       });
     }
 
-    // Add AI consolidation warnings as notifications (friendlier style)
-    // Filter out warnings meant for reviewers/organisation, not for participants
-    aiWarnings
-      .filter(warning => {
-        const lower = warning.toLowerCase();
-        // Skip round-trip warnings (shown at travel item level)
-        if (lower.includes('round-trip') || lower.includes('round trip')) return false;
-        // Skip reviewer/auditor-specific messages
-        if (lower.includes('reviewer') || lower.includes('auditor') || lower.includes('verify')) return false;
-        // Skip conflicting totals (internal detail for AI review)
-        if (lower.includes('conflicting total')) return false;
-        return true;
-      })
-      .forEach((warning, index) => {
-        w.push({
-          id: `ai-warning-${index}`,
-          type: 'notification',
-          message: warning,
-          dismissible: true,
-        });
-      });
+    // AI consolidation warnings are internal notes for reviewers, not shown to participants
 
     // Check for missing boarding passes for flights
     const hasFlights = data.travelItems.some(t => t.modeOfTransport === 'PLANE');
@@ -1844,6 +1899,70 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
   );
 }
 
+// Inline upload dropzone for travel items with no linked document
+function InlineDocumentUpload({
+  token,
+  onUpdate,
+}: {
+  token: string;
+  onUpdate: (data: Record<string, unknown>) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [uploading, setUploading] = useState(false);
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    accept: {
+      'application/pdf': ['.pdf'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/webp': ['.webp'],
+    },
+    maxFiles: 1,
+    disabled: uploading,
+    onDrop: async (files) => {
+      if (files.length === 0) return;
+      setUploading(true);
+      try {
+        const result = await participantApi.uploadDocument(token, files[0]);
+        // Link the uploaded document to this travel item
+        onUpdate({ documentId: result.document.id });
+        await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
+        toast.success('Document uploaded and linked');
+      } catch {
+        toast.error('Failed to upload document');
+      } finally {
+        setUploading(false);
+      }
+    },
+  });
+
+  return (
+    <div
+      {...getRootProps()}
+      className={clsx(
+        'p-4 border-2 border-dashed rounded-xl text-center cursor-pointer transition-colors',
+        uploading
+          ? 'border-gray-300 bg-gray-50 cursor-wait'
+          : isDragActive
+            ? 'border-primary-400 bg-primary-50'
+            : 'border-amber-300 bg-amber-50 hover:border-primary-400 hover:bg-primary-50'
+      )}
+    >
+      <input {...getInputProps()} />
+      {uploading ? (
+        <div className="flex items-center justify-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+          <span className="text-sm text-primary-600">Uploading...</span>
+        </div>
+      ) : (
+        <div className="flex items-center justify-center gap-2">
+          <Upload className="w-4 h-4 text-amber-500" />
+          <span className="text-sm text-amber-700">No document linked — click or drag to upload</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Travel Item Card with boarding pass status
 function TravelItemCard({
   item,
@@ -1910,7 +2029,6 @@ function TravelItemCard({
   const [localCompanyName, setLocalCompanyName] = useState(item.companyName || '');
   const [localAmount, setLocalAmount] = useState(String(item.amountOriginal || ''));
   const [localDistanceKm, setLocalDistanceKm] = useState(String(item.distanceKm || ''));
-  const [localParticipantPortion, setLocalParticipantPortion] = useState(String(item.participantPortion || ''));
 
   // Sync local state when item changes from external source
   useEffect(() => {
@@ -1921,7 +2039,6 @@ function TravelItemCard({
     setLocalCompanyName(item.companyName || '');
     setLocalAmount(String(item.amountOriginal || ''));
     setLocalDistanceKm(String(item.distanceKm || ''));
-    setLocalParticipantPortion(String(item.participantPortion || ''));
   }, [item.id]); // Only sync when switching to a different item
 
   // Helper to check if a value needs attention (unknown or empty)
@@ -1988,20 +2105,27 @@ function TravelItemCard({
     handleCurrencyConversion();
   }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, item.currencyOriginal, item.amountEur, handleCurrencyConversion]);
 
-  // Set up 5-second debounce timer when inputs change
+  // Set up debounce timer when inputs change
+  // Use shorter debounce (500ms) for purchase date changes (date picker completes in one action)
+  // Use longer debounce (5s) for amount changes (user is typing)
   useEffect(() => {
     if (!isNonEurCurrency || !item.purchaseDate || !item.amountOriginal) return;
 
     const conversionKey = `${item.currencyOriginal}|${item.amountOriginal}|${item.purchaseDate}`;
     if (conversionKey === lastConversionKey.current) return;
 
+    // Detect which field changed to determine debounce timing
+    const prevParts = lastConversionKey.current.split('|');
+    const purchaseDateChanged = prevParts.length === 3 && prevParts[2] !== String(item.purchaseDate);
+    const currencyChanged = prevParts.length === 3 && prevParts[0] !== item.currencyOriginal;
+    const debounceMs = (purchaseDateChanged || currencyChanged) ? 500 : 5000;
+
     // Clear previous timer
     if (conversionTimerRef.current) clearTimeout(conversionTimerRef.current);
 
-    // Set new 5-second debounce timer
     conversionTimerRef.current = setTimeout(() => {
       triggerConversionIfNeeded();
-    }, 5000);
+    }, debounceMs);
 
     return () => {
       if (conversionTimerRef.current) clearTimeout(conversionTimerRef.current);
@@ -2068,38 +2192,15 @@ function TravelItemCard({
       {/* Multi-passenger booking alert */}
       {item.numberOfPassengers && item.numberOfPassengers > 1 && (
         <div className="mb-4 p-3 rounded-xl bg-blue-50 border border-blue-200">
-          <div className="flex items-start gap-3">
-            <Users className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-            <div className="flex-1">
+          <div className="flex items-center gap-3">
+            <Users className="w-5 h-5 text-blue-600 flex-shrink-0" />
+            <div>
               <p className="text-sm font-medium text-blue-800">
-                Multi-passenger booking ({item.numberOfPassengers} passengers)
+                Multi-person booking ({item.numberOfPassengers} passengers)
               </p>
               <p className="text-xs text-blue-700 mt-1">
-                This booking was for multiple people. Please enter your share of the cost below.
+                The full booking amount is claimed for reimbursement.
               </p>
-              <div className="mt-3 flex items-center gap-2">
-                <label className="text-sm text-blue-800">My portion:</label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max={item.amountOriginal}
-                  value={localParticipantPortion}
-                  onChange={(e) => setLocalParticipantPortion(e.target.value)}
-                  onBlur={() => {
-                    const parsed = parseFloat(localParticipantPortion);
-                    if (!isNaN(parsed) && parsed !== item.participantPortion) {
-                      onUpdate({ participantPortion: parsed });
-                    }
-                  }}
-                  className="w-28"
-                  placeholder={`Max: ${item.amountOriginal}`}
-                />
-                <span className="text-sm text-blue-700">{item.currencyOriginal}</span>
-                <span className="text-xs text-blue-600 ml-2">
-                  (Total: {formatCurrency(item.amountOriginal, item.currencyOriginal)})
-                </span>
-              </div>
             </div>
           </div>
         </div>
@@ -2152,11 +2253,16 @@ function TravelItemCard({
           ) : (
             <>
               <p className="font-semibold text-gray-900">
-                {formatCurrency((item.amountEur || 0) + (item.luggageAmountEur || 0))}
+                {formatCurrency(
+                  (item.currencyOriginal === 'EUR'
+                    ? (parseFloat(localAmount) || item.amountEur || 0)
+                    : (item.amountEur || 0)
+                  ) + (item.luggageAmountEur || 0)
+                )}
               </p>
               {item.currencyOriginal !== 'EUR' && (
                 <p className="text-xs text-gray-500">
-                  {formatCurrency(item.amountOriginal, item.currencyOriginal)}
+                  {formatCurrency(parseFloat(localAmount) || item.amountOriginal, item.currencyOriginal)}
                 </p>
               )}
             </>
@@ -2201,9 +2307,8 @@ function TravelItemCard({
           ))}
         </div>
       ) : (
-        <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200 flex items-center gap-3">
-          <AlertTriangle className="w-4 h-4 text-amber-500" />
-          <span className="text-sm text-amber-700">No document linked to this travel item</span>
+        <div className="mb-4">
+          <InlineDocumentUpload token={token} onUpdate={onUpdate} />
         </div>
       )}
 
@@ -2648,24 +2753,32 @@ function AddTravelModal({
             {/* Document selection */}
             <div>
               <label className="label">Select Document</label>
+              <p className="text-xs text-gray-500 mb-2">Click a document below to link it to this travel item</p>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {unlinkedDocs.map(doc => (
                   <div
                     key={doc.id}
                     className={clsx(
-                      'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                      'flex items-center justify-between p-3 rounded-xl border-2 cursor-pointer transition-all',
                       selectedExistingDocId === doc.id
-                        ? 'border-emerald-500 bg-emerald-50'
-                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        ? 'border-emerald-500 bg-emerald-50 shadow-sm'
+                        : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50 hover:shadow-sm'
                     )}
                     onClick={() => setSelectedExistingDocId(selectedExistingDocId === doc.id ? '' : doc.id)}
                   >
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className={clsx(
+                        'w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0',
+                        selectedExistingDocId === doc.id
+                          ? 'border-emerald-500 bg-emerald-500'
+                          : 'border-gray-300'
+                      )}>
+                        {selectedExistingDocId === doc.id && (
+                          <div className="w-2 h-2 rounded-full bg-white" />
+                        )}
+                      </div>
                       <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
                       <span className="text-sm text-gray-700 truncate">{doc.originalFilename}</span>
-                      {selectedExistingDocId === doc.id && (
-                        <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                      )}
                     </div>
                     <div className="flex items-center gap-1 ml-2">
                       <button
@@ -2815,18 +2928,30 @@ function AddTravelModal({
           {!selectedExistingDocId && (
             <div className="border-2 border-dashed border-gray-200 rounded-xl p-4">
               {selectedFile ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-5 h-5 text-gray-400" />
-                    <span className="text-sm text-gray-700">{selectedFile.name}</span>
-                  </div>
+                <div className="relative">
                   <button
                     type="button"
                     onClick={() => setSelectedFile(null)}
-                    className="text-red-500 hover:text-red-600"
+                    className="absolute top-2 right-2 p-1 bg-white rounded-full shadow hover:bg-red-50 z-10"
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-3 h-3 text-gray-500" />
                   </button>
+                  {selectedFile.type.startsWith('image/') ? (
+                    <img
+                      src={URL.createObjectURL(selectedFile)}
+                      alt="Preview"
+                      className="max-h-40 rounded-lg mx-auto cursor-pointer"
+                      onClick={() => window.open(URL.createObjectURL(selectedFile), '_blank')}
+                    />
+                  ) : (
+                    <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.open(URL.createObjectURL(selectedFile), '_blank')}>
+                      <FileText className="w-8 h-8 text-red-400" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-700">{selectedFile.name}</p>
+                        <p className="text-xs text-gray-500">{(selectedFile.size / 1024).toFixed(0)} KB — click to preview</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <label className="cursor-pointer flex flex-col items-center">
@@ -3113,6 +3238,7 @@ function Step3Confirm({
   const [selectedMissingDoc, setSelectedMissingDoc] = useState<DocumentType | null>(null);
   const [declarationTravelItem, setDeclarationTravelItem] = useState<TravelItem | null>(null);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   // Find flights missing boarding passes (no linked boarding pass document and no declaration of travel)
   const declarationsOfTravel = data.declarationsOfTravel || [];
@@ -3183,15 +3309,24 @@ function Step3Confirm({
           </p>
         </CardHeader>
         <CardContent>
-          {/* Missing Items Warning */}
-          {!validation.isComplete && (
+          {/* Missing Items Warning — hide bank-related items until user tries to submit */}
+          {!validation.isComplete && (() => {
+            const visibleItems = validation.missingItems.filter(item => {
+              if (!submitAttempted) {
+                const lower = item.description.toLowerCase();
+                if (lower.includes('bank') || lower.includes('iban') || lower.includes('holder')) return false;
+              }
+              return true;
+            });
+            if (visibleItems.length === 0) return null;
+            return (
             <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
                 <div>
                   <h4 className="font-semibold text-amber-800">Missing Items</h4>
                   <ul className="mt-2 space-y-1">
-                    {validation.missingItems.map((item, i) => (
+                    {visibleItems.map((item, i) => (
                       <li key={i} className="text-sm text-amber-700 flex items-center gap-2">
                         <span>• {item.description}</span>
                         {item.type === 'document' && item.documentType && (
@@ -3211,7 +3346,8 @@ function Step3Confirm({
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Flights Missing Boarding Pass Warning */}
           {flightsMissingBoardingPass.length > 0 && (
@@ -3420,7 +3556,7 @@ function Step3Confirm({
               Back to Check Data
             </Button>
             <Button
-              onClick={() => markCompleteMutation.mutate()}
+              onClick={() => { setSubmitAttempted(true); markCompleteMutation.mutate(); }}
               loading={markCompleteMutation.isPending}
               disabled={!canSubmit}
             >

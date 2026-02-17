@@ -228,6 +228,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       detectedHomeCountry: data?.detectedHomeCountry,
       homeCountryConfidence: data?.homeCountryConfidence,
       homeCountryReasoning: data?.homeCountryReasoning,
+      noReimbursement: data?.noReimbursement,
       reopenedAt: data?.reopenedAt,
       reopenMessage: data?.reopenMessage,
     },
@@ -658,10 +659,27 @@ router.delete('/travel-items/:id', participantAuth, asyncHandler(async (req: Req
     where: { id: req.params.id },
   });
 
-  // Delete linked documents if requested
+  // Delete linked documents if requested — but only if not referenced by other travel items
   if (deleteDocuments && docIdsToDelete.length > 0) {
     const storage = getStorageService();
     for (const docId of docIdsToDelete) {
+      // Check if any OTHER travel items still reference this document
+      const otherReferences = await prisma.travelItem.findMany({
+        where: {
+          participantId: participant.id,
+          id: { not: req.params.id },
+          OR: [
+            { documentId: docId },
+            { additionalDocumentIds: { contains: docId } },
+          ],
+        },
+      });
+
+      if (otherReferences.length > 0) {
+        console.log(`[Delete] Skipping document ${docId} — still referenced by ${otherReferences.length} other travel item(s)`);
+        continue;
+      }
+
       const doc = await prisma.document.findFirst({
         where: { id: docId, participantId: participant.id },
       });
@@ -1217,6 +1235,22 @@ router.delete('/declarations-of-travel/:id', participantAuth, asyncHandler(async
 }));
 
 /**
+ * PATCH /api/participant/no-reimbursement
+ * Set no-reimbursement flag (participant opts out of reimbursement)
+ */
+router.patch('/no-reimbursement', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+  const { noReimbursement } = req.body;
+
+  const updated = await prisma.participant.update({
+    where: { id: participant.id },
+    data: { noReimbursement: !!noReimbursement },
+  });
+
+  res.json({ noReimbursement: updated.noReimbursement });
+}));
+
+/**
  * POST /api/participant/mark-complete
  * Mark reimbursement as complete (participant side)
  */
@@ -1225,6 +1259,24 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
 
   if (participant.status !== 'DRAFT') {
     throw new ForbiddenError('Reimbursement already marked as complete');
+  }
+
+  // If participant opted out of reimbursement, skip validation
+  if (participant.noReimbursement) {
+    await prisma.participant.update({
+      where: { id: participant.id },
+      data: { status: ParticipantStatus.PARTICIPANT_COMPLETE },
+    });
+
+    // Upsert a zero-amount reimbursement summary
+    await prisma.reimbursementSummary.upsert({
+      where: { participantId: participant.id },
+      create: { participantId: participant.id, totalEur: 0, maxReimbursementAllowed: 0, amountToReimburse: 0, aiCheckOk: true },
+      update: { totalEur: 0, amountToReimburse: 0, aiCheckOk: true },
+    });
+
+    res.json({ success: true });
+    return;
   }
 
   // Validate all required data is present

@@ -166,6 +166,7 @@ model Participant {
   homeCountryConfidence     Float?                  // Confidence score (0-1) for detected home country
   homeCountryReasoning      String?                 // AI reasoning for the detected home country
   consolidationSummary      String?                 // AI notes from consolidation for the review AI
+  noReimbursement           Boolean                 @default(false)  // Participant opted out of reimbursement
   reopenedAt                DateTime?               // When the reimbursement was last reopened by the organisation
   reopenMessage             String?                 // Organisation's message to participant explaining what to fix
   createdAt                 DateTime                @default(now())

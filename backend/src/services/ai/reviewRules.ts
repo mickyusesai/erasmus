@@ -87,10 +87,10 @@ export const REVIEW_RULES: ReviewRule[] = [
   },
   {
     id: 'shared-booking',
-    severity: 'important',
+    severity: 'info',
     label: 'Shared Booking',
-    description: 'Booking covers multiple passengers',
-    prompt: 'If a booking has multiple passengers (numberOfPassengers > 1) → verify the claimed portion is fair. IMPORTANT: If numberOfPassengers is 1, it\'s a single person. A single person buying an outbound + inbound ticket is NOT "multiple passengers" — that\'s just a round-trip. Only flag when numberOfPassengers is explicitly > 1.',
+    description: 'Booking covers multiple passengers — informational',
+    prompt: 'If a booking has multiple passengers (numberOfPassengers > 1) → inform the org that this is a multi-person booking. The full amount is claimed by this participant. IMPORTANT: If numberOfPassengers is 1, it\'s a single person. A single person buying an outbound + inbound ticket is NOT "multiple passengers" — that\'s just a round-trip. Only mention when numberOfPassengers is explicitly > 1.',
     enabled: true,
   },
   {
@@ -99,7 +99,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     label: 'Over Limit',
     description: 'Total claimed exceeds country reimbursement limit',
     prompt: 'If total claimed exceeds the country reimbursement limit.',
-    enabled: true,
+    enabled: false,
   },
   {
     id: 'changelog-edits',

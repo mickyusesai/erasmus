@@ -336,6 +336,16 @@ Other important notes:
       };
     }
 
+    // If participant opted out of reimbursement, skip all validation
+    if (participant.noReimbursement) {
+      return {
+        isComplete: true,
+        missingItems: [],
+        warnings: [],
+        aiCheckPassed: true,
+      };
+    }
+
     const missingItems: MissingItem[] = [];
     const warnings: string[] = [];
 
@@ -644,8 +654,6 @@ PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ 
 PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
 ${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : ''}
 ${data.consolidationSummary ? `\n=== CONSOLIDATION AI NOTES ===\nThe AI that processed the uploaded documents left these notes for you:\n${data.consolidationSummary}\n` : ''}
-MAX REIMBURSEMENT FOR ${data.participantCountry}: €${data.maxReimbursementForCountry || 'Not set'}
-TOTAL CLAIMED: €${data.reimbursementSummary?.totalEur || 0}
 BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
 
 The typical journey pattern is: participant travels FROM their home country (${data.participantCountry}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
@@ -657,17 +665,14 @@ ${data.travelItems.map((item, i) => {
     if (item.priceMissing) flags.push('PRICE IS MISSING');
     if (!item.documentId) flags.push('NO SUPPORTING DOCUMENT LINKED');
     if (item.modeOfTransport === 'PLANE' && !item.flightNumber) flags.push('FLIGHT NUMBER NOT FILLED IN');
-    if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`SHARED BOOKING: ${item.numberOfPassengers} passengers, this participant claims portion: ${item.participantPortion}`);
+    if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`MULTI-PERSON BOOKING: ${item.numberOfPassengers} passengers on this booking (full amount claimed by this participant)`);
     if (item.routeMatchesCountry === false) flags.push('ROUTE MAY NOT MATCH expected home↔project travel pattern');
     if (item.excludedFromReimbursement) flags.push('Participant excluded this from reimbursement');
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
     if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
     if (item.purchaseDateAutoFilled) flags.push('Purchase date was AUTO-FILLED from flight date (no purchase date found in documents)');
-    if (item.consolidationNotes) flags.push(`Consolidation AI note: ${item.consolidationNotes}`);
     if (item.distanceKm) flags.push(`Car distance: ${item.distanceKm}km`);
-    if (item.currencyOriginal && item.currencyOriginal !== 'EUR' && !item.purchaseDate) flags.push('Non-EUR currency but no purchase date for exchange rate');
-    if (item.validationWarnings && item.validationWarnings !== '[]') flags.push(`System warnings: ${item.validationWarnings}`);
-    return `${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} | Date: ${item.departureDate || '?'} | €${item.amountEur ?? 'MISSING'} (${item.currencyOriginal || 'EUR'})${item.flightNumber ? ` | Flight: ${item.flightNumber}` : ''}${item.bookingReference ? ` | Booking: ${item.bookingReference}` : ''}${flags.length > 0 ? '\n     ⚠ ' + flags.join('\n     ⚠ ') : ''}`;
+    return `${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} | Date: ${item.departureDate || '?'}${item.purchaseDate ? ` | Purchase: ${item.purchaseDate}` : ''} | €${item.amountEur ?? 'MISSING'} (${item.currencyOriginal || 'EUR'})${item.flightNumber ? ` | Flight: ${item.flightNumber}` : ''}${item.bookingReference ? ` | Booking: ${item.bookingReference}` : ''}${flags.length > 0 ? '\n     ⚠ ' + flags.join('\n     ⚠ ') : ''}`;
   }).join('\n')}
 
 === DOCUMENTS (${data.documents.length}) ===
