@@ -306,6 +306,7 @@ function OverviewTab({
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const queryClient = useQueryClient();
   const sortStorageKey = `participant-sort-${projectId}`;
   const [sortField, setSortField] = useState<SortField>(() => {
     try {
