@@ -253,6 +253,15 @@ export default function OrgParticipantDetail() {
     onError: (error: Error) => toast.error(error.message || 'Failed to delete participant'),
   });
 
+  const resetParticipantMutation = useMutation({
+    mutationFn: () => organisationApi.resetParticipant(id!),
+    onSuccess: () => {
+      toast.success('Participant reset — magic link re-sent');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to reset participant'),
+  });
+
   // ── CRUD Mutations ──
 
   const reopenMutation = useMutation({
@@ -823,26 +832,50 @@ export default function OrgParticipantDetail() {
               </Card>
 
               {/* Danger Zone */}
-              {participant.status === 'DRAFT' && (
+              {(participant.status === 'DRAFT' || participant.status === 'PARTICIPANT_COMPLETE') && (
                 <Card className="border-red-200">
                   <CardHeader>
                     <h3 className="font-semibold text-red-600">Danger Zone</h3>
                   </CardHeader>
-                  <CardContent>
-                    <p className="text-gray-600 text-sm mb-3">Delete this participant and all their data.</p>
-                    <Button
-                      variant="danger"
-                      className="w-full"
-                      onClick={() => {
-                        if (confirm('Are you sure you want to delete this participant? This action cannot be undone.')) {
-                          deleteParticipantMutation.mutate();
-                        }
-                      }}
-                      loading={deleteParticipantMutation.isPending}
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Delete Participant
-                    </Button>
+                  <CardContent className="space-y-3">
+                    <div>
+                      <p className="text-gray-700 text-sm font-medium mb-1">Start Over</p>
+                      <p className="text-gray-500 text-xs mb-2">
+                        Deletes all uploaded files, travel items, and extracted data for this participant, resets their status to Draft, and re-sends their magic link so they can start from scratch.
+                      </p>
+                      <Button
+                        variant="secondary"
+                        className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"
+                        onClick={() => {
+                          if (confirm(`Are you sure you want to reset ${participant.firstName} ${participant.lastName}? All their uploaded files, travel items, and bank details will be deleted. Their magic link will be re-sent so they can start fresh. This cannot be undone.`)) {
+                            resetParticipantMutation.mutate();
+                          }
+                        }}
+                        loading={resetParticipantMutation.isPending}
+                      >
+                        <RotateCcw className="w-4 h-4 mr-2" />
+                        Start Over (Reset &amp; Re-send Link)
+                      </Button>
+                    </div>
+                    {participant.status === 'DRAFT' && (
+                      <div>
+                        <p className="text-gray-700 text-sm font-medium mb-1">Delete Participant</p>
+                        <p className="text-gray-500 text-xs mb-2">Permanently removes this participant and all their data from the project.</p>
+                        <Button
+                          variant="danger"
+                          className="w-full"
+                          onClick={() => {
+                            if (confirm('Are you sure you want to delete this participant? This action cannot be undone.')) {
+                              deleteParticipantMutation.mutate();
+                            }
+                          }}
+                          loading={deleteParticipantMutation.isPending}
+                        >
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          Delete Participant
+                        </Button>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               )}

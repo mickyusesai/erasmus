@@ -815,6 +815,14 @@ export const organisationApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  resetParticipant: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}/reset`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
   bulkDeleteParticipants: async (ids: string[]) => {
     const res = await fetch(`${API_BASE}/organisation/participants/bulk-delete`, {
       method: 'POST',

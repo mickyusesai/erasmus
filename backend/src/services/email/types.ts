@@ -100,4 +100,15 @@ export interface EmailService {
     projectName: string,
     message: string
   ): Promise<EmailResult>;
+
+  /**
+   * Send a notification that AI has finished analysing all documents
+   * and the participant can now review and complete their reimbursement
+   */
+  sendAnalysisComplete(
+    to: string,
+    participantName: string,
+    projectName: string,
+    magicLink: string
+  ): Promise<EmailResult>;
 }

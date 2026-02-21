@@ -701,10 +701,20 @@ function Step1Upload({
               type="checkbox"
               checked={data.participant.noReimbursement || false}
               onChange={async (e) => {
+                const newValue = e.target.checked;
+                // Optimistic update so checkbox reacts instantly
+                queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+                  if (!old) return old;
+                  return { ...old, participant: { ...old.participant, noReimbursement: newValue } };
+                });
                 try {
-                  await participantApi.setNoReimbursement(token, e.target.checked);
-                  queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+                  await participantApi.setNoReimbursement(token, newValue);
                 } catch {
+                  // Revert on error
+                  queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+                    if (!old) return old;
+                    return { ...old, participant: { ...old.participant, noReimbursement: !newValue } };
+                  });
                   toast.error('Failed to update preference');
                 }
               }}
@@ -712,7 +722,7 @@ function Step1Upload({
             />
             <div>
               <p className="font-medium text-gray-900">I don't need travel reimbursement</p>
-              <p className="text-sm text-gray-500">Select this if you didn't travel or don't need to claim travel costs. You can still participate in dissemination activities.</p>
+              <p className="text-sm text-gray-500">Select this if you didn't travel or don't need to claim travel costs.</p>
             </div>
           </label>
         </CardContent>
@@ -726,7 +736,7 @@ function Step1Upload({
             </div>
             <h3 className="text-lg font-semibold text-gray-900 mb-2">No reimbursement needed</h3>
             <p className="text-gray-500 max-w-md mx-auto mb-6">
-              You've indicated that you don't need travel reimbursement. You can still complete dissemination activities if required by the project.
+              You've indicated that you don't need travel reimbursement. Click Continue to complete your submission.
             </p>
             <button
               onClick={onNext}
@@ -974,7 +984,10 @@ function Step2CheckData({
       }
       toast.error('Failed to update travel item');
     },
-    // No onSettled refetch - optimistic update is sufficient
+    onSuccess: () => {
+      // Refetch after success so Cost Breakdown gets the server-calculated amountEur
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+    },
   });
 
   const deleteMutation = useMutation({

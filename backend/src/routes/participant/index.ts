@@ -358,6 +358,25 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
   const aiService = getAiService();
   await aiService.recalculateParticipantSummary(participant.id);
 
+  // Send email notifying the participant that analysis is complete
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+  const fullParticipant = await prisma.participant.findUnique({
+    where: { id: participant.id },
+    include: { project: true },
+  });
+  if (fullParticipant) {
+    const emailService = getEmailService();
+    emailService
+      .sendAnalysisComplete(
+        fullParticipant.email,
+        fullParticipant.firstName,
+        fullParticipant.project.name,
+        magicLink
+      )
+      .catch((err) => console.error('[Consolidation] Failed to send analysis-complete email:', err));
+  }
+
   res.json(result);
 }));
 
