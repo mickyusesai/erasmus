@@ -1254,6 +1254,93 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
 }));
 
 /**
+ * POST /api/organisation/participants/:id/reset
+ * Reset a participant: delete all uploaded files, travel items, and extracted data,
+ * reset status to DRAFT, and re-send the magic link so they can start fresh.
+ */
+router.post('/participants/:id/reset', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true, documents: true },
+  });
+
+  if (!participant) {
+    throw new NotFoundError('Participant not found');
+  }
+
+  if (participant.project.organisationId !== org.id) {
+    throw new ForbiddenError('Access denied');
+  }
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot reset a participant that has been approved or paid');
+  }
+
+  // Delete uploaded files from storage
+  const storage = getStorageService();
+  for (const doc of participant.documents) {
+    try {
+      await storage.delete(doc.storedFilePath);
+    } catch (err) {
+      console.error(`[Reset] Failed to delete file ${doc.storedFilePath}:`, err);
+    }
+  }
+
+  // Delete all participant data except the participant record itself
+  await prisma.$transaction([
+    prisma.aiReviewFinding.deleteMany({ where: { participantId } }),
+    prisma.changeLogEntry.deleteMany({ where: { participantId } }),
+    prisma.declarationOfTravel.deleteMany({ where: { participantId } }),
+    prisma.declarationOnHonor.deleteMany({ where: { participantId } }),
+    prisma.travelBooking.deleteMany({ where: { participantId } }),
+    prisma.travelItem.deleteMany({ where: { participantId } }),
+    prisma.document.deleteMany({ where: { participantId } }),
+    prisma.reimbursementSummary.deleteMany({ where: { participantId } }),
+    prisma.socialMediaPost.deleteMany({ where: { participantId } }),
+    prisma.participant.update({
+      where: { id: participantId },
+      data: {
+        status: 'DRAFT',
+        journeyConsolidatedAt: null,
+        noReimbursement: false,
+        detectedHomeCountry: null,
+        homeCountryConfidence: null,
+        homeCountryReasoning: null,
+        participantNote: null,
+        bankAccountIban: null,
+        bankAccountHolderName: null,
+        bankAccountBic: null,
+        bankName: null,
+        personalAddress: null,
+        personalCity: null,
+        personalPostalCode: null,
+        personalCountry: null,
+      },
+    }),
+  ]);
+
+  // Re-send the magic link so participant can start fresh
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+  const emailService = getEmailService();
+  await emailService.sendMagicLink(
+    participant.email,
+    participant.firstName,
+    participant.project.name,
+    magicLink
+  );
+  await prisma.participant.update({
+    where: { id: participantId },
+    data: { lastMagicLinkSentAt: new Date() },
+  });
+
+  res.json({ success: true });
+}));
+
+/**
  * POST /api/organisation/participants/send-magic-links-bulk
  * Send magic links to multiple participants
  */

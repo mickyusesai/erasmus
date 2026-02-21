@@ -401,3 +401,52 @@ export function reopenHtml(participantName: string, projectName: string, message
     ${infoBox('Please open your original reimbursement link and make the requested changes, then submit again.')}
   `);
 }
+
+// =============================================================================
+// ANALYSIS COMPLETE
+// =============================================================================
+
+export function analysisCompleteSubject(projectName: string): string {
+  return `Your travel documents have been analysed – ${projectName}`;
+}
+
+export function analysisCompleteText(participantName: string, projectName: string, magicLink: string): string {
+  return `Hello ${participantName},
+
+Great news! We have finished analysing all your travel documents for the Erasmus+ project "${projectName}".
+
+You can now review the extracted travel information, make any corrections, and complete your reimbursement submission.
+
+Open your reimbursement page here:
+${magicLink}
+
+What to do next:
+- Review the travel items we extracted from your documents
+- Correct any amounts, dates or locations if needed
+- Add your bank details and submit
+
+If you have any questions, please contact the project team.
+
+Best regards,
+The EasyReimburse Team
+
+--
+This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+}
+
+export function analysisCompleteHtml(participantName: string, projectName: string, magicLink: string): string {
+  return wrapInLayout(`
+    <p>Hello <strong>${participantName}</strong>,</p>
+    ${successBox('Great news! We have finished analysing all your travel documents for <strong>"' + projectName + '"</strong>.')}
+    <p>You can now review the extracted travel information, make any corrections, and complete your reimbursement submission.</p>
+    ${button(magicLink, 'Review & Complete Reimbursement')}
+    ${warningBox('Keep this link safe! It is your personal access link — do not share it with anyone else.')}
+    <p><strong>What to do next:</strong></p>
+    <ul style="padding-left: 20px; color: #374151;">
+      <li>Review the travel items we extracted from your documents</li>
+      <li>Correct any amounts, dates or locations if needed</li>
+      <li>Add your bank details and submit</li>
+    </ul>
+    <p>If you have any questions, please contact your project team.</p>
+  `);
+}
