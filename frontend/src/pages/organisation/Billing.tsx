@@ -1,18 +1,23 @@
-import { useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
 import { organisationApi } from '../../services/api';
 import { ArrowLeft, CreditCard, CheckCircle, Clock, AlertTriangle, ExternalLink } from 'lucide-react';
 
 const PRICING = {
-  SINGLE: { name: 'Single Project', price: 95, credits: 1 },
-  PACK_5: { name: 'Pack of 5', price: 395, credits: 5, savings: 80 },
-  PACK_10: { name: 'Pack of 10', price: 595, credits: 10, savings: 355 },
-  ANNUAL: { name: 'Annual License', price: 995, credits: -1 },
-};
+  SINGLE:  { name: 'Single Project', price: 129, credits: 1 },
+  PACK_5:  { name: 'Pack of 5',      price: 499, credits: 5,  savings: 146 },
+  PACK_10: { name: 'Pack of 10',     price: 899, credits: 10, savings: 391 },
+} as const;
+
+type PlanType = keyof typeof PRICING;
 
 export default function Billing() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const [loadingPlan, setLoadingPlan] = useState<PlanType | null>(null);
 
   // Check if logged in
   useEffect(() => {
@@ -22,15 +27,30 @@ export default function Billing() {
     }
   }, [navigate]);
 
+  // Handle ?success=1 return from Stripe
+  useEffect(() => {
+    if (searchParams.get('success') === '1') {
+      toast.success('Payment successful! Your credits will appear shortly.');
+      queryClient.invalidateQueries({ queryKey: ['org-billing'] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    }
+  }, [searchParams, queryClient]);
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['org-billing'],
     queryFn: organisationApi.getBilling,
     retry: false,
   });
 
-  const handlePurchase = async (type: string) => {
-    // TODO: Integrate with Stripe
-    alert(`Stripe integration coming soon! You selected: ${type}`);
+  const handlePurchase = async (type: PlanType) => {
+    setLoadingPlan(type);
+    try {
+      const { url } = await organisationApi.createCheckoutSession(type);
+      window.location.href = url;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to start checkout');
+      setLoadingPlan(null);
+    }
   };
 
   if (isLoading) {
@@ -76,38 +96,21 @@ export default function Billing() {
         {/* Current Status */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Current Status</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-gray-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600">Project Credits</p>
-              <p className="text-2xl font-bold text-gray-900">{credits.projectCredits}</p>
-            </div>
-
-            <div className={`rounded-lg p-4 ${credits.hasAnnualLicense && !credits.annualLicenseExpired ? 'bg-green-50' : 'bg-gray-50'}`}>
-              <p className="text-sm text-gray-600">Annual License</p>
-              <p className="text-lg font-bold text-gray-900">
-                {credits.hasAnnualLicense ? (
-                  credits.annualLicenseExpired ? (
-                    <span className="text-red-600">Expired</span>
-                  ) : (
-                    <span className="text-green-600">Active</span>
-                  )
-                ) : (
-                  'Not active'
-                )}
-              </p>
-              {credits.annualLicenseExpiresAt && (
-                <p className="text-xs text-gray-500 mt-1">
-                  {credits.annualLicenseExpired ? 'Expired' : 'Expires'}: {new Date(credits.annualLicenseExpiresAt).toLocaleDateString()}
-                </p>
-              )}
-            </div>
+          <div className="bg-gray-50 rounded-lg p-4 inline-block">
+            <p className="text-sm text-gray-600">Available Project Credits</p>
+            <p className="text-3xl font-bold text-gray-900">{credits.projectCredits}</p>
           </div>
+          {searchParams.get('success') === '1' && (
+            <p className="mt-4 text-sm text-amber-600">
+              Credits may take a moment to appear — refresh the page if the balance hasn't updated yet.
+            </p>
+          )}
         </div>
 
         {/* Pricing Options */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Purchase Credits</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Single */}
             <div className="border border-gray-200 rounded-xl p-5 hover:border-primary-300 transition-colors">
               <h3 className="font-semibold text-gray-900">{PRICING.SINGLE.name}</h3>
@@ -115,9 +118,10 @@ export default function Billing() {
               <p className="text-sm text-gray-500 mt-1">{PRICING.SINGLE.credits} project credit</p>
               <button
                 onClick={() => handlePurchase('SINGLE')}
-                className="w-full mt-4 py-2 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium"
+                disabled={loadingPlan !== null}
+                className="w-full mt-4 py-2 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium disabled:opacity-60"
               >
-                Purchase
+                {loadingPlan === 'SINGLE' ? 'Redirecting…' : 'Purchase'}
               </button>
             </div>
 
@@ -132,9 +136,10 @@ export default function Billing() {
               <p className="text-xs text-green-600 font-medium">Save €{PRICING.PACK_5.savings}</p>
               <button
                 onClick={() => handlePurchase('PACK_5')}
-                className="w-full mt-4 py-2 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium"
+                disabled={loadingPlan !== null}
+                className="w-full mt-4 py-2 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium disabled:opacity-60"
               >
-                Purchase
+                {loadingPlan === 'PACK_5' ? 'Redirecting…' : 'Purchase'}
               </button>
             </div>
 
@@ -146,28 +151,15 @@ export default function Billing() {
               <p className="text-xs text-green-600 font-medium">Save €{PRICING.PACK_10.savings}</p>
               <button
                 onClick={() => handlePurchase('PACK_10')}
-                className="w-full mt-4 py-2 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium"
+                disabled={loadingPlan !== null}
+                className="w-full mt-4 py-2 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium disabled:opacity-60"
               >
-                Purchase
-              </button>
-            </div>
-
-            {/* Annual */}
-            <div className="border border-gray-200 rounded-xl p-5 hover:border-primary-300 transition-colors bg-gradient-to-br from-indigo-50 to-purple-50">
-              <h3 className="font-semibold text-gray-900">{PRICING.ANNUAL.name}</h3>
-              <p className="text-3xl font-bold text-gray-900 mt-2">€{PRICING.ANNUAL.price}</p>
-              <p className="text-sm text-gray-500 mt-1">Unlimited projects</p>
-              <p className="text-xs text-indigo-600 font-medium">For 12 months</p>
-              <button
-                onClick={() => handlePurchase('ANNUAL')}
-                className="w-full mt-4 py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium"
-              >
-                Purchase
+                {loadingPlan === 'PACK_10' ? 'Redirecting…' : 'Purchase'}
               </button>
             </div>
           </div>
           <p className="text-sm text-gray-500 mt-4 text-center">
-            Credits never expire. Annual license is valid for 12 months from purchase.
+            Credits never expire. Prices exclude VAT where applicable.
           </p>
         </div>
 
@@ -197,11 +189,10 @@ export default function Billing() {
                       <div>
                         <p className="font-medium text-gray-900">
                           {purchase.type === 'FOUNDING' ? 'Founding Credit' :
-                           purchase.type === 'SINGLE' ? 'Single Project' :
-                           purchase.type === 'PACK_5' ? 'Pack of 5' :
-                           purchase.type === 'PACK_10' ? 'Pack of 10' :
-                           purchase.type === 'ANNUAL' ? 'Annual License' :
-                           purchase.type === 'MANUAL' ? 'Manual Credit' : purchase.type}
+                           purchase.type === 'SINGLE'   ? 'Single Project' :
+                           purchase.type === 'PACK_5'   ? 'Pack of 5' :
+                           purchase.type === 'PACK_10'  ? 'Pack of 10' :
+                           purchase.type === 'MANUAL'   ? 'Manual Credit' : purchase.type}
                         </p>
                         <p className="text-sm text-gray-500">
                           {new Date(purchase.completedAt || purchase.createdAt).toLocaleDateString()}
@@ -213,7 +204,7 @@ export default function Billing() {
                         {purchase.amountCents === 0 ? 'Free' : `€${(purchase.amountCents / 100).toFixed(2)}`}
                       </p>
                       <p className="text-sm text-gray-500">
-                        {purchase.creditsGranted === -1 ? 'Unlimited' : `${purchase.creditsGranted} credit${purchase.creditsGranted !== 1 ? 's' : ''}`}
+                        {`${purchase.creditsGranted} credit${purchase.creditsGranted !== 1 ? 's' : ''}`}
                       </p>
                       {purchase.stripeInvoiceUrl && (
                         <a

@@ -12,6 +12,7 @@ import organisationRoutes from './routes/organisation/index.js';
 import adminRoutes from './routes/admin/index.js';
 import participantRoutes from './routes/participant/index.js';
 import superAdminRoutes from './routes/superadmin/index.js';
+import stripeWebhookRoutes from './routes/stripe/webhook.js';
 import { getStorageService } from './services/storage/index.js';
 
 // Load environment variables
@@ -39,6 +40,9 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.',
 });
 app.use('/api', limiter);
+
+// Stripe webhook — must be registered BEFORE express.json() (needs raw body)
+app.use('/api/stripe', stripeWebhookRoutes);
 
 // Body parsing
 app.use(express.json());

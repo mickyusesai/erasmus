@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { organisationApi } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -10,15 +10,19 @@ import { Card, CardContent } from '../../components/ui/Card';
 
 export default function OrgLogin() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+
+  const plan = searchParams.get('plan');
+  const afterLoginPath = plan ? `/org/billing?plan=${plan}` : '/org/dashboard';
 
   const loginMutation = useMutation({
     mutationFn: () => organisationApi.login(email, password),
     onSuccess: (data) => {
       localStorage.setItem('org-token', data.token);
       toast.success('Welcome back!');
-      navigate('/org/dashboard');
+      navigate(afterLoginPath);
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Invalid email or password');
@@ -78,7 +82,7 @@ export default function OrgLogin() {
             <div className="mt-6 pt-6 border-t border-gray-200 text-center text-sm text-gray-600 space-y-2">
               <p>
                 Don't have an account?{' '}
-                <Link to="/org/register" className="text-primary-600 hover:text-primary-700 font-medium">
+                <Link to={plan ? `/org/register?plan=${plan}` : '/org/register'} className="text-primary-600 hover:text-primary-700 font-medium">
                   Register here
                 </Link>
               </p>

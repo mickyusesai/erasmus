@@ -24,59 +24,23 @@ interface CreditStatus {
   canCreateProject: boolean;
   reason?: string;
   availableCredits: number;
-  hasAnnualLicense: boolean;
-  annualLicenseExpired: boolean;
 }
 
 function getCreditStatus(org: Organisation): CreditStatus {
-  const now = new Date();
-
-  // Check annual license
-  const hasAnnualLicense = org.hasAnnualLicense;
-  const annualLicenseExpired = org.annualLicenseExpiresAt ? org.annualLicenseExpiresAt < now : true;
-  const annualLicenseActive = hasAnnualLicense && !annualLicenseExpired;
-
-  // Calculate available credits
   const availableCredits = org.projectCredits;
+  const canCreateProject = availableCredits > 0;
+  const reason = canCreateProject ? undefined : 'No credits available. Please purchase credits to create a project.';
 
-  // Determine if can create project
-  let canCreateProject = false;
-  let reason: string | undefined;
-
-  if (annualLicenseActive) {
-    canCreateProject = true;
-  } else if (org.projectCredits > 0) {
-    canCreateProject = true;
-  } else if (hasAnnualLicense && annualLicenseExpired) {
-    reason = 'Your annual license has expired. Please renew to create new projects.';
-  } else {
-    reason = 'No credits available. Please purchase credits to create a project.';
-  }
-
-  return {
-    canCreateProject,
-    reason,
-    availableCredits,
-    hasAnnualLicense,
-    annualLicenseExpired,
-  };
+  return { canCreateProject, reason, availableCredits };
 }
 
 async function consumeCredit(org: Organisation): Promise<PurchaseType> {
-  const now = new Date();
-
-  // Check annual license first (doesn't consume credits)
-  if (org.hasAnnualLicense && org.annualLicenseExpiresAt && org.annualLicenseExpiresAt > now) {
-    return 'ANNUAL';
-  }
-
-  // Consume regular credit
   if (org.projectCredits > 0) {
     await prisma.organisation.update({
       where: { id: org.id },
       data: { projectCredits: org.projectCredits - 1 },
     });
-    return 'SINGLE'; // Could be from any pack, but we track as SINGLE
+    return 'SINGLE';
   }
 
   throw new ForbiddenError('No credits available');
@@ -131,9 +95,6 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       available: creditStatus.availableCredits,
       canCreateProject: creditStatus.canCreateProject,
       reason: creditStatus.reason,
-      hasAnnualLicense: creditStatus.hasAnnualLicense,
-      annualLicenseExpired: creditStatus.annualLicenseExpired,
-      annualLicenseExpiresAt: org.annualLicenseExpiresAt,
     },
     stats: {
       projectCount: projects.length,
@@ -476,10 +437,6 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
     credits: {
       available: creditStatus.availableCredits,
       projectCredits: org.projectCredits,
-      hasAnnualLicense: creditStatus.hasAnnualLicense,
-      annualLicenseExpired: creditStatus.annualLicenseExpired,
-      annualLicenseExpiresAt: org.annualLicenseExpiresAt,
-      annualLicenseStartedAt: org.annualLicenseStartedAt,
     },
     purchases: purchases.map((p: any) => ({
       id: p.id,
@@ -493,6 +450,77 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
       completedAt: p.completedAt,
     })),
   });
+}));
+
+/**
+ * POST /api/organisation/stripe/create-checkout-session
+ * Create a Stripe Checkout session for purchasing credits
+ */
+const STRIPE_PLANS: Record<string, { productEnvKey: string; amountCents: number; credits: number; label: string }> = {
+  SINGLE:  { productEnvKey: 'STRIPE_PRODUCT_ID_SINGLE',  amountCents: 12900, credits: 1,  label: 'Single Project Credit' },
+  PACK_5:  { productEnvKey: 'STRIPE_PRODUCT_ID_PACK_5',  amountCents: 49900, credits: 5,  label: 'Pack of 5 Credits' },
+  PACK_10: { productEnvKey: 'STRIPE_PRODUCT_ID_PACK_10', amountCents: 89900, credits: 10, label: 'Pack of 10 Credits' },
+};
+
+router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const { type } = req.body as { type: string };
+
+  const plan = STRIPE_PLANS[type];
+  if (!plan) {
+    throw new ValidationError('Invalid purchase type');
+  }
+
+  const productId = process.env[plan.productEnvKey];
+  if (!productId) {
+    throw new ValidationError(`Stripe product not configured for ${type}`);
+  }
+
+  const stripe = new (require('stripe').default)(process.env.STRIPE_SECRET_KEY!);
+
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+  // Create a pending Purchase record first so we can link it via metadata
+  const purchase = await prisma.purchase.create({
+    data: {
+      organisationId: org.id,
+      type: type as PurchaseType,
+      amountCents: plan.amountCents,
+      currency: 'EUR',
+      creditsGranted: plan.credits,
+      status: 'PENDING',
+    },
+  });
+
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ['card'],
+    line_items: [{
+      price_data: {
+        currency: 'eur',
+        product: productId,
+        unit_amount: plan.amountCents,
+      },
+      quantity: 1,
+    }],
+    mode: 'payment',
+    success_url: `${frontendUrl}/org/billing?success=1`,
+    cancel_url: `${frontendUrl}/org/billing`,
+    metadata: {
+      organisationId: org.id,
+      purchaseId: purchase.id,
+      purchaseType: type,
+      creditsGranted: String(plan.credits),
+    },
+    customer_email: org.email,
+  });
+
+  // Save Stripe session ID on the purchase
+  await prisma.purchase.update({
+    where: { id: purchase.id },
+    data: { stripeSessionId: session.id },
+  });
+
+  res.json({ url: session.url });
 }));
 
 // =============================================================================
@@ -2233,6 +2261,37 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-z0-9]/gi, '_')}_participants.csv"`);
   res.send(csvContent);
+}));
+
+/**
+ * POST /api/organisation/projects/:id/upgrade-from-test
+ * Convert a test project to a full project, consuming 1 credit
+ */
+router.post('/projects/:id/upgrade-from-test', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new NotFoundError('Project not found');
+  if (!project.isTestProject) throw new ValidationError('This project is not a test project');
+
+  // Refresh org for latest credit count
+  const freshOrg = await prisma.organisation.findUnique({ where: { id: org.id } });
+  if (!freshOrg) throw new NotFoundError('Organisation not found');
+  if (freshOrg.projectCredits < 1) throw new ForbiddenError('No credits available to upgrade this project');
+
+  await prisma.$transaction([
+    prisma.organisation.update({
+      where: { id: org.id },
+      data: { projectCredits: freshOrg.projectCredits - 1 },
+    }),
+    prisma.project.update({
+      where: { id: projectId },
+      data: { isTestProject: false, maxParticipants: null, creditSource: 'SINGLE' },
+    }),
+  ]);
+
+  res.json({ success: true, message: 'Project upgraded to full project. 1 credit used.' });
 }));
 
 export default router;

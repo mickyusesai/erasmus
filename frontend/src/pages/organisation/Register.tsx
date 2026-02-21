@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { organisationApi } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -10,17 +10,21 @@ import { Card, CardContent } from '../../components/ui/Card';
 
 export default function OrgRegister() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  const plan = searchParams.get('plan');
+  const afterRegisterPath = plan ? `/org/billing?plan=${plan}` : '/org/dashboard';
 
   const registerMutation = useMutation({
     mutationFn: () => organisationApi.register({ name, email, password }),
     onSuccess: (data) => {
       localStorage.setItem('org-token', data.token);
       toast.success('Registration successful! Welcome to EasyReimburse.');
-      navigate('/org/dashboard');
+      navigate(afterRegisterPath);
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Registration failed');
@@ -103,7 +107,7 @@ export default function OrgRegister() {
             <div className="mt-6 pt-6 border-t border-gray-200 text-center text-sm text-gray-600 space-y-2">
               <p>
                 Already have an account?{' '}
-                <Link to="/org/login" className="text-primary-600 hover:text-primary-700 font-medium">
+                <Link to={plan ? `/org/login?plan=${plan}` : '/org/login'} className="text-primary-600 hover:text-primary-700 font-medium">
                   Sign in
                 </Link>
               </p>

@@ -84,6 +84,18 @@ export default function OrgProjectDetail() {
     },
   });
 
+  const upgradeProjectMutation = useMutation({
+    mutationFn: () => organisationApi.upgradeTestProject(id!),
+    onSuccess: () => {
+      toast.success('Project upgraded! Participant limit removed.');
+      queryClient.invalidateQueries({ queryKey: ['org-project', id] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to upgrade project');
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -171,16 +183,29 @@ export default function OrgProjectDetail() {
           {/* Test Project Banner */}
           {project.isTestProject && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-                <div>
-                  <h3 className="font-medium text-amber-800">Test Project</h3>
-                  <p className="text-sm text-amber-700 mt-1">
-                    This is a free test project limited to {project.maxParticipants || 10} participants.
-                    To create a full project with unlimited participants, please{' '}
-                    <Link to="/org/billing" className="underline font-medium">purchase credits</Link>.
-                  </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="font-medium text-amber-800">Test Project</h3>
+                    <p className="text-sm text-amber-700 mt-1">
+                      This is a free test project limited to {project.maxParticipants || 10} participants.
+                      Upgrade to a full project using 1 credit to remove this limit, or{' '}
+                      <Link to="/org/billing" className="underline font-medium">purchase credits</Link> first.
+                    </p>
+                  </div>
                 </div>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and remove the participant limit.')) {
+                      upgradeProjectMutation.mutate();
+                    }
+                  }}
+                  disabled={upgradeProjectMutation.isPending}
+                  className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-60"
+                >
+                  {upgradeProjectMutation.isPending ? 'Upgrading…' : 'Upgrade (1 credit)'}
+                </button>
               </div>
             </div>
           )}

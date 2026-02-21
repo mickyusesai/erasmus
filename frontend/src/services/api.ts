@@ -1050,6 +1050,24 @@ export const organisationApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  // Stripe
+  createCheckoutSession: async (type: 'SINGLE' | 'PACK_5' | 'PACK_10') => {
+    const res = await fetch(`${API_BASE}/organisation/stripe/create-checkout-session`, {
+      method: 'POST',
+      headers: { ...getOrgAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type }),
+    });
+    return handleResponse<{ url: string }>(res);
+  },
+
+  upgradeTestProject: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/upgrade-from-test`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; message: string }>(res);
+  },
+
   // Export
   exportProjectCsv: async (projectId: string, projectName: string) => {
     const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/export/csv`, {
@@ -1088,9 +1106,6 @@ export interface OrgCreditStatus {
   available: number;
   canCreateProject: boolean;
   reason?: string;
-  hasAnnualLicense: boolean;
-  annualLicenseExpired: boolean;
-  annualLicenseExpiresAt?: string;
 }
 
 export interface OrgProject {
