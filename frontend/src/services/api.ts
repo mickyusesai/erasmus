@@ -1051,10 +1051,23 @@ export const organisationApi = {
   },
 
   // Export
-  exportProjectCsv: (projectId: string) => {
-    const url = `${API_BASE}/organisation/projects/${projectId}/export/csv`;
-    // Open in new tab - CSV export handles auth via token in URL or session
-    window.open(url, '_blank');
+  exportProjectCsv: async (projectId: string, projectName: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/export/csv`, {
+      headers: getOrgAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || 'Failed to export CSV');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${projectName.replace(/[^a-z0-9]/gi, '_')}_participants.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 };
 

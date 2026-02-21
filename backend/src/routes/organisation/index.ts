@@ -2210,29 +2210,19 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
   const headers = [
     'First Name',
     'Last Name',
-    'Email',
     'Country',
-    'Status',
-    'Total EUR',
-    'Max Reimbursement',
-    'Amount to Reimburse',
-    'IBAN',
-    'Account Holder',
-    'BIC',
+    'Email',
+    'Reimbursement Status',
+    'Reimbursement Amount (EUR)',
   ];
 
   const rows = project.participants.map((p: any) => [
     p.firstName,
     p.lastName,
-    p.email,
     p.country,
+    p.email,
     p.status,
-    p.reimbursementSummary?.totalEur || 0,
-    p.reimbursementSummary?.maxReimbursementAllowed || 0,
-    p.reimbursementSummary?.amountToReimburse || 0,
-    p.bankAccountIban || '',
-    p.bankAccountHolderName || '',
-    p.bankAccountBic || '',
+    p.reimbursementSummary?.amountToReimburse ?? '',
   ]);
 
   const csvContent = [

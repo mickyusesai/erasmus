@@ -155,8 +155,15 @@ export default function OrgProjectDetail() {
             </div>
             <Button
               variant="secondary"
-              onClick={() => organisationApi.exportProjectCsv(id!)}
+              onClick={async () => {
+                try {
+                  await organisationApi.exportProjectCsv(id!, project.name);
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Failed to export CSV');
+                }
+              }}
             >
+              <Download className="w-4 h-4 mr-2" />
               Export CSV
             </Button>
           </div>
