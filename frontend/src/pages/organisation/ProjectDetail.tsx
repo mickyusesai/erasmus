@@ -44,6 +44,7 @@ type SortDirection = 'asc' | 'desc';
 export default function OrgProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
 
   // Check if logged in
@@ -324,7 +325,6 @@ function OverviewTab({
     localStorage.setItem(sortStorageKey, JSON.stringify({ field: sortField, direction: sortDirection }));
   }, [sortField, sortDirection, sortStorageKey]);
   const [searchQuery, setSearchQuery] = useState('');
-  const queryClient = useQueryClient();
 
   // Form state for adding individual participant
   const [newParticipant, setNewParticipant] = useState({

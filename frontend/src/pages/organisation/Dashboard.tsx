@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { organisationApi, OrgDashboardData } from '../../services/api';
-import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, CheckCircle, ArrowRight } from 'lucide-react';
+import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, ArrowRight } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 
@@ -72,9 +72,7 @@ export default function OrgDashboard() {
   const statCards = [
     {
       label: 'Available Credits',
-      value: dashboard.credits.hasAnnualLicense && !dashboard.credits.annualLicenseExpired
-        ? '∞'
-        : String(dashboard.credits.available),
+      value: String(dashboard.credits.available),
       icon: CreditCard,
       color: 'text-purple-600',
       bgColor: 'bg-purple-100',
@@ -184,9 +182,7 @@ export default function OrgDashboard() {
                     <div>
                       <p className="text-sm text-gray-500">Project Credits</p>
                       <p className="font-semibold text-gray-900">
-                        {dashboard.credits.hasAnnualLicense && !dashboard.credits.annualLicenseExpired
-                          ? 'Unlimited (Annual License)'
-                          : `${dashboard.credits.available} available`}
+                        {dashboard.credits.available} available
                       </p>
                     </div>
                   </div>
@@ -194,12 +190,12 @@ export default function OrgDashboard() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <Link to="/org/billing" className="p-4 bg-primary-50 rounded-xl hover:bg-primary-100 transition-colors">
-                    <p className="text-sm text-primary-600">Buy Credits</p>
-                    <p className="text-lg font-bold text-primary-700">€95/project</p>
+                    <p className="text-sm text-primary-600">Single Credit</p>
+                    <p className="text-lg font-bold text-primary-700">€129</p>
                   </Link>
                   <Link to="/org/billing" className="p-4 bg-emerald-50 rounded-xl hover:bg-emerald-100 transition-colors">
-                    <p className="text-sm text-emerald-600">Annual License</p>
-                    <p className="text-lg font-bold text-emerald-700">€995/year</p>
+                    <p className="text-sm text-emerald-600">Pack of 5</p>
+                    <p className="text-lg font-bold text-emerald-700">€499</p>
                   </Link>
                 </div>
               </div>
@@ -314,27 +310,6 @@ export default function OrgDashboard() {
 }
 
 function CreditStatusCard({ credits }: { credits: OrgDashboardData['credits'] }) {
-  // Annual license active
-  if (credits.hasAnnualLicense && !credits.annualLicenseExpired) {
-    const expiresAt = credits.annualLicenseExpiresAt ? new Date(credits.annualLicenseExpiresAt) : null;
-    return (
-      <div className="bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200 rounded-2xl p-6">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
-            <CheckCircle className="w-5 h-5 text-emerald-600" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-emerald-800">Annual License Active</h3>
-            <p className="text-emerald-700 text-sm mt-1">
-              You have unlimited project credits.
-              {expiresAt && ` License expires on ${formatDate(expiresAt)}.`}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // No credits
   if (!credits.canCreateProject) {
     return (

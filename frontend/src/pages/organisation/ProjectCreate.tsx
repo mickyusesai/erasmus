@@ -111,9 +111,7 @@ export default function ProjectCreate() {
           {canCreate && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <p className="text-blue-800 text-sm">
-                {dashboard?.credits.hasAnnualLicense && !dashboard?.credits.annualLicenseExpired
-                  ? 'Creating this project will use your annual license (unlimited projects).'
-                  : `Creating this project will use 1 credit. You have ${dashboard?.credits.available} credits available.`}
+                {`Creating this project will use 1 credit. You have ${dashboard?.credits.available} credits available.`}
               </p>
             </div>
           )}
