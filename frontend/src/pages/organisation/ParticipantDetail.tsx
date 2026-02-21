@@ -140,6 +140,7 @@ export default function OrgParticipantDetail() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadDocType, setUploadDocType] = useState('OTHER');
+  const [downloadingAuditPdf, setDownloadingAuditPdf] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -788,6 +789,29 @@ export default function OrgParticipantDetail() {
                       <Button variant="secondary" className="w-full" onClick={() => setShowReopenModal(true)}>
                         <RotateCcw className="w-4 h-4 mr-2" />
                         Reopen Reimbursement
+                      </Button>
+                    )}
+                    {(participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') && (
+                      <Button
+                        variant="secondary"
+                        className="w-full"
+                        loading={downloadingAuditPdf}
+                        onClick={async () => {
+                          setDownloadingAuditPdf(true);
+                          try {
+                            await organisationApi.downloadAuditPdf(
+                              participant.id,
+                              `${participant.firstName} ${participant.lastName}`
+                            );
+                          } catch (err: unknown) {
+                            toast.error(err instanceof Error ? err.message : 'Failed to generate audit PDF');
+                          } finally {
+                            setDownloadingAuditPdf(false);
+                          }
+                        }}
+                      >
+                        <FileText className="w-4 h-4 mr-2" />
+                        Download Audit PDF
                       </Button>
                     )}
                   </div>

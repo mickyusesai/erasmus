@@ -832,6 +832,25 @@ export const organisationApi = {
     return handleResponse<{ success: boolean; deletedCount: number }>(res);
   },
 
+  downloadAuditPdf: async (participantId: string, participantName: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/audit-pdf`, {
+      headers: getOrgAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || 'Failed to generate audit PDF');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Audit_${participantName.replace(/\s+/g, '_')}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+
   sendMagicLink: async (participantId: string) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/send-magic-link`, {
       method: 'POST',

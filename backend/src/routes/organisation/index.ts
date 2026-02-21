@@ -8,6 +8,7 @@ import { Organisation, PurchaseType, ParticipantStatus, TransportMode, DocumentT
 import { v4 as uuidv4 } from 'uuid';
 import { getEmailService } from '../../services/email/index.js';
 import { getStorageService } from '../../services/storage/index.js';
+import { generateAuditPdf } from '../../services/pdf/index.js';
 import multer from 'multer';
 
 const router = Router();
@@ -861,6 +862,36 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
       greenTravel: countryLimit?.greenTravel || false,
     },
   });
+}));
+
+/**
+ * GET /api/organisation/participants/:id/audit-pdf
+ * Generate and download the National Agency Audit PDF for a single approved participant.
+ * Only available once the participant's file has been approved (ADMIN_APPROVED or PAID).
+ */
+router.get('/participants/:id/audit-pdf', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) throw new NotFoundError('Participant not found');
+  if (participant.project.organisationId !== org.id) throw new ForbiddenError('Access denied');
+
+  if (participant.status !== 'ADMIN_APPROVED' && participant.status !== 'PAID') {
+    throw new ForbiddenError('Audit PDF can only be generated for approved participants');
+  }
+
+  const pdfBuffer = await generateAuditPdf(participantId);
+
+  const safeName = `${participant.firstName}_${participant.lastName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Audit_${safeName}.pdf"`);
+  res.setHeader('Content-Length', pdfBuffer.length);
+  res.send(pdfBuffer);
 }));
 
 /**
