@@ -2,7 +2,7 @@ const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
     this.name = 'ApiError';
@@ -412,6 +412,15 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  setNoReimbursement: async (token: string, noReimbursement: boolean) => {
+    const res = await fetch(`${API_BASE}/participant/no-reimbursement?token=${token}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noReimbursement }),
+    });
+    return handleResponse<{ noReimbursement: boolean }>(res);
+  },
+
   markComplete: async (token: string) => {
     const res = await fetch(`${API_BASE}/participant/mark-complete?token=${token}`, {
       method: 'POST',
@@ -638,6 +647,24 @@ export const organisationApi = {
     return handleResponse<{ organisation: OrganisationInfo; stats: { projectCount: number; participantCount: number } }>(res);
   },
 
+  forgotPassword: async (email: string) => {
+    const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  resetPassword: async (token: string, newPassword: string) => {
+    const res = await fetch(`${API_BASE}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, newPassword }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
   changePassword: async (currentPassword: string, newPassword: string) => {
     const res = await fetch(`${API_BASE}/auth/change-password`, {
       method: 'POST',
@@ -788,6 +815,15 @@ export const organisationApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  bulkDeleteParticipants: async (ids: string[]) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/bulk-delete`, {
+      method: 'POST',
+      headers: { ...getOrgAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    return handleResponse<{ success: boolean; deletedCount: number }>(res);
+  },
+
   sendMagicLink: async (participantId: string) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/send-magic-link`, {
       method: 'POST',
@@ -798,6 +834,23 @@ export const organisationApi = {
 
   sendMagicLinksBulk: async (participantIds: string[]) => {
     const res = await fetch(`${API_BASE}/organisation/participants/send-magic-links-bulk`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ participantIds }),
+    });
+    return handleResponse<{ results: { id: string; success: boolean }[] }>(res);
+  },
+
+  sendReminder: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/send-reminder`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  sendRemindersBulk: async (participantIds: string[]) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/send-reminders-bulk`, {
       method: 'POST',
       headers: getOrgAuthHeaders(),
       body: JSON.stringify({ participantIds }),
@@ -837,11 +890,112 @@ export const organisationApi = {
     return handleResponse<{ url: string }>(res);
   },
 
-  getChangelogSummary: async (participantId: string) => {
-    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/changelog-summary`, {
+  getReviewFindings: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/review-findings`, {
       headers: getOrgAuthHeaders(),
     });
-    return handleResponse<{ summary: string }>(res);
+    return handleResponse<{ findings: ReviewFinding[] }>(res);
+  },
+
+  toggleReviewFinding: async (participantId: string, findingId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/review-findings/${findingId}/toggle`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ finding: ReviewFinding }>(res);
+  },
+
+  refreshReviewFindings: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/review-findings/refresh`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ findings: ReviewFinding[] }>(res);
+  },
+
+  // Travel Item CRUD
+  createTravelItem: async (participantId: string, data: CreateTravelItemData) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
+  updateTravelItem: async (participantId: string, itemId: string, data: Partial<CreateTravelItemData>) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<TravelItem>(res);
+  },
+
+  deleteTravelItem: async (participantId: string, itemId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  // Document management
+  uploadDocument: async (participantId: string, file: File, documentType: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('documentType', documentType);
+    const token = localStorage.getItem('org-token');
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/documents/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    return handleResponse<Document>(res);
+  },
+
+  deleteDocument: async (participantId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/documents/${documentId}`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  linkDocument: async (participantId: string, itemId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}/link-document`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ documentId }),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  unlinkDocument: async (participantId: string, itemId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}/link-document`, {
+      method: 'DELETE',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ documentId }),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  recalculateSummary: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/recalculate-summary`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ summary: ReimbursementSummary }>(res);
+  },
+
+  // Reopen reimbursement
+  reopenReimbursement: async (participantId: string, data: { message: string; clearAiReview?: boolean; clearTravelItems?: boolean; clearDocuments?: boolean }) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/reopen`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ success: boolean }>(res);
   },
 
   // Country Limits
@@ -1100,7 +1254,10 @@ export interface Participant {
   email: string;
   country: string;
   status: ParticipantStatus;
+  noReimbursement?: boolean;
   lastMagicLinkSentAt?: string;
+  reopenedAt?: string;
+  reopenMessage?: string;
   project?: {
     name: string;
     country: string;
@@ -1203,12 +1360,22 @@ export interface TravelItem {
   purchaseDate?: string;
   amountEur: number;
   comment?: string;
+  consolidationNotes?: string;
+  // Edit tracking
+  manuallyEdited?: boolean;
+  originalAmountFromAi?: number;
+  priceMissing?: boolean;
   // Round-trip bookings
   isRoundTrip?: boolean;
   tripGroupId?: string;  // Legacy
   priceAllocation?: number;  // Legacy
   totalGroupPrice?: number;  // Legacy
   amountIncludedInRoundTrip?: boolean;  // True if this leg's amount is included in another leg's round-trip price
+  // Luggage fee merged into this flight
+  luggageAmount?: number;
+  luggageAmountEur?: number;
+  luggageDocumentId?: string;
+  purchaseDateAutoFilled?: boolean;
   // Multi-passenger bookings
   numberOfPassengers?: number;
   participantPortion?: number;
@@ -1222,6 +1389,10 @@ export interface TravelItem {
   checked?: boolean;
   // Exclusion from reimbursement
   excludedFromReimbursement?: boolean;
+  // Currency and company info
+  originalCurrencyFromAi?: string | null;
+  exchangeRateOverride?: number | null;
+  companyName?: string | null;
 }
 
 export type TransportMode = 'PLANE' | 'TRAIN' | 'BUS' | 'CAR' | 'FERRY' | 'OTHER';
@@ -1245,6 +1416,9 @@ export interface CreateTravelItemData {
   // Car travel specific
   distanceKm?: number;
   isDriverCarpool?: boolean;
+  // Organisation overrides
+  exchangeRateOverride?: number | null;
+  companyName?: string | null;
 }
 
 export interface Declaration {
@@ -1272,6 +1446,16 @@ export interface ChangeLogEntry {
   previousValue?: string;
   newValue?: string;
   changedAt: string;
+}
+
+export interface ReviewFinding {
+  id: string;
+  severity: 'critical' | 'important' | 'info';
+  message: string;
+  category: string;
+  checked: boolean;
+  travelItemId?: string | null;
+  createdAt: string;
 }
 
 export interface BankDetails {
@@ -1337,6 +1521,9 @@ export interface ParticipantAuthResponse {
     detectedHomeCountry?: string | null;
     homeCountryConfidence?: number | null;
     homeCountryReasoning?: string | null;
+    reopenedAt?: string;
+    reopenMessage?: string;
+    noReimbursement?: boolean;
   };
   project: {
     id: string;
@@ -1401,7 +1588,7 @@ export interface CityCountryValidationResponse {
   matches: boolean;
 }
 
-// Declaration of Travel types
+// Declaration on Honor (Declaration of Travel) types
 export interface DeclarationOfTravel {
   id: string;
   participantId: string;
@@ -1418,6 +1605,10 @@ export interface DeclarationOfTravel {
   sendingOrgName: string;
   sendingOrgOid?: string;
   sendingOrgAddress: string;
+  reason?: string | null;
+  isCarTravel?: boolean;
+  licensePlate?: string | null;
+  driverName?: string | null;
   signatureDataUrl: string;
   signedAt: string;
   generatedPdfPath?: string;
@@ -1446,6 +1637,10 @@ export interface CreateDeclarationOfTravelData {
   sendingOrgOid?: string;
   sendingOrgAddress: string;
   signatureDataUrl: string;
+  reason?: string;
+  isCarTravel?: boolean;
+  licensePlate?: string;
+  driverName?: string;
 }
 
 // Dissemination types

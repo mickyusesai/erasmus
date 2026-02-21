@@ -11,6 +11,7 @@ import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
 import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
+import { getEmailService } from '../../services/email/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import disseminationRoutes from './dissemination.js';
@@ -70,6 +71,8 @@ const updateTravelItemSchema = z.object({
   // Car travel specific
   distanceKm: z.number().nullable().optional(),
   isDriverCarpool: z.boolean().optional(),
+  // Company / airline name
+  companyName: z.string().nullable().optional(),
 });
 
 const declarationOnHonorSchema = z.object({
@@ -94,6 +97,10 @@ interface DeclarationOfTravelInput {
   sendingOrgOid?: string | null;
   sendingOrgAddress: string;
   signatureDataUrl: string;
+  reason?: string | null;
+  isCarTravel?: boolean;
+  licensePlate?: string | null;
+  driverName?: string | null;
 }
 
 const declarationOfTravelSchema = z.object({
@@ -111,6 +118,11 @@ const declarationOfTravelSchema = z.object({
   sendingOrgOid: z.string().nullable().optional(),
   sendingOrgAddress: z.string().min(1, 'Sending organisation address is required'),
   signatureDataUrl: z.string().min(1, 'Signature is required'),
+  // New fields for car travel and reason
+  reason: z.string().nullable().optional(),
+  isCarTravel: z.boolean().optional(),
+  licensePlate: z.string().nullable().optional(),
+  driverName: z.string().nullable().optional(),
 });
 
 // Wrap async route handlers
@@ -216,6 +228,9 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       detectedHomeCountry: data?.detectedHomeCountry,
       homeCountryConfidence: data?.homeCountryConfidence,
       homeCountryReasoning: data?.homeCountryReasoning,
+      noReimbursement: data?.noReimbursement,
+      reopenedAt: data?.reopenedAt,
+      reopenMessage: data?.reopenMessage,
     },
     project: {
       ...data?.project,
@@ -537,9 +552,10 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
   // If amount is being changed, mark as manually edited
   if (isAmountChange) {
     updateData.manuallyEdited = true;
-    // Store original AI amount if not already set
+    // Store original AI amount and currency if not already set
     if (!current.originalAmountFromAi) {
       updateData.originalAmountFromAi = current.amountOriginal;
+      updateData.originalCurrencyFromAi = current.currencyOriginal;
     }
   }
 
@@ -643,10 +659,27 @@ router.delete('/travel-items/:id', participantAuth, asyncHandler(async (req: Req
     where: { id: req.params.id },
   });
 
-  // Delete linked documents if requested
+  // Delete linked documents if requested — but only if not referenced by other travel items
   if (deleteDocuments && docIdsToDelete.length > 0) {
     const storage = getStorageService();
     for (const docId of docIdsToDelete) {
+      // Check if any OTHER travel items still reference this document
+      const otherReferences = await prisma.travelItem.findMany({
+        where: {
+          participantId: participant.id,
+          id: { not: req.params.id },
+          OR: [
+            { documentId: docId },
+            { additionalDocumentIds: { contains: docId } },
+          ],
+        },
+      });
+
+      if (otherReferences.length > 0) {
+        console.log(`[Delete] Skipping document ${docId} — still referenced by ${otherReferences.length} other travel item(s)`);
+        continue;
+      }
+
       const doc = await prisma.document.findFirst({
         where: { id: docId, participantId: participant.id },
       });
@@ -1074,6 +1107,10 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
     sendingOrgOid: data.sendingOrgOid,
     sendingOrgAddress: data.sendingOrgAddress,
     signatureDataUrl: data.signatureDataUrl,
+    reason: data.reason,
+    isCarTravel: data.isCarTravel,
+    licensePlate: data.licensePlate,
+    driverName: data.driverName,
   });
 
   // Create the declaration record
@@ -1095,11 +1132,15 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
       sendingOrgAddress: data.sendingOrgAddress,
       signatureDataUrl: data.signatureDataUrl,
       generatedPdfPath: filePath,
+      reason: data.reason || null,
+      isCarTravel: data.isCarTravel || false,
+      licensePlate: data.licensePlate || null,
+      driverName: data.driverName || null,
     },
   });
 
   // Also create a document record for the PDF so it appears in the participant's documents
-  await prisma.document.create({
+  const declarationDoc = await prisma.document.create({
     data: {
       participantId: participant.id,
       storedFilePath: filePath,
@@ -1110,6 +1151,26 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
       documentType: DocumentType.OTHER, // Declaration of travel
     },
   });
+
+  // Auto-link the declaration PDF to the travel item
+  if (data.travelItemId) {
+    const existingItem = await prisma.travelItem.findUnique({ where: { id: data.travelItemId } });
+    if (existingItem) {
+      if (!existingItem.documentId) {
+        await prisma.travelItem.update({
+          where: { id: data.travelItemId },
+          data: { documentId: declarationDoc.id },
+        });
+      } else {
+        const additionalIds: string[] = existingItem.additionalDocumentIds ? JSON.parse(existingItem.additionalDocumentIds) : [];
+        additionalIds.push(declarationDoc.id);
+        await prisma.travelItem.update({
+          where: { id: data.travelItemId },
+          data: { additionalDocumentIds: JSON.stringify(additionalIds) },
+        });
+      }
+    }
+  }
 
   // Log the change
   await prisma.changeLogEntry.create({
@@ -1174,6 +1235,22 @@ router.delete('/declarations-of-travel/:id', participantAuth, asyncHandler(async
 }));
 
 /**
+ * PATCH /api/participant/no-reimbursement
+ * Set no-reimbursement flag (participant opts out of reimbursement)
+ */
+router.patch('/no-reimbursement', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+  const { noReimbursement } = req.body;
+
+  const updated = await prisma.participant.update({
+    where: { id: participant.id },
+    data: { noReimbursement: !!noReimbursement },
+  });
+
+  res.json({ noReimbursement: updated.noReimbursement });
+}));
+
+/**
  * POST /api/participant/mark-complete
  * Mark reimbursement as complete (participant side)
  */
@@ -1182,6 +1259,24 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
 
   if (participant.status !== 'DRAFT') {
     throw new ForbiddenError('Reimbursement already marked as complete');
+  }
+
+  // If participant opted out of reimbursement, skip validation
+  if (participant.noReimbursement) {
+    await prisma.participant.update({
+      where: { id: participant.id },
+      data: { status: ParticipantStatus.PARTICIPANT_COMPLETE },
+    });
+
+    // Upsert a zero-amount reimbursement summary
+    await prisma.reimbursementSummary.upsert({
+      where: { participantId: participant.id },
+      create: { participantId: participant.id, totalEur: 0, maxReimbursementAllowed: 0, amountToReimburse: 0, aiCheckOk: true },
+      update: { totalEur: 0, amountToReimburse: 0, aiCheckOk: true },
+    });
+
+    res.json({ success: true });
+    return;
   }
 
   // Validate all required data is present
@@ -1209,6 +1304,145 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
     where: { participantId: participant.id },
     data: { aiCheckOk: validation.aiCheckPassed },
   });
+
+  // Send submission confirmation email (fire and forget)
+  const participantWithProject = await prisma.participant.findUnique({
+    where: { id: participant.id },
+    include: { project: true },
+  });
+  if (participantWithProject) {
+    const emailService = getEmailService();
+    emailService.sendSubmissionConfirmation(
+      participantWithProject.email,
+      participantWithProject.firstName,
+      participantWithProject.project.name
+    ).catch((err) => console.error('[Email] Failed to send submission confirmation:', err));
+  }
+
+  // Generate AI review findings in the background (only once, on submission)
+  (async () => {
+    try {
+      // Fetch full participant data for AI review
+      const fullParticipant = await prisma.participant.findUnique({
+        where: { id: participant.id },
+        include: {
+          project: true,
+          documents: { include: { extraction: true } },
+          travelItems: {
+            orderBy: { departureDate: 'asc' },
+            include: { declarationsOfTravel: true },
+          },
+          declarationsOnHonor: true,
+          declarationsOfTravel: true,
+          reimbursementSummary: true,
+          changeLogEntries: { orderBy: { changedAt: 'desc' }, take: 50 },
+        },
+      });
+
+      if (!fullParticipant || fullParticipant.travelItems.length === 0) return;
+
+      const countryLimit = await prisma.projectCountryLimit.findFirst({
+        where: { projectId: fullParticipant.projectId, country: fullParticipant.country },
+      });
+
+      const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
+      const findings = await generateParticipantReview({
+        participantName: `${fullParticipant.firstName} ${fullParticipant.lastName}`,
+        participantCountry: fullParticipant.country,
+        detectedHomeCountry: fullParticipant.detectedHomeCountry,
+        homeCountryConfidence: fullParticipant.homeCountryConfidence,
+        participantNote: fullParticipant.participantNote,
+        consolidationSummary: fullParticipant.consolidationSummary,
+        projectCountry: fullParticipant.project.country,
+        projectStartDate: fullParticipant.project.startDate.toISOString().split('T')[0],
+        projectEndDate: fullParticipant.project.endDate.toISOString().split('T')[0],
+        maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+        travelItems: fullParticipant.travelItems.map((item) => ({
+          id: item.id,
+          modeOfTransport: item.modeOfTransport,
+          fromLocation: item.fromLocation,
+          toLocation: item.toLocation,
+          departureDate: item.departureDate?.toISOString().split('T')[0] || null,
+          flightNumber: item.flightNumber,
+          bookingReference: item.bookingReference,
+          amountOriginal: item.amountOriginal,
+          currencyOriginal: item.currencyOriginal,
+          amountEur: item.amountEur,
+          purchaseDate: item.purchaseDate?.toISOString().split('T')[0] || null,
+          manuallyEdited: item.manuallyEdited,
+          originalAmountFromAi: item.originalAmountFromAi,
+          checked: item.checked,
+          priceMissing: item.priceMissing,
+          routeMatchesCountry: item.routeMatchesCountry,
+          excludedFromReimbursement: item.excludedFromReimbursement,
+          numberOfPassengers: item.numberOfPassengers,
+          participantPortion: item.participantPortion,
+          distanceKm: item.distanceKm,
+          validationWarnings: item.validationWarnings,
+          documentId: item.documentId,
+          amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
+          luggageAmount: item.luggageAmount,
+          luggageAmountEur: item.luggageAmountEur,
+          purchaseDateAutoFilled: item.purchaseDateAutoFilled,
+          comment: item.comment,
+          consolidationNotes: item.consolidationNotes,
+        })),
+        documents: fullParticipant.documents.map((doc) => ({
+          id: doc.id,
+          documentType: doc.documentType,
+          originalFilename: doc.originalFilename,
+          extraction: doc.extraction ? {
+            confidence: doc.extraction.confidence,
+            detectedDocumentType: doc.extraction.detectedDocumentType,
+            passengerName: doc.extraction.passengerName,
+            amount: doc.extraction.amount,
+            currency: doc.extraction.currency,
+          } : null,
+        })),
+        declarationsOnHonor: fullParticipant.declarationsOnHonor.map((d) => ({
+          missingDocumentType: d.missingDocumentType,
+          description: d.description,
+          reason: d.reason,
+        })),
+        declarationsOfTravel: fullParticipant.declarationsOfTravel.map((d) => ({
+          fromPlace: d.fromPlace,
+          toPlace: d.toPlace,
+          travelDate: d.travelDate?.toISOString().split('T')[0] || null,
+          flightNumber: d.flightNumber,
+          modeOfTransport: d.modeOfTransport,
+        })),
+        changeLogEntries: fullParticipant.changeLogEntries.map((e) => ({
+          userType: e.userType,
+          fieldName: e.fieldName,
+          previousValue: e.previousValue,
+          newValue: e.newValue,
+        })),
+        reimbursementSummary: fullParticipant.reimbursementSummary ? {
+          totalEur: fullParticipant.reimbursementSummary.totalEur,
+          maxReimbursementAllowed: fullParticipant.reimbursementSummary.maxReimbursementAllowed,
+          amountToReimburse: fullParticipant.reimbursementSummary.amountToReimburse,
+        } : null,
+        bankDetailsComplete: !!(fullParticipant.bankAccountIban && fullParticipant.bankAccountHolderName && fullParticipant.bankAccountBic),
+      });
+
+      // Store findings in DB (including travelItemId link)
+      if (findings.length > 0) {
+        await prisma.aiReviewFinding.createMany({
+          data: findings.map((f) => ({
+            participantId: participant.id,
+            severity: f.severity,
+            message: f.message,
+            category: f.category,
+            travelItemId: (f as any).travelItemId || null,
+          })),
+        });
+      }
+
+      console.log(`[AI Review] Generated ${findings.length} findings for participant ${participant.id}`);
+    } catch (error) {
+      console.error(`[AI Review] Failed to generate review for participant ${participant.id}:`, error);
+    }
+  })();
 
   res.json({ success: true });
 }));

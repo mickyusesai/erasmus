@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
 import { getStorageService } from '../storage/index.js';
+import { convertToEur as convertToEurService } from '../exchangeRate/infoEuroService.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -164,6 +165,7 @@ Carefully determine the document type:
 3. OTHER DOCUMENTS:
    - FUEL_RECEIPT: Gas station receipt
    - GREEN_TRAVEL_DECLARATION: Declaration for green travel
+   - INTERRAIL_PASS: Interrail or Eurail pass (multi-day rail travel pass)
    - OTHER: Anything else
 
 CRITICAL: Bank transactions and payment screenshots are NOT tickets!
@@ -218,7 +220,7 @@ PRICE EXTRACTION:
 Extract ALL information you can find. Respond with ONLY a JSON object:
 {
   "documentLanguage": "Croatian" | "English" | "Dutch" | "German" | "French" | "Polish" | "Spanish" | "Italian" | "other",
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
   "confidence": 0.0-1.0,
   "reasoning": "Brief explanation: 1) What language is this document in? 2) How did you identify the document type? 3) Key information extracted",
 
@@ -275,6 +277,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       const response = await this.client.chat.completions.create({
         model: this.model,
         max_completion_tokens: 2000, // Light extraction - keep it fast
+        reasoning_effort: 'low',
         messages: [
           {
             role: 'user',
@@ -303,8 +306,8 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           detectedDocumentType: this.mapDocumentType(parsed.documentType),
           confidence: parsed.confidence || 0.5,
           passengerName: parsed.passengerName || null,
-          fromLocation: parsed.fromLocation || null,
-          toLocation: parsed.toLocation || null,
+          fromLocation: parsed.fromLocation ? this.toTitleCase(parsed.fromLocation) : null,
+          toLocation: parsed.toLocation ? this.toTitleCase(parsed.toLocation) : null,
           departureDate: parsed.departureDate ? new Date(parsed.departureDate) : null,
           purchaseDate: parsed.purchaseDate ? new Date(parsed.purchaseDate) : null,
           documentDate: parsed.documentDate ? new Date(parsed.documentDate) : null,
@@ -330,8 +333,8 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           detectedDocumentType: this.mapDocumentType(parsed.documentType),
           confidence: parsed.confidence || 0.5,
           passengerName: parsed.passengerName || null,
-          fromLocation: parsed.fromLocation || null,
-          toLocation: parsed.toLocation || null,
+          fromLocation: parsed.fromLocation ? this.toTitleCase(parsed.fromLocation) : null,
+          toLocation: parsed.toLocation ? this.toTitleCase(parsed.toLocation) : null,
           departureDate: parsed.departureDate ? new Date(parsed.departureDate) : null,
           purchaseDate: parsed.purchaseDate ? new Date(parsed.purchaseDate) : null,
           documentDate: parsed.documentDate ? new Date(parsed.documentDate) : null,
@@ -407,6 +410,61 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
     if (!participant) {
       throw new Error('Participant not found');
+    }
+
+    // Clean up orphaned documents: if there are 0 travel items but documents exist
+    // that are not linked to any travel item, they're orphans from a previous delete cycle.
+    // Keeping them would cause the AI to see duplicate data and create duplicate travel items.
+    const existingTravelItems = participant.travelItems || [];
+    if (existingTravelItems.length === 0 && participant.documents.length > 0) {
+      // Check which documents are NOT linked to any travel item
+      const linkedDocIds = new Set<string>();
+      for (const item of existingTravelItems) {
+        if ((item as any).documentId) linkedDocIds.add((item as any).documentId);
+        if ((item as any).additionalDocumentIds) {
+          try {
+            const ids = JSON.parse((item as any).additionalDocumentIds) as string[];
+            ids.forEach(id => linkedDocIds.add(id));
+          } catch { /* ignore */ }
+        }
+      }
+
+      const orphanedDocs = participant.documents.filter((doc: { id: string }) => !linkedDocIds.has(doc.id));
+      if (orphanedDocs.length > 0) {
+        // Check if there are also recently uploaded documents (within last 5 minutes)
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const recentDocs = participant.documents.filter((doc: any) => new Date(doc.createdAt) >= fiveMinAgo);
+        const oldOrphans = orphanedDocs.filter((doc: any) => new Date(doc.createdAt) < fiveMinAgo);
+
+        if (recentDocs.length > 0 && oldOrphans.length > 0) {
+          // There are both recent uploads AND old orphans — clean up old orphans
+          console.log(`[Consolidation] Cleaning up ${oldOrphans.length} orphaned documents from previous session`);
+          const storage = getStorageService();
+          for (const doc of oldOrphans) {
+            try {
+              await storage.delete((doc as any).storedFilePath);
+            } catch (error) {
+              console.error(`[Consolidation] Failed to delete orphaned file: ${(doc as any).storedFilePath}`, error);
+            }
+            await prisma.document.delete({ where: { id: doc.id } });
+          }
+
+          // Re-fetch participant with cleaned up documents
+          const refreshed = await prisma.participant.findUnique({
+            where: { id: participantId },
+            include: {
+              project: true,
+              documents: { include: { extraction: true } },
+              travelItems: true,
+            },
+          });
+          if (refreshed) {
+            // Update the participant reference with fresh data
+            (participant as any).documents = (refreshed as any).documents;
+            (participant as any).travelItems = (refreshed as any).travelItems;
+          }
+        }
+      }
     }
 
     // Build extraction map for quick lookup by document ID
@@ -679,11 +737,32 @@ Before finalizing, verify your journey makes logical sense:
   * Maybe documents from different trips were uploaded
 - In "journey_issues" array, list any problems found during validation
 
+RULE 14: LUGGAGE INVOICES - MERGE INTO FLIGHT
+When a LUGGAGE_INVOICE document is detected (separate luggage/baggage fee invoice):
+- Do NOT create a separate travel item for luggage
+- Match it to the corresponding flight by airline, date, passenger name, or booking reference
+- Add the luggage amount to the flight travel item using "luggageAmount" and "luggageCurrency" fields
+- Add the luggage document ID to the flight's linkedDocumentIds AND set "luggageDocumentId"
+- The total flight amount should NOT include the luggage fee — keep them separate for transparency
+- If you cannot match the luggage invoice to any flight, add it to unassigned_documents
+
+RULE 15: INTERRAIL PASS - CREATE TWO TRAVEL ITEMS
+When an INTERRAIL_PASS document is detected (Interrail or Eurail multi-day rail pass):
+- Create TWO travel items from this single document: one for the outbound journey and one for the return journey
+- Both travel items should have modeOfTransport: "TRAIN"
+- Both items should have the SAME document linked (the Interrail pass document ID in linkedDocumentIds)
+- Use the participant's home country and the project location to infer the outbound route (home → project) and return route (project → home)
+- Put the FULL pass price on the OUTBOUND leg; set amount to 0 on the RETURN leg with "amountIncludedInRoundTrip": true
+- Set "priceEditable": false on the return leg
+- On BOTH travel items, set "validationWarnings": ["Interrail pass — Declaration on Honor required as proof of actual train travel"]
+- If departure/return dates are not clear from the pass, use the project start and end dates as reasonable defaults
+
 === OUTPUT FORMAT ===
 
 Respond with ONLY a JSON object:
 {
   "journey_summary": "Brief description of the actual documented journey",
+  "consolidation_summary": "Notes for the organisation's review AI. Include: key decisions you made (e.g. 'Matched bank payment of €53.50 to WizzAir flight by date and airline name'), ambiguities (e.g. 'Passenger name John Smith on ticket vs J. Smith on boarding pass'), unusual patterns (e.g. 'Participant appears to travel from Kyiv not Warsaw as stated'), and anything the reviewer should double-check. Be specific and concise.",
   "detected_home_country": "Country name where journey starts and ends",
   "home_country_confidence": 0.0-1.0,
   "home_country_reasoning": "Brief explanation based on document evidence",
@@ -718,7 +797,12 @@ Respond with ONLY a JSON object:
       "priceSourceDocId": "<UUID> or null",
       "purchaseDate": "YYYY-MM-DD or null",
       "linkedDocumentIds": ["<UUID of primary doc>", "<UUID of additional doc if any>"],
-      "numberOfPassengers": 1
+      "numberOfPassengers": 1,
+      "luggageAmount": null or 25.00 (amount from separate luggage invoice, if matched),
+      "luggageCurrency": null or "EUR" (currency of the luggage invoice),
+      "luggageDocumentId": null or "<UUID of luggage invoice document>",
+      "validationWarnings": ["Array of warning strings for this specific travel item, e.g. Interrail declaration required. null if none."],
+      "consolidationNotes": "Brief note for the review AI explaining key decisions, e.g. why a price was chosen, how documents were matched, any ambiguities noticed. null if nothing noteworthy."
     }
   ],
 
@@ -781,17 +865,23 @@ Wrong: Two separate items, or doc-2 left unassigned
 - Always output in YYYY-MM-DD format
 
 === WARNING RULES ===
-Only warn about ACTIONABLE problems:
+Warnings are shown DIRECTLY to the participant (not the reviewer). Only include warnings that are:
+- Actionable by the participant
+- Written in friendly, non-technical language
+
+INCLUDE in warnings:
 - Name mismatch between ticket and participant
 - Multi-passenger booking needs portion specified
-- Missing boarding pass for a documented flight
-- Price truly missing (priceMissing=true)
+- Price truly missing (priceMissing=true) — tell participant they need to fill in the amount
 - Country mismatch between profile and travel pattern
 
-Do NOT warn about:
+Do NOT include in warnings (these are handled elsewhere):
 - Travel dates before/after project (normal for travel to/from)
 - Round-trip structure (UI handles this)
-- Matched receipts (those are attached, not warnings)`;
+- Matched receipts (those are attached, not warnings)
+- Conflicting prices between documents (put this in consolidationNotes for the reviewer)
+- Anything addressed to "reviewer", "auditor", or "organisation"
+- Internal document matching decisions (put in consolidationNotes instead)`;
 
     // Build a set of valid document IDs for this participant
     const validDocumentIds = new Set(participant.documents.map((d: { id: string }) => d.id));
@@ -871,7 +961,8 @@ Do NOT warn about:
 
       const response = await this.client.chat.completions.create({
         model: this.model,
-        max_completion_tokens: 8000,
+        max_completion_tokens: 16000,
+        reasoning_effort: 'high',
         messages: [
           {
             role: 'user',
@@ -942,7 +1033,7 @@ Do NOT warn about:
         const currency = booking.currency || 'EUR';
         const totalAmount = booking.totalAmount ?? null;
         const totalAmountEur = totalAmount !== null && currency !== 'EUR'
-          ? this.convertToEur(totalAmount, currency)
+          ? await convertToEurService(totalAmount, currency)
           : totalAmount;
 
         const travelBooking = await prisma.travelBooking.create({
@@ -1031,9 +1122,33 @@ Do NOT warn about:
 
         // CRITICAL: Handle amount - use null if not found, NEVER default to 0
         const baseAmount: number | null = item.amount ?? null;  // Use nullish coalescing to preserve null
+
+        // Auto-fill purchase date from departure date for non-EUR currencies without purchase date
+        let purchaseDateValue = item.purchaseDate ? new Date(item.purchaseDate) : null;
+        let purchaseDateAutoFilled = false;
+        if (!purchaseDateValue && currency !== 'EUR' && baseAmount !== null) {
+          // For return legs of round-trip bookings, use the outbound flight date if available
+          if (item.amountIncludedInRoundTrip === true && item.bookingReference) {
+            // Find outbound leg in the same booking to get its date
+            const outboundItem = (result.travel_items || []).find(
+              (ti: any) => ti.bookingReference === item.bookingReference && ti.amountIncludedInRoundTrip !== true
+            );
+            if (outboundItem?.departureDate) {
+              purchaseDateValue = new Date(outboundItem.departureDate);
+              purchaseDateAutoFilled = true;
+            }
+          }
+          // Fallback to this item's departure date
+          if (!purchaseDateValue && item.departureDate) {
+            purchaseDateValue = new Date(item.departureDate);
+            purchaseDateAutoFilled = true;
+          }
+        }
+
         let amountEur: number | null = baseAmount;
         if (baseAmount !== null && currency !== 'EUR') {
-          amountEur = this.convertToEur(baseAmount, currency);
+          const purchaseDateForConversion = purchaseDateValue || new Date();
+          amountEur = await convertToEurService(baseAmount, currency, purchaseDateForConversion);
         }
 
         // Resolve price source document ID
@@ -1045,6 +1160,34 @@ Do NOT warn about:
         // Handle amountIncludedInRoundTrip - if true, this is return leg with price on outbound
         const amountIncludedInRoundTrip = item.amountIncludedInRoundTrip === true;
 
+        // Derive companyName from document extraction (airline, busCompany, or merchantName)
+        let companyName: string | null = null;
+        if (primaryDocId) {
+          const docExtractionForCompany = await prisma.documentExtraction.findUnique({
+            where: { documentId: primaryDocId },
+          });
+          if (docExtractionForCompany) {
+            companyName = docExtractionForCompany.airline
+              || docExtractionForCompany.busCompany
+              || docExtractionForCompany.merchantName
+              || null;
+          }
+        }
+
+        // Handle luggage fee merged into this flight
+        const luggageAmount = item.luggageAmount ?? null;
+        const luggageCurrency = item.luggageCurrency || currency;
+        let luggageAmountEur: number | null = null;
+        if (luggageAmount !== null) {
+          if (luggageCurrency !== 'EUR') {
+            const purchaseDateForLuggage = item.purchaseDate ? new Date(item.purchaseDate) : new Date();
+            luggageAmountEur = await convertToEurService(luggageAmount, luggageCurrency, purchaseDateForLuggage);
+          } else {
+            luggageAmountEur = luggageAmount;
+          }
+        }
+        const luggageDocumentId = item.luggageDocumentId ? resolveDocumentId(item.luggageDocumentId) : null;
+
         const travelItem = await prisma.travelItem.create({
           data: {
             participantId,
@@ -1052,23 +1195,33 @@ Do NOT warn about:
             additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
             bookingId: bookingId,
             modeOfTransport: this.mapTransportMode(item.modeOfTransport),
-            fromLocation: item.fromLocation || 'Unknown',
-            toLocation: item.toLocation || 'Unknown',
+            fromLocation: this.toTitleCase(item.fromLocation || 'Unknown'),
+            toLocation: this.toTitleCase(item.toLocation || 'Unknown'),
             departureDate: item.departureDate ? new Date(item.departureDate) : new Date(),
             arrivalDate: item.arrivalDate ? new Date(item.arrivalDate) : null,
             bookingReference: item.bookingReference || null,
             flightNumber: item.flightNumber || null,
             amountOriginal: baseAmount,
             currencyOriginal: currency,
-            purchaseDate: item.purchaseDate ? new Date(item.purchaseDate) : null,
+            purchaseDate: purchaseDateValue || (item.purchaseDate ? new Date(item.purchaseDate) : null),
+            purchaseDateAutoFilled: purchaseDateAutoFilled,
             amountEur: amountEur,
             comment: item.notes || null,
+            consolidationNotes: item.consolidationNotes || null,
             manuallyEdited: false,
             originalAmountFromAi: baseAmount,
+            originalCurrencyFromAi: currency,
+            companyName: companyName,
+            validationWarnings: item.validationWarnings && Array.isArray(item.validationWarnings) && item.validationWarnings.length > 0
+              ? JSON.stringify(item.validationWarnings)
+              : null,
             priceEditable: item.priceEditable !== false, // Default to true
             priceMissing: item.priceMissing === true,
             priceSourceDocId: priceSourceDocId,
             amountIncludedInRoundTrip: amountIncludedInRoundTrip,
+            luggageAmount: luggageAmount,
+            luggageAmountEur: luggageAmountEur,
+            luggageDocumentId: luggageDocumentId,
             isRoundTrip: false, // Individual legs are not round-trips; the booking is
             numberOfPassengers: item.numberOfPassengers || null,
           },
@@ -1098,7 +1251,7 @@ Do NOT warn about:
         },
       });
 
-      // Update participant consolidation timestamp and detected home country
+      // Update participant consolidation timestamp, detected home country, and consolidation summary
       await prisma.participant.update({
         where: { id: participantId },
         data: {
@@ -1106,6 +1259,7 @@ Do NOT warn about:
           detectedHomeCountry: result.detected_home_country || null,
           homeCountryConfidence: result.home_country_confidence || null,
           homeCountryReasoning: result.home_country_reasoning || null,
+          consolidationSummary: result.consolidation_summary || null,
         },
       });
 
@@ -1149,6 +1303,8 @@ Do NOT warn about:
       FUEL_RECEIPT: 'FUEL_RECEIPT',
       GREEN_TRAVEL_DECLARATION: 'GREEN_TRAVEL_DECLARATION',
       BANK_TRANSACTION: 'BANK_TRANSACTION',
+      LUGGAGE_INVOICE: 'LUGGAGE_INVOICE',
+      INTERRAIL_PASS: 'INTERRAIL_PASS',
     };
     return (mapping[type] || 'OTHER') as DocumentType;
   }
@@ -1164,20 +1320,16 @@ Do NOT warn about:
     return (mapping[mode] || 'OTHER') as TransportMode;
   }
 
-  private convertToEur(amount: number, currency: string): number {
-    const rates: Record<string, number> = {
-      EUR: 1.0,
-      USD: 0.92,
-      GBP: 1.17,
-      PLN: 0.23,
-      CZK: 0.041,
-      HUF: 0.0026,
-      RON: 0.20,
-      SEK: 0.088,
-    };
-    const rate = rates[currency.toUpperCase()] || 1;
-    return Math.round(amount * rate * 100) / 100;
+  /**
+   * Normalize a location name to title case (e.g. "EINDHOVEN" → "Eindhoven", "new york" → "New York")
+   */
+  private toTitleCase(name: string): string {
+    if (!name) return name;
+    return name
+      .toLowerCase()
+      .replace(/(?:^|\s|-|')\S/g, (match) => match.toUpperCase());
   }
+
 }
 
 export interface ConsolidationResult {

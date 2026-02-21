@@ -27,6 +27,10 @@ model Organisation {
   annualLicenseStartedAt  DateTime?
   annualLicenseExpiresAt  DateTime?
 
+  // Password reset
+  passwordResetToken      String?   @unique
+  passwordResetExpiresAt  DateTime?
+
   // Account status
   isActive                Boolean   @default(true)
 
@@ -161,6 +165,10 @@ model Participant {
   detectedHomeCountry       String?                 // AI-detected home country based on travel patterns
   homeCountryConfidence     Float?                  // Confidence score (0-1) for detected home country
   homeCountryReasoning      String?                 // AI reasoning for the detected home country
+  consolidationSummary      String?                 // AI notes from consolidation for the review AI
+  noReimbursement           Boolean                 @default(false)  // Participant opted out of reimbursement
+  reopenedAt                DateTime?               // When the reimbursement was last reopened by the organisation
+  reopenMessage             String?                 // Organisation's message to participant explaining what to fix
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   documents                 Document[]
@@ -172,6 +180,7 @@ model Participant {
   createdDisseminations     DisseminationActivity[] @relation("CreatedActivities")
   socialMediaPosts          SocialMediaPost[]
   declarationsOfTravel      DeclarationOfTravel[]
+  aiReviewFindings          AiReviewFinding[]
 }
 
 enum ParticipantStatus {
@@ -268,6 +277,8 @@ enum DocumentType {
   GREEN_TRAVEL_DECLARATION
   HOTEL_INVOICE
   BANK_TRANSACTION
+  LUGGAGE_INVOICE
+  INTERRAIL_PASS
   OTHER
 }
 
@@ -316,17 +327,27 @@ model TravelItem {
   amountOriginal        Float?                // Nullable: null if price unknown or part of booking
   currencyOriginal      String                @default("EUR")
   purchaseDate          DateTime?
+  purchaseDateAutoFilled Boolean              @default(false)  // True if purchase date was auto-filled from flight date
   amountEur             Float?                // Nullable: null if price unknown or part of booking
   comment               String?
+  consolidationNotes    String?               // AI notes from consolidation for the review AI (not shown to participant)
   manuallyEdited        Boolean               @default(false)  // Track if participant edited AI values
   checked               Boolean               @default(false)  // User confirmed this travel item is correct
   originalAmountFromAi  Float?                // Store original AI-detected amount for comparison
+  originalCurrencyFromAi String?              // AI-detected currency before participant edits
+  exchangeRateOverride  Float?               // Manual exchange rate override set by organisation
+  companyName           String?              // Airline name, train company, bus company, etc.
 
   // Price editability for this leg
   priceEditable             Boolean               @default(true)   // False if part of booking with only total price
   priceMissing              Boolean               @default(false)  // True if no price found in any document
   priceSourceDocId          String?               // Document ID where this price was found
   amountIncludedInRoundTrip Boolean               @default(false)  // True if this is return leg with price on outbound
+
+  // Luggage fee merged into this flight
+  luggageAmount         Float?                // Luggage fee amount (in original currency)
+  luggageAmountEur      Float?                // Luggage fee amount in EUR
+  luggageDocumentId     String?               // Document ID of the luggage invoice
 
   // Legacy round-trip fields (kept for compatibility, prefer using TravelBooking)
   isRoundTrip           Boolean               @default(false)
@@ -352,6 +373,7 @@ model TravelItem {
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
   declarationsOfTravel  DeclarationOfTravel[]
+  aiReviewFindings      AiReviewFinding[]
 }
 
 enum TransportMode {
@@ -395,6 +417,21 @@ model ChangeLogEntry {
 enum UserType {
   PARTICIPANT
   ADMIN
+  ORGANISATION
+}
+
+// AI Review Finding - generated once when participant submits, checkable by org
+model AiReviewFinding {
+  id            String      @id @default(uuid())
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  travelItemId  String?
+  travelItem    TravelItem? @relation(fields: [travelItemId], references: [id], onDelete: SetNull)
+  severity      String      // 'critical' | 'important' | 'info'
+  message       String
+  category      String
+  checked       Boolean     @default(false)
+  createdAt     DateTime    @default(now())
 }
 
 // DeclarationOnHonor - for missing documents
@@ -491,6 +528,14 @@ model DeclarationOfTravel {
   sendingOrgName          String
   sendingOrgOid           String?
   sendingOrgAddress       String
+
+  // Car travel specific
+  isCarTravel             Boolean     @default(false)  // Whether this declaration is for car/carpool travel
+  licensePlate            String?     // Car license plate (for car declarations)
+  driverName              String?     // Driver name (for carpool passenger declarations)
+
+  // Reason / explanation
+  reason                  String?     // Participant's reason/explanation for the declaration
 
   // Signature
   signatureDataUrl        String      // Base64 encoded signature image

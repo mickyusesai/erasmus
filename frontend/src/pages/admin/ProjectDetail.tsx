@@ -96,6 +96,8 @@ export default function ProjectDetail() {
     );
   }
 
+  const settingsNeedsAttention = (countryLimits || []).some((limit: any) => limit.maxReimbursementAmount === 0);
+
   const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
     { id: 'overview', label: 'Overview', icon: FileText },
     { id: 'settings', label: 'Settings', icon: Settings },
@@ -143,6 +145,9 @@ export default function ProjectDetail() {
             >
               <tab.icon className="w-4 h-4" />
               {tab.label}
+              {tab.id === 'settings' && settingsNeedsAttention && (
+                <span className="ml-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              )}
             </button>
           ))}
         </nav>

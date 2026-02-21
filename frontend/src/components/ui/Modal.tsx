@@ -8,9 +8,10 @@ interface ModalProps {
   title?: string;
   children: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  zIndex?: number;
 }
 
-export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, size = 'md', zIndex }: ModalProps) {
   if (!isOpen) return null;
 
   const sizes = {
@@ -20,16 +21,23 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
     xl: 'max-w-4xl',
   };
 
+  const backdropZ = zIndex ? `z-[${zIndex}]` : 'z-40';
+  const modalZ = zIndex ? `z-[${zIndex + 10}]` : 'z-50';
+
   return (
     <Fragment>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/50 z-40 animate-fadeIn"
+        className={clsx('fixed inset-0 bg-black/50 animate-fadeIn', backdropZ)}
+        style={zIndex ? { zIndex } : undefined}
         onClick={onClose}
       />
 
       {/* Modal */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className={clsx('fixed inset-0 flex items-center justify-center p-4', modalZ)}
+        style={zIndex ? { zIndex: zIndex + 10 } : undefined}
+      >
         <div
           className={clsx(
             'w-full bg-white rounded-2xl shadow-elevated animate-fadeIn flex flex-col max-h-[90vh]',

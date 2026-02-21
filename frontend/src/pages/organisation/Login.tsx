@@ -67,6 +67,12 @@ export default function OrgLogin() {
                 <LogIn className="w-4 h-4 mr-2" />
                 Sign In
               </Button>
+
+              <div className="text-right">
+                <Link to="/org/forgot-password" className="text-sm text-gray-500 hover:text-primary-600">
+                  Forgot password?
+                </Link>
+              </div>
             </form>
 
             <div className="mt-6 pt-6 border-t border-gray-200 text-center text-sm text-gray-600 space-y-2">
@@ -74,12 +80,6 @@ export default function OrgLogin() {
                 Don't have an account?{' '}
                 <Link to="/org/register" className="text-primary-600 hover:text-primary-700 font-medium">
                   Register here
-                </Link>
-              </p>
-              <p>
-                Have an invitation code?{' '}
-                <Link to="/founding-access" className="text-primary-600 hover:text-primary-700 font-medium">
-                  Claim your free project
                 </Link>
               </p>
             </div>

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { ValidationError, UnauthorizedError, ConflictError } from '../../middleware/errorHandler.js';
@@ -9,6 +10,7 @@ import {
   generateSuperAdminToken,
   organisationAuth,
 } from '../../middleware/auth.js';
+import { getEmailService } from '../../services/email/index.js';
 
 const router = Router();
 
@@ -95,6 +97,15 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
 
   // Generate token
   const token = generateOrganisationToken(organisation);
+
+  // Send welcome email (fire and forget)
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const emailService = getEmailService();
+  emailService.sendWelcome(
+    organisation.email,
+    organisation.name,
+    `${frontendUrl}/org/login`
+  ).catch((err) => console.error('[Email] Failed to send welcome email:', err));
 
   res.status(201).json({
     message: 'Registration successful! A free test project has been created for you with up to 10 participants.',
@@ -291,6 +302,107 @@ router.patch('/profile', organisationAuth, asyncHandler(async (req: Request, res
       email: updated.email,
     },
   });
+}));
+
+// =============================================================================
+// PASSWORD RESET
+// =============================================================================
+
+const forgotPasswordSchema = z.object({
+  email: z.string().email('Invalid email address'),
+});
+
+/**
+ * POST /api/auth/forgot-password
+ * Request a password reset link (sent via email)
+ */
+router.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
+  const result = forgotPasswordSchema.safeParse(req.body);
+
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const { email } = result.data;
+
+  // Always return success to prevent email enumeration
+  const organisation = await prisma.organisation.findUnique({
+    where: { email: email.toLowerCase() },
+  });
+
+  if (organisation) {
+    // Generate reset token (expires in 1 hour)
+    const resetToken = uuidv4();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await prisma.organisation.update({
+      where: { id: organisation.id },
+      data: {
+        passwordResetToken: resetToken,
+        passwordResetExpiresAt: expiresAt,
+      },
+    });
+
+    // Send reset email
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const resetLink = `${frontendUrl}/org/reset-password?token=${resetToken}`;
+
+    const emailService = getEmailService();
+    emailService.sendPasswordReset(
+      organisation.email,
+      organisation.name,
+      resetLink
+    ).catch((err) => console.error('[Email] Failed to send password reset email:', err));
+  }
+
+  res.json({ message: 'If an account with that email exists, a password reset link has been sent.' });
+}));
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(1, 'Reset token is required'),
+  newPassword: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
+    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+    .regex(/[0-9]/, 'Password must contain at least one number'),
+});
+
+/**
+ * POST /api/auth/reset-password
+ * Reset password using a valid reset token
+ */
+router.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
+  const result = resetPasswordSchema.safeParse(req.body);
+
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const { token, newPassword } = result.data;
+
+  // Find organisation with valid (non-expired) token
+  const organisation = await prisma.organisation.findUnique({
+    where: { passwordResetToken: token },
+  });
+
+  if (!organisation || !organisation.passwordResetExpiresAt || organisation.passwordResetExpiresAt < new Date()) {
+    throw new ValidationError('Invalid or expired reset link. Please request a new one.');
+  }
+
+  // Hash new password
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+
+  // Update password and clear reset token
+  await prisma.organisation.update({
+    where: { id: organisation.id },
+    data: {
+      passwordHash,
+      passwordResetToken: null,
+      passwordResetExpiresAt: null,
+    },
+  });
+
+  res.json({ message: 'Password has been reset successfully. You can now log in with your new password.' });
 }));
 
 // =============================================================================

@@ -11,8 +11,8 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "prisma db push && node dist/index.js",
+    "build": "tsc && cp -r src/services/pdf/fonts dist/services/pdf/fonts && prisma generate",
+    "start": "prisma db push --accept-data-loss && node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "prisma migrate dev",
@@ -40,6 +40,7 @@
     "pdf-parse": "^2.4.5",
     "pdf2pic": "^3.2.0",
     "pdfkit": "^0.17.2",
+    "postmark": "^4.0.5",
     "sharp": "^0.33.2",
     "uuid": "^9.0.1",
     "zod": "^3.22.4"

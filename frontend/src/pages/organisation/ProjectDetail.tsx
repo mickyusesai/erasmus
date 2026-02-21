@@ -11,17 +11,14 @@ import {
   Settings,
   FileText,
   AlertTriangle,
-  CheckCircle,
   UserPlus,
   ChevronUp,
   ChevronDown,
-  FileX,
-  ShieldCheck,
-  Banknote,
   Users,
   Share2,
-  Copy,
-  ExternalLink,
+  Search,
+  Bell,
+  Download,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -119,6 +116,8 @@ export default function OrgProjectDetail() {
   const project = projectData.project;
   const participants = participantsData?.participants || [];
 
+  const settingsNeedsAttention = (countryLimits || []).some((limit: any) => limit.maxReimbursementAmount === 0);
+
   const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
     { id: 'overview', label: 'Overview', icon: FileText },
     { id: 'settings', label: 'Settings', icon: Settings },
@@ -195,6 +194,9 @@ export default function OrgProjectDetail() {
                 >
                   <tab.icon className="w-4 h-4" />
                   {tab.label}
+                  {tab.id === 'settings' && settingsNeedsAttention && (
+                    <span className="ml-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  )}
                 </button>
               ))}
             </nav>
@@ -206,6 +208,7 @@ export default function OrgProjectDetail() {
               project={project}
               projectId={id!}
               participants={participants}
+              countryLimits={countryLimits || []}
             />
           )}
           {activeTab === 'settings' && (
@@ -256,39 +259,39 @@ function getProgressStatus(participant: OrgParticipant): { status: ProgressStatu
   return { status: 'has_docs', label: 'In progress' };
 }
 
-function ProgressIcon({ status }: { status: ProgressStatus }) {
-  const iconMap: Record<ProgressStatus, { icon: React.ElementType; bgColor: string; iconColor: string }> = {
-    no_docs: { icon: FileX, bgColor: 'bg-gray-100', iconColor: 'text-gray-400' },
-    has_docs: { icon: FileText, bgColor: 'bg-blue-100', iconColor: 'text-blue-600' },
-    missing_items: { icon: AlertTriangle, bgColor: 'bg-amber-100', iconColor: 'text-amber-600' },
-    complete: { icon: CheckCircle, bgColor: 'bg-emerald-100', iconColor: 'text-emerald-600' },
-    approved: { icon: ShieldCheck, bgColor: 'bg-purple-100', iconColor: 'text-purple-600' },
-    paid: { icon: Banknote, bgColor: 'bg-emerald-100', iconColor: 'text-emerald-600' },
-  };
-
-  const { icon: Icon, bgColor, iconColor } = iconMap[status];
-
-  return (
-    <div className={clsx('inline-flex items-center justify-center w-7 h-7 rounded-full', bgColor)}>
-      <Icon className={clsx('w-4 h-4', iconColor)} />
-    </div>
-  );
-}
-
 function OverviewTab({
   project,
   projectId,
-  participants
+  participants,
+  countryLimits
 }: {
   project: any;
   projectId: string;
   participants: OrgParticipant[];
+  countryLimits: any[];
 }) {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [sortField, setSortField] = useState<SortField>('name');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const sortStorageKey = `participant-sort-${projectId}`;
+  const [sortField, setSortField] = useState<SortField>(() => {
+    try {
+      const saved = localStorage.getItem(sortStorageKey);
+      if (saved) return (JSON.parse(saved).field as SortField) || 'name';
+    } catch { /* ignore */ }
+    return 'name';
+  });
+  const [sortDirection, setSortDirection] = useState<SortDirection>(() => {
+    try {
+      const saved = localStorage.getItem(sortStorageKey);
+      if (saved) return (JSON.parse(saved).direction as SortDirection) || 'asc';
+    } catch { /* ignore */ }
+    return 'asc';
+  });
+  useEffect(() => {
+    localStorage.setItem(sortStorageKey, JSON.stringify({ field: sortField, direction: sortDirection }));
+  }, [sortField, sortDirection, sortStorageKey]);
+  const [searchQuery, setSearchQuery] = useState('');
   const queryClient = useQueryClient();
 
   // Form state for adding individual participant
@@ -311,9 +314,20 @@ function OverviewTab({
     ),
   };
 
+  // Filter participants by search
+  const filteredParticipants = useMemo(() => {
+    if (!searchQuery.trim()) return participants;
+    const q = searchQuery.toLowerCase();
+    return participants.filter((p) =>
+      `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
+      p.email.toLowerCase().includes(q) ||
+      p.country.toLowerCase().includes(q)
+    );
+  }, [participants, searchQuery]);
+
   // Sort participants
   const sortedParticipants = useMemo(() => {
-    const sorted = [...participants].sort((a, b) => {
+    const sorted = [...filteredParticipants].sort((a, b) => {
       let aVal: string | number = '';
       let bVal: string | number = '';
 
@@ -348,7 +362,7 @@ function OverviewTab({
       return sortDirection === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
     });
     return sorted;
-  }, [participants, sortField, sortDirection]);
+  }, [filteredParticipants, sortField, sortDirection]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -385,6 +399,18 @@ function OverviewTab({
     },
   });
 
+  const sendRemindersMutation = useMutation({
+    mutationFn: (ids: string[]) => organisationApi.sendRemindersBulk(ids),
+    onSuccess: () => {
+      toast.success('Reminders sent');
+      queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+      setSelectedIds([]);
+    },
+    onError: () => {
+      toast.error('Failed to send reminders');
+    },
+  });
+
   const createParticipantMutation = useMutation({
     mutationFn: (data: typeof newParticipant) =>
       organisationApi.createParticipant(projectId, data),
@@ -400,6 +426,52 @@ function OverviewTab({
     },
   });
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [showReimbursementWarning, setShowReimbursementWarning] = useState(false);
+
+  const deleteParticipantMutation = useMutation({
+    mutationFn: (participantId: string) => organisationApi.deleteParticipant(participantId),
+    onSuccess: () => {
+      toast.success('Participant deleted');
+      queryClient.invalidateQueries({ queryKey: ['org-project'] });
+      queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits'] });
+      setShowDeleteConfirm(null);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete participant');
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => organisationApi.bulkDeleteParticipants(ids),
+    onSuccess: (data) => {
+      toast.success(`Deleted ${data.deletedCount} participants`);
+      queryClient.invalidateQueries({ queryKey: ['org-project'] });
+      queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits'] });
+      setSelectedIds([]);
+      setShowBulkDeleteConfirm(false);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete participants');
+    },
+  });
+
+  const checkReimbursementWarning = (ids: string[], _type: 'magic' | 'reminder') => {
+    const targetParticipants = participants.filter((p) => ids.includes(p.id));
+    const countriesWithNoLimit = (countryLimits || [])
+      .filter((limit: any) => limit.maxReimbursementAmount === 0)
+      .map((limit: any) => limit.country);
+    const hasUnconfigured = targetParticipants.some((p) => countriesWithNoLimit.includes(p.country));
+    if (hasUnconfigured) {
+      setShowReimbursementWarning(true);
+      return true;
+    }
+    return false;
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
@@ -414,47 +486,11 @@ function OverviewTab({
     }
   };
 
-  const copyParticipantLink = () => {
-    const baseUrl = window.location.origin;
-    const link = `${baseUrl}/reimbursement?project=${projectId}`;
-    navigator.clipboard.writeText(link);
-    toast.success('Participant link copied to clipboard');
-  };
 
   const disseminationEnabled = project.disseminationEnabled;
 
   return (
     <div className="space-y-6">
-      {/* Participant Registration Link */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium text-gray-900">Participant Registration Link</p>
-              <p className="text-sm text-gray-500">Share with participants to submit reimbursement documents</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={copyParticipantLink}
-                className="p-2 bg-primary-100 text-primary-600 rounded-lg hover:bg-primary-200 transition-colors"
-                title="Copy link"
-              >
-                <Copy className="w-4 h-4" />
-              </button>
-              <a
-                href={`/reimbursement?project=${projectId}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
-                title="Open in new tab"
-              >
-                <ExternalLink className="w-4 h-4" />
-              </a>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-4">
         <Card>
@@ -519,8 +555,8 @@ function OverviewTab({
         </CardContent>
       </Card>
 
-      {/* Actions */}
-      <div className="flex flex-wrap gap-3">
+      {/* Actions & Search */}
+      <div className="flex flex-wrap items-center gap-3">
         <Button onClick={() => setShowAddModal(true)}>
           <UserPlus className="w-4 h-4 mr-2" />
           Add Participant
@@ -529,16 +565,80 @@ function OverviewTab({
           <Upload className="w-4 h-4 mr-2" />
           Import CSV
         </Button>
-        {selectedIds.length > 0 && (
-          <Button
-            variant="secondary"
-            onClick={() => sendMagicLinksMutation.mutate(selectedIds)}
-            loading={sendMagicLinksMutation.isPending}
-          >
-            <Send className="w-4 h-4 mr-2" />
-            Send Magic Links ({selectedIds.length})
-          </Button>
-        )}
+        <div className="relative group">
+          <a href="/Reimbursement_List_TEMPLATE.csv" download>
+            <button
+              type="button"
+              className="inline-flex items-center justify-center font-medium transition-all duration-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-[0.98] focus:ring-gray-400 px-4 py-2 text-sm"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Download Template
+            </button>
+          </a>
+          <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 pointer-events-none">
+            This is a CSV file you can open with Excel or Google Sheets. Copy-paste your participant data (first name, last name, email, country) into the template, then save/export as CSV. Upload it here and your participant list will appear automatically.
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-gray-900" />
+          </div>
+        </div>
+        <div className="flex-1" />
+        <div className="relative">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search participants..."
+            className="pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent w-56"
+          />
+        </div>
+        {selectedIds.length > 0 && (() => {
+          // Determine which selected participants need magic links vs reminders
+          const selectedParticipants = participants.filter((p) => selectedIds.includes(p.id));
+          const needsMagicLink = selectedParticipants.filter((p) => !p.lastMagicLinkSentAt);
+          const needsReminder = selectedParticipants.filter((p) => p.lastMagicLinkSentAt && p.status === 'DRAFT');
+          return (
+            <>
+              {needsMagicLink.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const ids = needsMagicLink.map((p) => p.id);
+                    if (!checkReimbursementWarning(ids, 'magic')) {
+                      sendMagicLinksMutation.mutate(ids);
+                    }
+                  }}
+                  loading={sendMagicLinksMutation.isPending}
+                >
+                  <Send className="w-4 h-4 mr-2" />
+                  Send Magic Links ({needsMagicLink.length})
+                </Button>
+              )}
+              {needsReminder.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const ids = needsReminder.map((p) => p.id);
+                    if (!checkReimbursementWarning(ids, 'reminder')) {
+                      sendRemindersMutation.mutate(ids);
+                    }
+                  }}
+                  loading={sendRemindersMutation.isPending}
+                >
+                  <Bell className="w-4 h-4 mr-2" />
+                  Send Reminders ({needsReminder.length})
+                </Button>
+              )}
+              <Button
+                variant="danger"
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                loading={bulkDeleteMutation.isPending}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Selected ({selectedIds.length})
+              </Button>
+            </>
+          );
+        })()}
       </div>
 
       {/* Add Participant Modal */}
@@ -618,18 +718,16 @@ function OverviewTab({
                   <SortHeader field="name">Name</SortHeader>
                   <SortHeader field="country">Country</SortHeader>
                   <SortHeader field="status">Status</SortHeader>
-                  <SortHeader field="check">Progress</SortHeader>
                   {disseminationEnabled && (
                     <th className="px-4 py-3 text-center">Dissem.</th>
                   )}
                   <SortHeader field="amount">Amount</SortHeader>
-                  <th className="px-4 py-3">Last Email</th>
+                  <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sortedParticipants.map((participant) => {
-                  const progress = getProgressStatus(participant);
                   return (
                     <tr key={participant.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
@@ -653,12 +751,6 @@ function OverviewTab({
                       <td className="px-4 py-3">
                         <StatusBadge status={participant.status} />
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <ProgressIcon status={progress.status} />
-                          <span className="text-xs text-gray-500">{progress.label}</span>
-                        </div>
-                      </td>
                       {disseminationEnabled && (
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-center gap-1">
@@ -680,24 +772,74 @@ function OverviewTab({
                       )}
                       <td className="px-4 py-3 text-gray-600">
                         {participant.reimbursementSummary
-                          ? new Intl.NumberFormat('de-DE', {
-                              style: 'currency',
-                              currency: 'EUR',
-                            }).format(participant.reimbursementSummary.amountToReimburse)
+                          ? participant.reimbursementSummary.maxReimbursementAllowed === 0
+                            ? <span className="text-gray-400 italic">Not set</span>
+                            : new Intl.NumberFormat('de-DE', {
+                                style: 'currency',
+                                currency: 'EUR',
+                              }).format(participant.reimbursementSummary.amountToReimburse)
                           : '—'}
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-500">
-                        {participant.lastMagicLinkSentAt
-                          ? formatDate(participant.lastMagicLinkSentAt)
-                          : 'Never'}
+                      <td className="px-4 py-3">
+                        {participant.lastMagicLinkSentAt && participant.status === 'DRAFT' ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (checkReimbursementWarning([participant.id], 'reminder')) return;
+                              organisationApi.sendReminder(participant.id).then(() => {
+                                toast.success(`Reminder sent to ${participant.firstName}`);
+                              }).catch(() => {
+                                toast.error('Failed to send reminder');
+                              });
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-full transition-colors"
+                            title={`Last email: ${formatDate(participant.lastMagicLinkSentAt)}`}
+                          >
+                            <Bell className="w-3 h-3" />
+                            Remind
+                          </button>
+                        ) : !participant.lastMagicLinkSentAt ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (checkReimbursementWarning([participant.id], 'magic')) return;
+                              organisationApi.sendMagicLink(participant.id).then(() => {
+                                toast.success(`Magic link sent to ${participant.firstName}`);
+                                queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+                              }).catch(() => {
+                                toast.error('Failed to send magic link');
+                              });
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 px-2.5 py-1 rounded-full transition-colors"
+                          >
+                            <Send className="w-3 h-3" />
+                            Send Link
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">
+                            {formatDate(participant.lastMagicLinkSentAt)}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
-                        <Link
-                          to={`/org/participants/${participant.id}`}
-                          className="text-primary-600 hover:text-primary-700 text-sm font-medium"
-                        >
-                          View
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            to={`/org/participants/${participant.id}`}
+                            className="text-primary-600 hover:text-primary-700 text-sm font-medium"
+                          >
+                            View
+                          </Link>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowDeleteConfirm(participant.id);
+                            }}
+                            className="p-1 text-gray-400 hover:text-red-600 rounded transition-colors"
+                            title="Delete participant"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -732,6 +874,82 @@ function OverviewTab({
         onClose={() => setShowImportModal(false)}
         projectId={projectId}
       />
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={!!showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(null)}
+        title="Delete Participant"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600">
+            Are you sure you want to delete this participant? This will permanently remove all their data, uploaded documents, and reimbursement records. This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button variant="secondary" onClick={() => setShowDeleteConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => showDeleteConfirm && deleteParticipantMutation.mutate(showDeleteConfirm)}
+              loading={deleteParticipantMutation.isPending}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Bulk Delete Confirmation Modal */}
+      <Modal
+        isOpen={showBulkDeleteConfirm}
+        onClose={() => setShowBulkDeleteConfirm(false)}
+        title="Delete Selected Participants"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600">
+            Are you sure you want to delete {selectedIds.length} selected participant{selectedIds.length !== 1 ? 's' : ''}? This will permanently remove all their data, uploaded documents, and reimbursement records. This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button variant="secondary" onClick={() => setShowBulkDeleteConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => bulkDeleteMutation.mutate(selectedIds)}
+              loading={bulkDeleteMutation.isPending}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete {selectedIds.length} Participant{selectedIds.length !== 1 ? 's' : ''}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reimbursement Warning Modal */}
+      <Modal
+        isOpen={showReimbursementWarning}
+        onClose={() => setShowReimbursementWarning(false)}
+        title="Reimbursement Not Configured"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800">
+              Some countries don't have a maximum reimbursement amount configured yet. Please go to the Settings tab to configure the reimbursement limits before sending emails, otherwise participants will not see their reimbursement amount.
+            </p>
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button
+              variant="secondary"
+              onClick={() => setShowReimbursementWarning(false)}
+            >
+              Close
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -966,7 +1184,7 @@ function SettingsTab({
                           <Input
                             type="number"
                             placeholder="Amount"
-                            className="w-24 text-sm"
+                            className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             onBlur={(e) => {
                               const amount = parseFloat(e.target.value);
                               if (amount > 0) {
@@ -996,7 +1214,7 @@ function SettingsTab({
                         <Input
                           type="number"
                           value={limit.maxReimbursementAmount}
-                          className="w-24 text-sm"
+                          className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           onChange={(e) => {
                             const amount = parseFloat(e.target.value);
                             if (amount >= 0) {

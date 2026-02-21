@@ -306,6 +306,8 @@ Other important notes:
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
       HOTEL_INVOICE: 'hotel invoice',
       BANK_TRANSACTION: 'bank transaction',
+      LUGGAGE_INVOICE: 'luggage invoice',
+      INTERRAIL_PASS: 'interrail pass',
       OTHER: 'document',
     };
 
@@ -331,6 +333,16 @@ Other important notes:
         missingItems: [{ type: 'data', description: 'Participant not found' }],
         warnings: [],
         aiCheckPassed: false,
+      };
+    }
+
+    // If participant opted out of reimbursement, skip all validation
+    if (participant.noReimbursement) {
+      return {
+        isComplete: true,
+        missingItems: [],
+        warnings: [],
+        aiCheckPassed: true,
       };
     }
 
@@ -476,8 +488,10 @@ Other important notes:
     );
     const maxReimbursementAllowed = countryLimit?.maxReimbursementAmount || 0;
 
-    // Calculate amount to reimburse (capped at max)
-    const amountToReimburse = Math.min(totalEur, maxReimbursementAllowed);
+    // Calculate amount to reimburse (capped at max, or 100% if no max is configured)
+    const amountToReimburse = maxReimbursementAllowed > 0
+      ? Math.min(totalEur, maxReimbursementAllowed)
+      : totalEur;
 
     // Validate
     const validation = await this.validateReimbursement(participantId);
@@ -524,55 +538,222 @@ Other important notes:
   }
 }
 
+export interface ReviewFinding {
+  severity: 'critical' | 'important' | 'info';
+  message: string;
+  category: string;
+  travelItemIndex?: number | null;  // 1-based index into travel items array (null = general finding)
+}
+
 /**
- * Summarize changelog entries for admin review using Claude Haiku
+ * Generate a comprehensive AI review of a participant's reimbursement data.
+ * Examines travel items, documents, declarations, changelog, and financial data
+ * to produce an actionable checklist for the organisation.
  */
-export async function summarizeChangelog(
+export async function generateParticipantReview(data: {
+  participantName: string;
+  participantCountry: string;
+  detectedHomeCountry: string | null;
+  homeCountryConfidence: number | null;
+  participantNote: string | null;
+  consolidationSummary: string | null;
+  projectCountry: string;
+  projectStartDate: string;
+  projectEndDate: string;
+  maxReimbursementForCountry: number;
+  travelItems: Array<{
+    id: string;
+    modeOfTransport: string;
+    fromLocation: string | null;
+    toLocation: string | null;
+    departureDate: string | null;
+    flightNumber: string | null;
+    bookingReference: string | null;
+    amountOriginal: number | null;
+    currencyOriginal: string | null;
+    amountEur: number | null;
+    purchaseDate: string | null;
+    manuallyEdited: boolean;
+    originalAmountFromAi: number | null;
+    checked: boolean;
+    priceMissing: boolean;
+    routeMatchesCountry: boolean | null;
+    excludedFromReimbursement: boolean;
+    numberOfPassengers: number | null;
+    participantPortion: number | null;
+    distanceKm: number | null;
+    validationWarnings: string | null;
+    documentId: string | null;
+    amountIncludedInRoundTrip: boolean;
+    luggageAmount: number | null;
+    luggageAmountEur: number | null;
+    purchaseDateAutoFilled: boolean;
+    comment: string | null;
+    consolidationNotes: string | null;
+  }>;
+  documents: Array<{
+    id: string;
+    documentType: string;
+    originalFilename: string;
+    extraction?: {
+      confidence: number;
+      detectedDocumentType: string;
+      passengerName: string | null;
+      amount: number | null;
+      currency: string | null;
+    } | null;
+  }>;
+  declarationsOnHonor: Array<{
+    missingDocumentType: string;
+    description: string;
+    reason: string;
+  }>;
+  declarationsOfTravel: Array<{
+    fromPlace: string;
+    toPlace: string;
+    travelDate: string | null;
+    flightNumber: string | null;
+    modeOfTransport: string;
+  }>;
   changeLogEntries: Array<{
     userType: string;
     fieldName: string;
     previousValue: string | null;
     newValue: string | null;
-    changedAt: Date | string;
-  }>,
-  participantName: string,
-): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  }>;
+  reimbursementSummary: {
+    totalEur: number | null;
+    maxReimbursementAllowed: number | null;
+    amountToReimburse: number | null;
+  } | null;
+  bankDetailsComplete: boolean;
+}): Promise<(ReviewFinding & { travelItemId?: string | null })[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return 'AI summary unavailable (API key not configured).';
+    return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
   }
 
-  const client = new Anthropic({ apiKey });
+  const { default: OpenAI } = await import('openai');
+  const client = new OpenAI({ apiKey });
 
-  const entriesSummary = changeLogEntries
-    .map(
-      (e) =>
-        `[${e.userType}] ${e.fieldName}: "${e.previousValue || '(empty)'}" -> "${e.newValue || '(empty)'}" at ${new Date(e.changedAt).toISOString()}`,
-    )
-    .join('\n');
+  // Build rules section from configurable rules
+  const { buildRulesPrompt } = await import('./reviewRules.js');
+  const rulesSection = buildRulesPrompt({
+    participantCountry: data.participantCountry,
+    projectCountry: data.projectCountry,
+  });
+
+  const prompt = `You are an AI reviewer for an Erasmus+ travel reimbursement system. You review a participant's complete data and produce an actionable checklist for the organisation administrator.
+
+=== CONTEXT (read carefully) ===
+
+PARTICIPANT'S HOME COUNTRY: ${data.participantCountry} (this is where they live and travel FROM)
+${data.detectedHomeCountry ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${(data.homeCountryConfidence! * 100).toFixed(0)}%)` : ''}
+PARTICIPANT NAME: ${data.participantName}
+PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ project takes place, where participants travel TO)
+PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
+${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : ''}
+${data.consolidationSummary ? `\n=== CONSOLIDATION AI NOTES ===\nThe AI that processed the uploaded documents left these notes for you:\n${data.consolidationSummary}\n` : ''}
+BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
+
+The typical journey pattern is: participant travels FROM their home country (${data.participantCountry}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
+
+=== TRAVEL ITEMS (${data.travelItems.length}) ===
+${data.travelItems.map((item, i) => {
+    const flags = [];
+    if (item.manuallyEdited) flags.push(`AMOUNT MANUALLY CHANGED by participant: AI detected €${item.originalAmountFromAi}, participant set €${item.amountEur}`);
+    if (item.priceMissing) flags.push('PRICE IS MISSING');
+    if (!item.documentId) flags.push('NO SUPPORTING DOCUMENT LINKED');
+    if (item.modeOfTransport === 'PLANE' && !item.flightNumber) flags.push('FLIGHT NUMBER NOT FILLED IN');
+    if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`MULTI-PERSON BOOKING: ${item.numberOfPassengers} passengers on this booking (full amount claimed by this participant)`);
+    if (item.routeMatchesCountry === false) flags.push('ROUTE MAY NOT MATCH expected home↔project travel pattern');
+    if (item.excludedFromReimbursement) flags.push('Participant excluded this from reimbursement');
+    if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
+    if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
+    if (item.purchaseDateAutoFilled) flags.push('Purchase date was AUTO-FILLED from flight date (no purchase date found in documents)');
+    if (item.distanceKm) flags.push(`Car distance: ${item.distanceKm}km`);
+    return `${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} | Date: ${item.departureDate || '?'}${item.purchaseDate ? ` | Purchase: ${item.purchaseDate}` : ''} | €${item.amountEur ?? 'MISSING'} (${item.currencyOriginal || 'EUR'})${item.flightNumber ? ` | Flight: ${item.flightNumber}` : ''}${item.bookingReference ? ` | Booking: ${item.bookingReference}` : ''}${flags.length > 0 ? '\n     ⚠ ' + flags.join('\n     ⚠ ') : ''}`;
+  }).join('\n')}
+
+=== DOCUMENTS (${data.documents.length}) ===
+${data.documents.map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}`).join('\n')}
+
+=== DECLARATIONS OF TRAVEL (${data.declarationsOfTravel.length}) ===
+These are SIGNED declarations the participant created to REPLACE missing boarding passes. Each one is a PDF with their signature. The organisation MUST manually verify each declaration is correct (check route, date, flight number match the travel item).
+${data.declarationsOfTravel.map((d) => `- ${d.modeOfTransport}: ${d.fromPlace} → ${d.toPlace} on ${d.travelDate || '?'}${d.flightNumber ? ` (flight ${d.flightNumber})` : ''}`).join('\n') || 'None'}
+
+=== DECLARATIONS ON HONOR (${data.declarationsOnHonor.length}) ===
+These are sworn statements for other missing documents. The organisation should verify these claims.
+${data.declarationsOnHonor.map((d) => `- Missing ${d.missingDocumentType}: "${d.description}" — Reason: "${d.reason}"`).join('\n') || 'None'}
+
+=== CHANGELOG — MANUAL EDITS (${data.changeLogEntries.length} entries) ===
+${data.changeLogEntries.slice(0, 30).map((e) => `[${e.userType}] ${e.fieldName}: "${e.previousValue || '(empty)'}" → "${e.newValue || '(empty)'}"`).join('\n') || 'No edits recorded'}
+
+=== YOUR TASK ===
+
+Review ALL the data above and report ONLY findings that actually apply. Go through these checks:
+
+${rulesSection}
+=== RESPONSE FORMAT ===
+
+Return a JSON array. Each finding:
+- "severity": "critical" | "important" | "info"
+- "message": Clear, specific sentence (max 20 words). Mention routes, amounts, flight numbers when relevant.
+- "category": Accurate 2-3 word label. Examples: "Declaration Check", "Amount Changed", "Flight Edit", "Missing Price", "No Document", "Route Mismatch", "Shared Booking", "Participant Note", "Bank Details", "Car Distance"
+- "travelItemIndex": The 1-based index number of the travel item this finding relates to (from the TRAVEL ITEMS list above), or null if the finding is general / not about a specific travel item.
+
+IMPORTANT RULES:
+- ONLY report PROBLEMS or things that need attention. NEVER report things that are fine/correct/matching/within limits.
+- Do NOT create findings saying "X is correct" or "X matches" or "X is within limits". The organisation only wants to see issues, not confirmations.
+- Examples of what NOT to report: "Home country matches", "Route matches expected pattern", "Bank details complete", "Total within limit", "Travel dates within range", "Document count matches", "Round-trip price counted correctly"
+- Use ACCURATE categories — a flight number edit is "Flight Edit", NOT "Price Change"
+- Be PRECISE with numbers — 72% is NOT below 70%. Only flag confidence below 70% if it's actually below 70%.
+- Do NOT confuse the participant's home country (${data.participantCountry}) with the project country (${data.projectCountry})
+- Declaration of Travel = the replacement document EXISTS and needs checking, NOT that something is missing
+- NEVER flag bank detail fields (IBAN, BIC, holder name, bank name, address) as manual edits — participants always fill these in themselves
+- NEVER create a "Participant Note" finding unless the PARTICIPANT'S OWN NOTE field above actually contains text
+- For route matching, use geographic knowledge: match cities to their countries (Chisinau=Moldova, Skopje=North Macedonia, Amsterdam/Eindhoven=Netherlands, etc.)
+- numberOfPassengers=1 means ONE person, which is normal. Only flag shared bookings when numberOfPassengers is GREATER than 1.
+- If everything is fine, pick ONE of these messages at random (vary your choice for each participant — never pick the same one twice in a row): "Everything looks perfect! Nothing to review here — go grab a coffee!", "Flawless submission! All documents check out. Time for a well-deserved break!", "All clear! This participant has their travel docs in perfect order. Gold star!", "Spotless! Every document, route, and amount checks out. Enjoy the free time!", "Nothing to flag here — this reimbursement is as clean as it gets!", "A+ submission! All checks passed with flying colors. You can skip to the next one!", "Zero issues found. This participant deserves an award for organisation!", "Everything matches perfectly. We checked twice — still perfect!". Return it as: [{"severity":"info","message":"<your chosen message>","category":"All Clear"}]
+- Maximum 12 findings, prioritize critical > important > info
+- travelItemIndex MUST be a valid 1-based index from the TRAVEL ITEMS list, or null. Do NOT guess.
+- Return ONLY the JSON array`;
 
   try {
-    const response = await client.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 300,
-      messages: [
-        {
-          role: 'user',
-          content: `You are reviewing changelog entries for participant "${participantName}" in an Erasmus+ travel reimbursement system. Summarize what has happened in 2-3 short sentences. Focus on: what was changed, who changed it (PARTICIPANT or ADMIN), and what the admin reviewing this should still check or pay attention to. Be concise and actionable.
+    const response = await client.chat.completions.create({
+      model: 'gpt-5.2',
+      max_completion_tokens: 8000,
+      reasoning_effort: 'high',
+      messages: [{ role: 'user', content: prompt }],
+    } as any);
 
-Changelog entries:
-${entriesSummary}
+    const text = response.choices[0]?.message?.content?.trim() || '[]';
 
-Summary:`,
-        },
-      ],
-    });
+    // Parse JSON from response (handle potential markdown wrapping)
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      return [{ severity: 'info', message: 'Unable to parse AI review response.', category: 'System' }];
+    }
 
-    return response.content[0].type === 'text'
-      ? response.content[0].text.trim()
-      : 'Unable to generate summary.';
+    const rawFindings: Array<ReviewFinding & { travelItemIndex?: number | null }> = JSON.parse(jsonMatch[0]);
+    // Map travelItemIndex (1-based) to travelItemId, then strip the index
+    const findings: (ReviewFinding & { travelItemId?: string | null })[] = rawFindings
+      .filter((f) => f.severity && f.message && f.category)
+      .map((f) => {
+        let travelItemId: string | null = null;
+        if (f.travelItemIndex != null && f.travelItemIndex >= 1 && f.travelItemIndex <= data.travelItems.length) {
+          travelItemId = data.travelItems[f.travelItemIndex - 1].id;
+        }
+        return {
+          severity: f.severity,
+          message: f.message,
+          category: f.category,
+          travelItemId,
+        };
+      });
+    return findings;
   } catch (error) {
-    console.error('[AI] Failed to summarize changelog:', error);
-    return 'Unable to generate summary at this time.';
+    console.error('[AI Review] Failed to generate participant review:', error);
+    return [{ severity: 'info', message: 'Unable to generate review at this time.', category: 'System' }];
   }
 }

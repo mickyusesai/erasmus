@@ -1,6 +1,20 @@
 import PDFDocument from 'pdfkit';
 import { getStorageService } from '../storage/index.js';
 import { v4 as uuidv4 } from 'uuid';
+import path from 'path';
+import fs from 'fs';
+
+// Liberation Sans: Unicode-capable, metrically compatible with Helvetica
+// Supports Romanian (ș, ț, ă, î, â), Polish, Czech, and other Latin-extended characters
+const BUNDLED_FONT_DIR = path.join(__dirname, 'fonts');
+const SYSTEM_FONT_DIR = '/usr/share/fonts/truetype/liberation';
+// Use bundled fonts if available (copied during build), fall back to system fonts
+const FONT_DIR = fs.existsSync(path.join(BUNDLED_FONT_DIR, 'LiberationSans-Regular.ttf'))
+  ? BUNDLED_FONT_DIR
+  : SYSTEM_FONT_DIR;
+const FONT_REGULAR = path.join(FONT_DIR, 'LiberationSans-Regular.ttf');
+const FONT_BOLD = path.join(FONT_DIR, 'LiberationSans-Bold.ttf');
+const FONT_ITALIC = path.join(FONT_DIR, 'LiberationSans-Italic.ttf');
 
 interface DeclarationData {
   name: string;
@@ -16,6 +30,12 @@ interface DeclarationData {
   sendingOrgOid?: string | null;
   sendingOrgAddress: string;
   signatureDataUrl: string;
+  // New fields
+  reason?: string | null;
+  isCarTravel?: boolean;
+  licensePlate?: string | null;
+  driverName?: string | null;
+  distanceKm?: number | null;
 }
 
 /**
@@ -45,7 +65,7 @@ function getTransportModeDisplay(mode: string): string {
 }
 
 /**
- * Generate a Declaration of Travel PDF
+ * Generate a Declaration on Honor PDF
  */
 export async function generateDeclarationPdf(
   participantId: string,
@@ -88,38 +108,72 @@ export async function generateDeclarationPdf(
 
       doc.on('error', reject);
 
+      // Register Unicode-capable fonts
+      doc.registerFont('MainFont', FONT_REGULAR);
+      doc.registerFont('MainFont-Bold', FONT_BOLD);
+      doc.registerFont('MainFont-Italic', FONT_ITALIC);
+
       // Title
-      doc.fontSize(18).font('Helvetica-Bold').text('DECLARATION OF TRAVEL', { align: 'center' });
+      doc.fontSize(18).font('MainFont-Bold').text('DECLARATION ON HONOR', { align: 'center' });
       doc.moveDown(2);
 
-      // Declaration text
+      // Declaration text varies by transport mode
       const transportMode = getTransportModeDisplay(data.modeOfTransport);
-      let declarationText = `I, ${data.name}, hereby declare that I took the ${transportMode} from ${data.fromPlace} to ${data.toPlace} on ${formatDate(data.travelDate)}`;
+      let declarationText: string;
 
-      // Add flight number if applicable
-      if (data.flightNumber && data.modeOfTransport === 'PLANE') {
-        declarationText += ` with flight number ${data.flightNumber}`;
+      if (data.isCarTravel || data.modeOfTransport === 'CAR') {
+        // Car travel declaration
+        declarationText = `I, ${data.name}, hereby declare on my honor that I traveled by ${transportMode} from ${data.fromPlace} to ${data.toPlace} on ${formatDate(data.travelDate)}.`;
+
+        if (data.licensePlate) {
+          declarationText += ` The vehicle license plate number is ${data.licensePlate}.`;
+        }
+        if (data.driverName) {
+          declarationText += ` The driver of the vehicle was ${data.driverName}.`;
+        }
+        if (data.distanceKm) {
+          declarationText += ` The total distance traveled was approximately ${data.distanceKm} km.`;
+        }
+      } else {
+        // Standard travel declaration
+        declarationText = `I, ${data.name}, hereby declare on my honor that I took the ${transportMode} from ${data.fromPlace} to ${data.toPlace} on ${formatDate(data.travelDate)}`;
+
+        // Add flight number if applicable
+        if (data.flightNumber && data.modeOfTransport === 'PLANE') {
+          declarationText += ` with flight number ${data.flightNumber}`;
+        }
+
+        // Add booking reference if available
+        if (data.bookingReference) {
+          declarationText += ` and booking reference ${data.bookingReference}`;
+        }
+
+        declarationText += '.';
       }
 
-      // Add booking reference if available
-      if (data.bookingReference) {
-        declarationText += ` and booking reference ${data.bookingReference}`;
-      }
-
-      declarationText += '.';
-
-      doc.fontSize(12).font('Helvetica').text(declarationText, {
+      doc.fontSize(12).font('MainFont').text(declarationText, {
         align: 'justify',
         lineGap: 4,
       });
 
+      // Reason for declaration
+      if (data.reason) {
+        doc.moveDown(1);
+        doc.fontSize(12).font('MainFont-Bold').text('Reason for this declaration:');
+        doc.moveDown(0.3);
+        doc.fontSize(12).font('MainFont').text(data.reason, {
+          align: 'justify',
+          lineGap: 3,
+        });
+      }
+
       doc.moveDown(2);
 
       // Personal details section
-      doc.fontSize(14).font('Helvetica-Bold').text('My details are:');
+      doc.fontSize(14).font('MainFont-Bold').text('My details are:');
       doc.moveDown(0.5);
 
-      doc.fontSize(12).font('Helvetica');
+      doc.fontSize(12).font('MainFont');
 
       // Name
       doc.text(`Name: ${data.name}`);
@@ -134,10 +188,10 @@ export async function generateDeclarationPdf(
       doc.moveDown(1.5);
 
       // Sending Organisation section
-      doc.fontSize(14).font('Helvetica-Bold').text('Sending Organisation:');
+      doc.fontSize(14).font('MainFont-Bold').text('Sending Organisation:');
       doc.moveDown(0.5);
 
-      doc.fontSize(12).font('Helvetica');
+      doc.fontSize(12).font('MainFont');
 
       // Organisation Name
       doc.text(`Name: ${data.sendingOrgName}`);
@@ -154,7 +208,7 @@ export async function generateDeclarationPdf(
       doc.moveDown(2);
 
       // Signature section
-      doc.fontSize(14).font('Helvetica-Bold').text('Signature:');
+      doc.fontSize(14).font('MainFont-Bold').text('Signature:');
       doc.moveDown(0.5);
 
       // Draw signature from base64 data URL
@@ -178,13 +232,13 @@ export async function generateDeclarationPdf(
       doc.moveDown(2);
 
       // Date signed
-      doc.fontSize(12).font('Helvetica').text(`Date: ${formatDate(new Date())}`, { align: 'left' });
+      doc.fontSize(12).font('MainFont').text(`Date: ${formatDate(new Date())}`, { align: 'left' });
 
       // Footer with disclaimer
       doc.moveDown(3);
-      doc.fontSize(9).font('Helvetica-Oblique').fillColor('#666666');
+      doc.fontSize(9).font('MainFont-Italic').fillColor('#666666');
       doc.text(
-        'This declaration is provided in lieu of a boarding pass that could not be obtained. ' +
+        'This declaration on honor is provided as a sworn statement. ' +
         'The undersigned confirms that the above information is true and accurate to the best of their knowledge.',
         {
           align: 'center',
