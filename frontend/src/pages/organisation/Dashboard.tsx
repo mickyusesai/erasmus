@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { OnboardingWizard } from '../../components/organisation/OnboardingWizard';
 import { organisationApi, OrgDashboardData } from '../../services/api';
 import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, ArrowRight } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
@@ -25,6 +26,8 @@ export default function OrgDashboard() {
       navigate('/org/login');
     }
   }, [navigate]);
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['org-dashboard'],
@@ -68,6 +71,14 @@ export default function OrgDashboard() {
   }
 
   const dashboard = data as OrgDashboardData;
+
+  // Show onboarding wizard for first-time users
+  useEffect(() => {
+    if (!dashboard) return;
+    const orgId = dashboard.organisation.id;
+    const seen = localStorage.getItem(`org-onboarding-${orgId}`);
+    if (!seen) setShowOnboarding(true);
+  }, [dashboard]);
 
   const statCards = [
     {
@@ -305,6 +316,15 @@ export default function OrgDashboard() {
           </CardContent>
         </Card>
       </main>
+
+      {showOnboarding && (
+        <OnboardingWizard
+          onComplete={() => {
+            localStorage.setItem(`org-onboarding-${dashboard.organisation.id}`, 'done');
+            setShowOnboarding(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -23,6 +23,7 @@ export default function OrgRegister() {
     mutationFn: () => organisationApi.register({ name, email, password }),
     onSuccess: (data) => {
       localStorage.setItem('org-token', data.token);
+      localStorage.setItem('org-id', data.organisation.id);
       toast.success('Registration successful! Welcome to EasyReimburse.');
       navigate(afterRegisterPath);
     },

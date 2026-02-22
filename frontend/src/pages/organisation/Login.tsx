@@ -21,6 +21,7 @@ export default function OrgLogin() {
     mutationFn: () => organisationApi.login(email, password),
     onSuccess: (data) => {
       localStorage.setItem('org-token', data.token);
+      localStorage.setItem('org-id', data.organisation.id);
       toast.success('Welcome back!');
       navigate(afterLoginPath);
     },
