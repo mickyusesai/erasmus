@@ -35,6 +35,16 @@ export default function OrgDashboard() {
     retry: false,
   });
 
+  const dashboard = data as OrgDashboardData | undefined;
+
+  // Show onboarding wizard for first-time users
+  useEffect(() => {
+    if (!dashboard) return;
+    const orgId = dashboard.organisation.id;
+    const seen = localStorage.getItem(`org-onboarding-${orgId}`);
+    if (!seen) setShowOnboarding(true);
+  }, [dashboard]);
+
   const handleLogout = () => {
     localStorage.removeItem('org-token');
     navigate('/org/login');
@@ -55,7 +65,7 @@ export default function OrgDashboard() {
     );
   }
 
-  if (error) {
+  if (error || !dashboard) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <Card>
@@ -69,16 +79,6 @@ export default function OrgDashboard() {
       </div>
     );
   }
-
-  const dashboard = data as OrgDashboardData;
-
-  // Show onboarding wizard for first-time users
-  useEffect(() => {
-    if (!dashboard) return;
-    const orgId = dashboard.organisation.id;
-    const seen = localStorage.getItem(`org-onboarding-${orgId}`);
-    if (!seen) setShowOnboarding(true);
-  }, [dashboard]);
 
   const statCards = [
     {
