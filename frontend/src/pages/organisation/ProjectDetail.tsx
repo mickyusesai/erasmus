@@ -19,6 +19,8 @@ import {
   Search,
   Bell,
   Download,
+  X,
+  Archive,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -326,6 +328,11 @@ function OverviewTab({
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDownloadingAuditZip, setIsDownloadingAuditZip] = useState(false);
+  const auditNudgeKey = `audit-nudge-dismissed-${projectId}`;
+  const [showAuditNudge, setShowAuditNudge] = useState(
+    () => !localStorage.getItem(auditNudgeKey)
+  );
   const queryClient = useQueryClient();
   const sortStorageKey = `participant-sort-${projectId}`;
   const [sortField, setSortField] = useState<SortField>(() => {
@@ -607,6 +614,52 @@ function OverviewTab({
           </div>
         </CardContent>
       </Card>
+
+      {/* Audit Archive Nudge */}
+      {showAuditNudge && stats.total > 0 && stats.paid + stats.approved === stats.total && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                <Archive className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-emerald-900">Project complete — save your audit archive</h3>
+                <p className="text-emerald-800 text-sm mt-0.5">
+                  All participants have been processed. Download a ZIP of all audit PDFs to keep a personal backup — national agencies can request Erasmus+ records for up to 7 years.
+                </p>
+                <button
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
+                  disabled={isDownloadingAuditZip}
+                  onClick={async () => {
+                    setIsDownloadingAuditZip(true);
+                    try {
+                      await organisationApi.exportAuditZip(projectId, project.name);
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : 'Failed to export audit ZIPs');
+                    } finally {
+                      setIsDownloadingAuditZip(false);
+                    }
+                  }}
+                >
+                  <Download className="w-4 h-4" />
+                  {isDownloadingAuditZip ? 'Generating…' : 'Download Audit ZIPs'}
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                localStorage.setItem(auditNudgeKey, 'dismissed');
+                setShowAuditNudge(false);
+              }}
+              className="p-1 text-emerald-500 hover:text-emerald-700 rounded transition-colors flex-shrink-0"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Actions & Search */}
       <div className="flex flex-wrap items-center gap-3">
