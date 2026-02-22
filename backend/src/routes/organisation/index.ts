@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getEmailService } from '../../services/email/index.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { generateAuditPdf } from '../../services/pdf/index.js';
+import archiver from 'archiver';
 import multer from 'multer';
 
 const router = Router();
@@ -2261,6 +2262,51 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-z0-9]/gi, '_')}_participants.csv"`);
   res.send(csvContent);
+}));
+
+/**
+ * GET /api/organisation/projects/:id/export/audit-zip
+ * Download a ZIP of audit PDFs for all approved/paid participants in a project
+ */
+router.get('/projects/:id/export/audit-zip', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      participants: {
+        where: { status: { in: ['ADMIN_APPROVED', 'PAID'] } },
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      },
+    },
+  });
+
+  if (!project) throw new NotFoundError('Project not found');
+
+  if (project.participants.length === 0) {
+    res.status(404).json({ error: 'No approved participants to export' });
+    return;
+  }
+
+  const safeProjectName = project.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="Audit_${safeProjectName}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.pipe(res);
+
+  for (const participant of project.participants) {
+    try {
+      const pdfBuffer = await generateAuditPdf(participant.id);
+      const safeName = `${participant.lastName}_${participant.firstName}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+      archive.append(pdfBuffer, { name: `Audit_${safeName}.pdf` });
+    } catch (err) {
+      console.error(`audit-zip: failed to generate PDF for participant ${participant.id}:`, err);
+      // Skip this participant and continue with the rest
+    }
+  }
+
+  await archive.finalize();
 }));
 
 /**

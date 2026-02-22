@@ -46,6 +46,7 @@ export default function OrgProjectDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [isDownloadingZip, setIsDownloadingZip] = useState(false);
 
   // Check if logged in
   useEffect(() => {
@@ -166,19 +167,38 @@ export default function OrgProjectDetail() {
                 )}
               </p>
             </div>
-            <Button
-              variant="secondary"
-              onClick={async () => {
-                try {
-                  await organisationApi.exportProjectCsv(id!, project.name);
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : 'Failed to export CSV');
-                }
-              }}
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Export CSV
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                loading={isDownloadingZip}
+                onClick={async () => {
+                  setIsDownloadingZip(true);
+                  try {
+                    await organisationApi.exportAuditZip(id!, project.name);
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'No approved participants to export');
+                  } finally {
+                    setIsDownloadingZip(false);
+                  }
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download Audit ZIPs
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    await organisationApi.exportProjectCsv(id!, project.name);
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'Failed to export CSV');
+                  }
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Export CSV
+              </Button>
+            </div>
           </div>
 
           {/* Test Project Banner */}

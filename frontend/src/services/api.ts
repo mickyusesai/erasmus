@@ -1087,6 +1087,25 @@ export const organisationApi = {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   },
+
+  exportAuditZip: async (projectId: string, projectName: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/export/audit-zip`, {
+      headers: getOrgAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || 'Failed to export audit ZIP');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Audit_${projectName.replace(/[^a-z0-9]/gi, '_')}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
 };
 
 // Organisation Types
