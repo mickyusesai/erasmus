@@ -1068,6 +1068,14 @@ export const organisationApi = {
     return handleResponse<{ success: boolean; message: string }>(res);
   },
 
+  expandProjectCapacity: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/expand-capacity`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; newLimit: number; message: string }>(res);
+  },
+
   // Export
   exportProjectCsv: async (projectId: string, projectName: string) => {
     const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/export/csv`, {

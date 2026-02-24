@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { OnboardingWizard } from '../../components/organisation/OnboardingWizard';
 import { organisationApi, OrgDashboardData } from '../../services/api';
 import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, ArrowRight } from 'lucide-react';
@@ -45,7 +45,10 @@ export default function OrgDashboard() {
     if (!seen) setShowOnboarding(true);
   }, [dashboard]);
 
+  const queryClient = useQueryClient();
+
   const handleLogout = () => {
+    queryClient.clear();
     localStorage.removeItem('org-token');
     navigate('/org/login');
   };

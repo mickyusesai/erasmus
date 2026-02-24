@@ -100,6 +100,18 @@ export default function OrgProjectDetail() {
     },
   });
 
+  const expandCapacityMutation = useMutation({
+    mutationFn: () => organisationApi.expandProjectCapacity(id!),
+    onSuccess: (data) => {
+      toast.success(data.message);
+      queryClient.invalidateQueries({ queryKey: ['org-project', id] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to expand capacity');
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -213,14 +225,14 @@ export default function OrgProjectDetail() {
                     <h3 className="font-medium text-amber-800">Test Project</h3>
                     <p className="text-sm text-amber-700 mt-1">
                       This is a free test project limited to {project.maxParticipants || 10} participants.
-                      Upgrade to a full project using 1 credit to remove this limit, or{' '}
+                      Upgrade to a full project using 1 credit to get 60 participant slots, or{' '}
                       <Link to="/org/billing" className="underline font-medium">purchase credits</Link> first.
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => {
-                    if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and remove the participant limit.')) {
+                    if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and give you 60 participant slots.')) {
                       upgradeProjectMutation.mutate();
                     }
                   }}
@@ -228,6 +240,36 @@ export default function OrgProjectDetail() {
                   className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-60"
                 >
                   {upgradeProjectMutation.isPending ? 'Upgrading…' : 'Upgrade (1 credit)'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Capacity Banner for full projects near or at limit */}
+          {!project.isTestProject && project.maxParticipants && participants.length >= project.maxParticipants - 5 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <Users className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="font-medium text-blue-800">
+                      {participants.length >= project.maxParticipants ? 'Participant limit reached' : 'Approaching participant limit'}
+                    </h3>
+                    <p className="text-sm text-blue-700 mt-1">
+                      {participants.length} of {project.maxParticipants} slots used. Use 1 credit to add 60 more slots.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Expand this project\'s capacity by 60 participants? This will use 1 credit.')) {
+                      expandCapacityMutation.mutate();
+                    }
+                  }}
+                  disabled={expandCapacityMutation.isPending}
+                  className="flex-shrink-0 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60"
+                >
+                  {expandCapacityMutation.isPending ? 'Expanding…' : '+60 slots (1 credit)'}
                 </button>
               </div>
             </div>
@@ -272,6 +314,7 @@ export default function OrgProjectDetail() {
               projectId={id!}
               countryLimits={countryLimits || []}
               hasParticipants={participants.length > 0}
+              approvedCount={participants.filter(p => p.status === 'ADMIN_APPROVED' || p.status === 'PAID').length}
               onDelete={() => {
                 if (confirm('Are you sure you want to delete this project? This will also delete all participant data and uploaded documents.')) {
                   deleteMutation.mutate();
@@ -1204,6 +1247,7 @@ function SettingsTab({
   projectId,
   countryLimits,
   hasParticipants,
+  approvedCount,
   onDelete,
   isDeleting,
 }: {
@@ -1211,10 +1255,37 @@ function SettingsTab({
   projectId: string;
   countryLimits: any[];
   hasParticipants: boolean;
+  approvedCount: number;
   onDelete: () => void;
   isDeleting: boolean;
 }) {
   const queryClient = useQueryClient();
+  const editLocked = approvedCount >= 2;
+
+  // Project detail edit state
+  const [editName, setEditName] = useState(project.name);
+  const [editCountry, setEditCountry] = useState(project.country);
+  const [editVenueAddress, setEditVenueAddress] = useState(project.venueAddress || '');
+  const [editStartDate, setEditStartDate] = useState(project.startDate ? project.startDate.slice(0, 10) : '');
+  const [editEndDate, setEditEndDate] = useState(project.endDate ? project.endDate.slice(0, 10) : '');
+
+  const updateProjectMutation = useMutation({
+    mutationFn: () => organisationApi.updateProject(projectId, {
+      name: editName,
+      country: editCountry,
+      venueAddress: editVenueAddress,
+      startDate: editStartDate,
+      endDate: editEndDate,
+    }),
+    onSuccess: () => {
+      toast.success('Project details updated');
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to update project');
+    },
+  });
 
   const updateLimitMutation = useMutation({
     mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
@@ -1237,6 +1308,72 @@ function SettingsTab({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Project Details Edit */}
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="font-semibold text-gray-900">Project Details</h3>
+              <p className="text-sm text-gray-500 mt-1">Edit the basic information for this project.</p>
+            </div>
+            {editLocked && (
+              <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-lg">
+                Locked — 2+ participants approved
+              </span>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <Input
+                label="Project Name"
+                value={editName}
+                onChange={e => setEditName(e.target.value)}
+                disabled={editLocked}
+              />
+            </div>
+            <Input
+              label="Country / Location"
+              value={editCountry}
+              onChange={e => setEditCountry(e.target.value)}
+              disabled={editLocked}
+            />
+            <Input
+              label="Venue Address"
+              value={editVenueAddress}
+              onChange={e => setEditVenueAddress(e.target.value)}
+              disabled={editLocked}
+            />
+            <Input
+              label="Start Date"
+              type="date"
+              value={editStartDate}
+              onChange={e => setEditStartDate(e.target.value)}
+              disabled={editLocked}
+            />
+            <Input
+              label="End Date"
+              type="date"
+              value={editEndDate}
+              onChange={e => setEditEndDate(e.target.value)}
+              disabled={editLocked}
+            />
+          </div>
+          {!editLocked && (
+            <div className="mt-4 flex justify-end">
+              <Button
+                onClick={() => updateProjectMutation.mutate()}
+                loading={updateProjectMutation.isPending}
+                disabled={!editName.trim() || !editCountry.trim()}
+              >
+                Save Changes
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Country Limits - only show if there are participants */}
       {hasParticipants && countryLimits.length > 0 && (
         <Card>

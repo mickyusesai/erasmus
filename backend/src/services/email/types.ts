@@ -111,4 +111,15 @@ export interface EmailService {
     projectName: string,
     magicLink: string
   ): Promise<EmailResult>;
+
+  /**
+   * Send a credit purchase confirmation email to an organisation
+   */
+  sendCreditPurchase(
+    to: string,
+    organisationName: string,
+    credits: number,
+    totalCredits: number,
+    dashboardUrl: string
+  ): Promise<EmailResult>;
 }

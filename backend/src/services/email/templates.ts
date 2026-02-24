@@ -122,12 +122,12 @@ Your organisation account has been created successfully. A free test project (up
 Here's how to get started:
 
 1. LOG IN to your dashboard: ${loginUrl}
-2. Go to your Test Project and configure the country reimbursement limits in Settings
-3. Add participants (manually or via CSV import)
-4. Send magic links to your participants so they can upload their travel documents
-5. Once participants submit, review their reimbursements with AI-assisted checks
+2. Go to your Test Project and add participants (manually or via CSV import)
+3. Send magic links to your participants so they can upload their travel documents
+4. Once participants submit, review their reimbursements with AI-assisted checks
+5. Configure country reimbursement limits in the project Settings whenever you're ready
 
-Need more than 10 participants? You can purchase project credits or an annual license from the Billing page.
+When you're ready for a real project, purchase a project credit from the Billing page. Each credit covers one project with up to 60 participants.
 
 Best regards,
 The EasyReimburse Team
@@ -143,12 +143,53 @@ export function welcomeHtml(organisationName: string, loginUrl: string): string 
     ${button(loginUrl, 'Go to Your Dashboard')}
     <h3 style="color: #6b21a8; margin-top: 25px;">How to get started:</h3>
     <ol style="padding-left: 20px;">
-      <li>Go to your <strong>Test Project</strong> and configure the country reimbursement limits in <strong>Settings</strong></li>
-      <li>Add participants (manually or via CSV import)</li>
+      <li>Go to your <strong>Test Project</strong> and add participants (manually or via CSV import)</li>
       <li>Send <strong>magic links</strong> to your participants so they can upload their travel documents</li>
       <li>Once participants submit, review their reimbursements with AI-assisted checks</li>
+      <li>Configure country reimbursement limits in the project <strong>Settings</strong> whenever you're ready</li>
     </ol>
-    ${infoBox('Need more than 10 participants? You can purchase project credits or an annual license from the <strong>Billing</strong> page.')}
+    ${infoBox('Ready for a real project? Purchase a project credit from the <strong>Billing</strong> page. Each credit covers one project with up to 60 participants.')}
+  `);
+}
+
+// =============================================================================
+// CREDIT PURCHASE CONFIRMATION
+// =============================================================================
+
+export function creditPurchaseSubject(credits: number): string {
+  return `Your ${credits} EasyReimburse Credit${credits !== 1 ? 's are' : ' is'} Ready`;
+}
+
+export function creditPurchaseText(organisationName: string, credits: number, totalCredits: number, dashboardUrl: string): string {
+  return `Hello ${organisationName},
+
+Your purchase was successful! ${credits} project credit${credits !== 1 ? 's have' : ' has'} been added to your account.
+
+You now have ${totalCredits} credit${totalCredits !== 1 ? 's' : ''} available.
+
+Each credit lets you create one project with up to 60 participants. If a project grows beyond 60 participants, you can expand its capacity by 60 using one additional credit — directly from the project page.
+
+Go to your dashboard to create a new project: ${dashboardUrl}
+
+If you have any questions, feel free to reach out.
+
+Best regards,
+The EasyReimburse Team
+
+---
+This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+}
+
+export function creditPurchaseHtml(organisationName: string, credits: number, totalCredits: number, dashboardUrl: string): string {
+  return wrapInLayout(`
+    <p>Hello <strong>${organisationName}</strong>,</p>
+    ${successBox(`Your purchase was successful! <strong>${credits} project credit${credits !== 1 ? 's have' : ' has'}</strong> been added to your account.`)}
+    <div style="text-align: center; margin: 25px 0;">
+      <p style="font-size: 14px; color: #6b7280; margin-bottom: 5px;">Credits available</p>
+      <p style="font-size: 36px; font-weight: 700; color: #7c3aed; margin: 0;">${totalCredits}</p>
+    </div>
+    ${infoBox('Each credit lets you create one project with up to <strong>60 participants</strong>. If a project grows beyond 60, you can expand its capacity by 60 using one additional credit — directly from the project page.')}
+    ${button(dashboardUrl, 'Go to Dashboard')}
   `);
 }
 

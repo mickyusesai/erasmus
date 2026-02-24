@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { organisationApi } from '../../services/api';
 import toast from 'react-hot-toast';
 import { LogIn } from 'lucide-react';
@@ -10,6 +10,7 @@ import { Card, CardContent } from '../../components/ui/Card';
 
 export default function OrgLogin() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,9 +18,18 @@ export default function OrgLogin() {
   const plan = searchParams.get('plan');
   const afterLoginPath = plan ? `/org/billing?plan=${plan}` : '/org/dashboard';
 
+  // Redirect to dashboard if already logged in
+  useEffect(() => {
+    if (localStorage.getItem('org-token')) {
+      navigate(afterLoginPath, { replace: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const loginMutation = useMutation({
     mutationFn: () => organisationApi.login(email, password),
     onSuccess: (data) => {
+      // Clear any cached data from a previous session before navigating
+      queryClient.clear();
       localStorage.setItem('org-token', data.token);
       localStorage.setItem('org-id', data.organisation.id);
       toast.success('Welcome back!');

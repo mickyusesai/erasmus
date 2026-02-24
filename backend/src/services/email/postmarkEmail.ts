@@ -119,4 +119,13 @@ export class PostmarkEmailService implements EmailService {
       html: templates.analysisCompleteHtml(participantName, projectName, magicLink),
     });
   }
+
+  async sendCreditPurchase(to: string, organisationName: string, credits: number, totalCredits: number, dashboardUrl: string): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.creditPurchaseSubject(credits),
+      text: templates.creditPurchaseText(organisationName, credits, totalCredits, dashboardUrl),
+      html: templates.creditPurchaseHtml(organisationName, credits, totalCredits, dashboardUrl),
+    });
+  }
 }

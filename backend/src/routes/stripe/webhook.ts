@@ -3,6 +3,7 @@ import express from 'express';
 import Stripe from 'stripe';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
+import { getEmailService } from '../../services/email/index.js';
 
 const router = Router();
 
@@ -64,6 +65,18 @@ router.post(
         ]);
 
         console.log(`[Stripe Webhook] Granted ${credits} credits to org ${organisationId}`);
+
+        // Send purchase confirmation email
+        try {
+          const org = await prisma.organisation.findUnique({ where: { id: organisationId } });
+          if (org) {
+            const dashboardUrl = `${process.env.FRONTEND_URL || 'https://app.easyreimburse.ai'}/org/dashboard`;
+            await getEmailService().sendCreditPurchase(org.email, org.name, credits, org.projectCredits, dashboardUrl);
+          }
+        } catch (emailErr) {
+          // Non-fatal — credits are already granted, just log the failure
+          console.error('[Stripe Webhook] Failed to send purchase confirmation email:', emailErr);
+        }
       } catch (err) {
         console.error('[Stripe Webhook] DB update failed:', err);
         res.status(500).json({ error: 'DB update failed' });

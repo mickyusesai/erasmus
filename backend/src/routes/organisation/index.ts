@@ -212,7 +212,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
   // Consume the credit
   const creditSource = await consumeCredit(freshOrg);
 
-  // Create the project
+  // Create the project — 1 credit covers up to 60 participants
   const project = await prisma.project.create({
     data: {
       organisationId: org.id,
@@ -224,6 +224,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
       carRatePerKm,
       venueAddress,
       creditSource,
+      maxParticipants: 60,
     },
     include: {
       _count: {
@@ -626,10 +627,12 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
     throw new NotFoundError('Project not found');
   }
 
-  // Check test project participant limit
-  if (project.isTestProject && project.maxParticipants !== null) {
-    if (project._count.participants >= project.maxParticipants) {
-      throw new ForbiddenError(`Test project is limited to ${project.maxParticipants} participants. Please purchase credits to create a full project.`);
+  // Check participant limit (test projects and paid projects with capacity set)
+  if (project.maxParticipants !== null && project._count.participants >= project.maxParticipants) {
+    if (project.isTestProject) {
+      throw new ForbiddenError(`Test project is limited to ${project.maxParticipants} participants. Upgrade to a full project to add more.`);
+    } else {
+      throw new ForbiddenError(`This project has reached its capacity of ${project.maxParticipants} participants. Use 1 credit to expand by 60 more.`);
     }
   }
 
@@ -764,11 +767,15 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
     (r) => r.firstName && r.lastName && r.email && r.country
   );
 
-  // Check test project participant limit
-  if (project.isTestProject && project.maxParticipants !== null) {
+  // Check participant limit for test and paid projects
+  if (project.maxParticipants !== null) {
     const remainingSlots = project.maxParticipants - project._count.participants;
     if (validRecords.length > remainingSlots) {
-      throw new ForbiddenError(`Test project can only add ${remainingSlots} more participant(s) (limit: ${project.maxParticipants}). Please purchase credits to create a full project.`);
+      if (project.isTestProject) {
+        throw new ForbiddenError(`Test project can only add ${remainingSlots} more participant(s) (limit: ${project.maxParticipants}). Upgrade to a full project to add more.`);
+      } else {
+        throw new ForbiddenError(`This project can only add ${remainingSlots} more participant(s) (capacity: ${project.maxParticipants}). Use 1 credit to expand by 60 more.`);
+      }
     }
   }
 
@@ -2307,6 +2314,39 @@ router.get('/projects/:id/export/audit-zip', ensureOwnProject, asyncHandler(asyn
   }
 
   await archive.finalize();
+}));
+
+/**
+ * POST /api/organisation/projects/:id/expand-capacity
+ * Expand a full project's participant capacity by 60, consuming 1 credit
+ */
+router.post('/projects/:id/expand-capacity', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new NotFoundError('Project not found');
+  if (project.isTestProject) throw new ValidationError('Upgrade to a full project before expanding capacity.');
+
+  const freshOrg = await prisma.organisation.findUnique({ where: { id: org.id } });
+  if (!freshOrg) throw new NotFoundError('Organisation not found');
+  if (freshOrg.projectCredits < 1) throw new ForbiddenError('No credits available. Purchase credits to expand capacity.');
+
+  const currentMax = project.maxParticipants ?? 60;
+  const newMax = currentMax + 60;
+
+  await prisma.$transaction([
+    prisma.organisation.update({
+      where: { id: org.id },
+      data: { projectCredits: freshOrg.projectCredits - 1 },
+    }),
+    prisma.project.update({
+      where: { id: projectId },
+      data: { maxParticipants: newMax },
+    }),
+  ]);
+
+  res.json({ success: true, newLimit: newMax, message: `Capacity expanded to ${newMax} participants. 1 credit used.` });
 }));
 
 /**
