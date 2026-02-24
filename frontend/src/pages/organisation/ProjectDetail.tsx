@@ -1287,6 +1287,18 @@ function SettingsTab({
     },
   });
 
+  const upgradeFromTestMutation = useMutation({
+    mutationFn: () => organisationApi.upgradeTestProject(projectId),
+    onSuccess: () => {
+      toast.success('Project upgraded! You now have 60 participant slots.');
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to upgrade project');
+    },
+  });
+
   const updateLimitMutation = useMutation({
     mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
       organisationApi.setCountryLimit(projectId, { country, maxReimbursementAmount: amount, greenTravel }),
@@ -1481,6 +1493,36 @@ function SettingsTab({
 
       {/* Feature Settings */}
       <FeatureSettingsCard project={project} projectId={projectId} />
+
+      {/* Upgrade Test Project */}
+      {project.isTestProject && (
+        <Card className="lg:col-span-2 border-amber-200">
+          <CardHeader>
+            <h3 className="font-semibold text-amber-800">Upgrade to Full Project</h3>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-4">
+              This is a free test project limited to {project.maxParticipants || 10} participants.
+              Use 1 credit to convert it into a full project with 60 participant slots.
+              You can purchase credits on the{' '}
+              <Link to="/org/billing" className="text-primary-600 hover:text-primary-700 underline font-medium">
+                Billing page
+              </Link>
+              {' '}first if needed.
+            </p>
+            <Button
+              onClick={() => {
+                if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and give you 60 participant slots.')) {
+                  upgradeFromTestMutation.mutate();
+                }
+              }}
+              loading={upgradeFromTestMutation.isPending}
+            >
+              Upgrade to Full Project (1 credit)
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Danger Zone */}
       <Card>
