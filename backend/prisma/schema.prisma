@@ -81,6 +81,7 @@ enum PurchaseStatus {
   COMPLETED
   FAILED
   REFUNDED
+  EXPIRED
 }
 
 // Super Admin - internal administrative access
@@ -167,6 +168,8 @@ model Participant {
   homeCountryReasoning      String?                 // AI reasoning for the detected home country
   consolidationSummary      String?                 // AI notes from consolidation for the review AI
   noReimbursement           Boolean                 @default(false)  // Participant opted out of reimbursement
+  aiReviewStatus            AiReviewStatus          @default(NOT_STARTED)  // Status of background AI review after submission
+  tokenExpiresAt            DateTime?               // Magic link expiry (set to project.endDate + 180 days on creation)
   reopenedAt                DateTime?               // When the reimbursement was last reopened by the organisation
   reopenMessage             String?                 // Organisation's message to participant explaining what to fix
   createdAt                 DateTime                @default(now())
@@ -188,6 +191,13 @@ enum ParticipantStatus {
   PARTICIPANT_COMPLETE
   ADMIN_APPROVED
   PAID
+}
+
+enum AiReviewStatus {
+  NOT_STARTED
+  PENDING
+  COMPLETE
+  FAILED
 }
 
 // Document - uploaded travel document

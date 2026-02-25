@@ -9,7 +9,7 @@ import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
-import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+import { ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { getEmailService } from '../../services/email/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
@@ -289,17 +289,25 @@ router.post(
     );
 
     // Create document record (type will be determined during consolidation)
-    const document = await prisma.document.create({
-      data: {
-        participantId: participant.id,
-        storedFilePath: storagePath,
-        originalFilename: req.file.originalname,
-        renamedFilename: req.file.originalname,
-        mimeType: req.file.mimetype,
-        fileSize: req.file.size,
-        documentType: 'OTHER', // Will be updated during consolidation
-      },
-    });
+    // If DB creation fails after a successful upload, clean up the orphaned S3 file
+    let document;
+    try {
+      document = await prisma.document.create({
+        data: {
+          participantId: participant.id,
+          storedFilePath: storagePath,
+          originalFilename: req.file.originalname,
+          renamedFilename: req.file.originalname,
+          mimeType: req.file.mimetype,
+          fileSize: req.file.size,
+          documentType: 'OTHER', // Will be updated during consolidation
+        },
+      });
+    } catch (dbError) {
+      // Upload succeeded but DB record failed — delete the orphaned file
+      storage.delete(storagePath).catch((e) => console.error('[Upload] Failed to clean up orphaned file after DB error:', e));
+      throw dbError;
+    }
 
     // Clear the consolidation flag since we have new documents
     await prisma.participant.update({
@@ -1294,6 +1302,12 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
       update: { totalEur: 0, amountToReimburse: 0, aiCheckOk: true },
     });
 
+    // No review needed for no-reimbursement participants
+    await prisma.participant.update({
+      where: { id: participant.id },
+      data: { aiReviewStatus: AiReviewStatus.COMPLETE },
+    });
+
     res.json({ success: true });
     return;
   }
@@ -1315,7 +1329,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
   // Update status
   await prisma.participant.update({
     where: { id: participant.id },
-    data: { status: ParticipantStatus.PARTICIPANT_COMPLETE },
+    data: { status: ParticipantStatus.PARTICIPANT_COMPLETE, aiReviewStatus: AiReviewStatus.PENDING },
   });
 
   // Update summary
@@ -1457,9 +1471,17 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         });
       }
 
+      await prisma.participant.update({
+        where: { id: participant.id },
+        data: { aiReviewStatus: AiReviewStatus.COMPLETE },
+      });
       console.log(`[AI Review] Generated ${findings.length} findings for participant ${participant.id}`);
     } catch (error) {
       console.error(`[AI Review] Failed to generate review for participant ${participant.id}:`, error);
+      await prisma.participant.update({
+        where: { id: participant.id },
+        data: { aiReviewStatus: AiReviewStatus.FAILED },
+      }).catch(() => {}); // Don't throw if this update fails
     }
   })();
 

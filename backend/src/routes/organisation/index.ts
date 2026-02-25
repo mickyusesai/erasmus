@@ -4,7 +4,7 @@ import { parse } from 'csv-parse/sync';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { organisationAuth, ensureOwnProject } from '../../middleware/auth.js';
-import { Organisation, PurchaseType, ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { getEmailService } from '../../services/email/index.js';
 import { getStorageService } from '../../services/storage/index.js';
@@ -645,7 +645,8 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
     throw new ValidationError('A participant with this email already exists in this project');
   }
 
-  // Create participant
+  // Create participant — token expires 180 days after project end
+  const tokenExpiresAt = new Date(project.endDate.getTime() + 180 * 24 * 60 * 60 * 1000);
   const participant = await prisma.participant.create({
     data: {
       projectId,
@@ -655,6 +656,7 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
       country,
       magicLinkToken: uuidv4(),
       magicLinkActive: true,
+      tokenExpiresAt,
     },
   });
 
@@ -796,7 +798,8 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
         continue;
       }
 
-      // Create participant
+      // Create participant — token expires 180 days after project end
+      const tokenExpiresAt = new Date(project.endDate.getTime() + 180 * 24 * 60 * 60 * 1000);
       const participant = await prisma.participant.create({
         data: {
           projectId,
@@ -806,6 +809,7 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
           country: record.country,
           magicLinkToken: uuidv4(),
           magicLinkActive: true,
+          tokenExpiresAt,
         },
       });
 
@@ -1035,8 +1039,11 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     throw new ForbiddenError('Access denied');
   }
 
-  // Delete all existing findings
-  await prisma.aiReviewFinding.deleteMany({ where: { participantId } });
+  // Delete all existing findings and mark review as pending
+  await Promise.all([
+    prisma.aiReviewFinding.deleteMany({ where: { participantId } }),
+    prisma.participant.update({ where: { id: participantId }, data: { aiReviewStatus: AiReviewStatus.PENDING } }),
+  ]);
 
   // Check if there's enough data to review
   if (participant.travelItems.length === 0 && participant.documents.length === 0) {
@@ -1153,6 +1160,9 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
 
   const severityOrder: Record<string, number> = { critical: 0, important: 1, info: 2 };
   storedFindings.sort((a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3));
+
+  // Mark review as complete
+  await prisma.participant.update({ where: { id: participantId }, data: { aiReviewStatus: AiReviewStatus.COMPLETE } });
 
   res.json({ findings: storedFindings });
 }));
@@ -1311,10 +1321,11 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
     magicLink
   );
 
-  // Update last sent timestamp
+  // Update last sent timestamp and refresh token expiry (180 days from project end, or 180 days from now if past end)
+  const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
   await prisma.participant.update({
     where: { id: participantId },
-    data: { lastMagicLinkSentAt: new Date() },
+    data: { lastMagicLinkSentAt: new Date(), tokenExpiresAt: newExpiry },
   });
 
   res.json({ success: true });
@@ -1444,9 +1455,10 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
         magicLink
       );
 
+      const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
       await prisma.participant.update({
         where: { id },
-        data: { lastMagicLinkSentAt: new Date() },
+        data: { lastMagicLinkSentAt: new Date(), tokenExpiresAt: newExpiry },
       });
 
       results.push({ id, success: true });

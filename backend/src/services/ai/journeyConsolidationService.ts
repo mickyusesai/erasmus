@@ -25,6 +25,7 @@ export class JourneyConsolidationService {
   constructor() {
     this.client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      timeout: 10 * 60 * 1000, // 10-minute safety net — prevents infinite hangs if OpenAI stops responding
     });
     console.log(`[Consolidation Service] Using OpenAI ${this.model} for document extraction and analysis`);
   }

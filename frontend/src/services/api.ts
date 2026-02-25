@@ -1217,6 +1217,7 @@ export interface OrgParticipant {
 export interface OrgParticipantDetail extends OrgParticipant {
   magicLinkToken: string;
   magicLinkActive: boolean;
+  aiReviewStatus: 'NOT_STARTED' | 'PENDING' | 'COMPLETE' | 'FAILED';
   bankAccountIban?: string;
   bankAccountHolderName?: string;
   bankAccountBic?: string;

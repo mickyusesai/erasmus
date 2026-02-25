@@ -733,10 +733,17 @@ export default function OrgParticipantDetail() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    {reviewLoading || refreshReviewMutation.isPending ? (
+                    {reviewLoading || refreshReviewMutation.isPending || participant.aiReviewStatus === 'PENDING' ? (
                       <div className="flex items-center gap-2 text-sm text-indigo-600 py-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>{refreshReviewMutation.isPending ? 'Regenerating review...' : 'Loading review...'}</span>
+                        <span>{refreshReviewMutation.isPending ? 'Regenerating review...' : participant.aiReviewStatus === 'PENDING' ? 'AI review in progress…' : 'Loading review...'}</span>
+                      </div>
+                    ) : participant.aiReviewStatus === 'FAILED' ? (
+                      <div className="flex items-center justify-between gap-2 p-2 bg-red-50 rounded-lg text-sm text-red-700">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                          <span>AI review failed — click refresh to retry</span>
+                        </div>
                       </div>
                     ) : findings.length > 0 ? (
                       <>

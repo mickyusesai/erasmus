@@ -965,9 +965,28 @@ function OverviewTab({
                             Send Link
                           </button>
                         ) : (
-                          <span className="text-xs text-gray-400">
-                            {formatDate(participant.lastMagicLinkSentAt)}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-gray-400">
+                              {formatDate(participant.lastMagicLinkSentAt)}
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (checkReimbursementWarning([participant.id], 'magic')) return;
+                                organisationApi.sendMagicLink(participant.id).then(() => {
+                                  toast.success(`Magic link resent to ${participant.firstName}`);
+                                  queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+                                }).catch(() => {
+                                  toast.error('Failed to resend magic link');
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-primary-700 hover:bg-primary-50 px-1.5 py-0.5 rounded transition-colors"
+                              title="Resend magic link"
+                            >
+                              <Send className="w-3 h-3" />
+                              Resend
+                            </button>
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-3">

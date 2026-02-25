@@ -133,6 +133,10 @@ export async function participantAuth(
     throw new ForbiddenError('Magic link has been deactivated');
   }
 
+  if (participant.tokenExpiresAt && participant.tokenExpiresAt < new Date()) {
+    throw new ForbiddenError('This link has expired — please contact your organisation to get a new one.');
+  }
+
   req.participant = participant;
   next();
 }

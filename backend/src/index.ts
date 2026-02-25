@@ -35,8 +35,8 @@ app.use(cors({
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 300, // Limit each IP to 300 requests per windowMs
   message: 'Too many requests from this IP, please try again later.',
 });
 app.use('/api', limiter);
@@ -111,6 +111,37 @@ app.use('/api/super-admin', superAdminRoutes);
 
 // Error handling
 app.use(errorHandler);
+
+// Cleanup cron: expire abandoned Stripe purchases older than 24 hours
+setInterval(async () => {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const { count } = await prisma.purchase.updateMany({
+      where: { status: 'PENDING', createdAt: { lt: cutoff } },
+      data: { status: 'EXPIRED' },
+    });
+    if (count > 0) console.log(`[Cleanup] Expired ${count} abandoned purchase(s)`);
+  } catch (err) {
+    console.error('[Cleanup] Failed to expire stale purchases:', err);
+  }
+}, 60 * 60 * 1000); // runs every hour
+
+// Stripe cleanup: mark abandoned PENDING purchases as EXPIRED after 24h
+async function expireAbandonedPurchases() {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const { count } = await prisma.purchase.updateMany({
+      where: { status: 'PENDING', createdAt: { lt: cutoff } },
+      data: { status: 'EXPIRED' },
+    });
+    if (count > 0) console.log(`[Stripe Cleanup] Expired ${count} abandoned purchase(s)`);
+  } catch (err) {
+    console.error('[Stripe Cleanup] Error expiring purchases:', err);
+  }
+}
+// Run on startup and then every hour
+expireAbandonedPurchases();
+setInterval(expireAbandonedPurchases, 60 * 60 * 1000);
 
 // Graceful shutdown
 async function shutdown() {
