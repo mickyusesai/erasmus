@@ -27,6 +27,9 @@ import {
   Info,
   FileCheck,
   Users,
+  EyeOff,
+  Eye,
+  ArrowRight,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -653,8 +656,10 @@ function Step1Upload({
     }
   }, [uploadMutation]);
 
+  const atDocumentLimit = data.documents.length >= 15;
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    disabled: atDocumentLimit || uploading,
     accept: {
       'application/pdf': ['.pdf'],
       'image/jpeg': ['.jpg', '.jpeg'],
@@ -766,7 +771,29 @@ function Step1Upload({
         )}
       </CardHeader>
       <CardContent>
+        {/* Document count and hint */}
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm text-gray-500">
+            Only upload documents for trips you will claim reimbursement for. You can add extra items manually after AI consolidation.
+          </p>
+          <span className={clsx(
+            'text-sm font-medium ml-4 whitespace-nowrap',
+            atDocumentLimit ? 'text-red-600' : data.documents.length >= 12 ? 'text-amber-600' : 'text-gray-500'
+          )}>
+            {data.documents.length} / 15
+          </span>
+        </div>
+
         {/* Dropzone */}
+        {atDocumentLimit ? (
+          <div className="p-6 border-2 border-dashed border-red-200 bg-red-50 rounded-xl text-center">
+            <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-2" />
+            <p className="text-sm font-medium text-red-700">Document limit reached (15/15)</p>
+            <p className="text-xs text-red-600 mt-1">
+              You can add any remaining travel items manually in Step 2 after AI consolidation.
+            </p>
+          </div>
+        ) : (
         <div
           {...getRootProps()}
           className={clsx('dropzone', isDragActive && 'active')}
@@ -808,6 +835,7 @@ function Step1Upload({
             </>
           )}
         </div>
+        )}
 
         {/* Uploaded Documents */}
         {data.documents.length > 0 && (
@@ -1386,6 +1414,7 @@ function Step2CheckData({
                 <TravelItemCard
                   key={item.id}
                   item={item}
+                  allTravelItems={data.travelItems}
                   documents={data.documents}
                   declarationsOfTravel={data.declarationsOfTravel || []}
                   token={token}
@@ -1981,6 +2010,7 @@ function TravelItemCard({
   item,
   documents,
   declarationsOfTravel,
+  allTravelItems,
   token,
   onUpdate,
   onDelete,
@@ -1993,6 +2023,7 @@ function TravelItemCard({
   item: TravelItem;
   documents: Document[];
   declarationsOfTravel: DeclarationOfTravel[];
+  allTravelItems: TravelItem[];
   token: string;
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
@@ -2033,6 +2064,74 @@ function TravelItemCard({
   }, [allLinkedDocuments]);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
+
+  // State for move-document dropdown
+  const [movingDocId, setMovingDocId] = useState<string | null>(null);
+  // State for replace-document inline upload
+  const replaceFileInputRef = useRef<HTMLInputElement>(null);
+  const [replacingDoc, setReplacingDoc] = useState(false);
+  // Declarations linked to this specific travel item
+  const itemDeclarations = useMemo(() =>
+    declarationsOfTravel.filter(d => d.travelItemId === item.id),
+    [declarationsOfTravel, item.id]
+  );
+
+  const queryClient = useQueryClient();
+
+  // Mutation: move a document to a different travel item
+  const moveDocumentMutation = useMutation({
+    mutationFn: async ({ docId, targetItemId }: { docId: string; targetItemId: string }) => {
+      // 1. Unlink from current item
+      await participantApi.unlinkDocumentFromTravelItem(token, item.id, docId);
+      // 2. Link to target item
+      const targetItem = allTravelItems.find(t => t.id === targetItemId);
+      if (targetItem && !targetItem.documentId) {
+        // Target has no primary doc - set as primary
+        await participantApi.updateTravelItem(token, targetItemId, { documentId: docId });
+      } else {
+        // Target already has a primary doc - add as additional
+        const existingAdditional: string[] = [];
+        if (targetItem?.additionalDocumentIds) {
+          try { existingAdditional.push(...JSON.parse(targetItem.additionalDocumentIds)); } catch { /* ignore */ }
+        }
+        existingAdditional.push(docId);
+        await participantApi.updateTravelItem(token, targetItemId, {
+          additionalDocumentIds: JSON.stringify(existingAdditional),
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      setMovingDocId(null);
+      toast.success('Document moved');
+    },
+    onError: () => toast.error('Failed to move document'),
+  });
+
+  // Mutation: replace primary document
+  const replaceDocumentMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const result = await participantApi.uploadDocument(token, file);
+      await participantApi.updateTravelItem(token, item.id, { documentId: result.document.id });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      setReplacingDoc(false);
+      toast.success('Document replaced');
+    },
+    onError: () => { setReplacingDoc(false); toast.error('Failed to replace document'); },
+  });
+
+  // Mutation: move a declaration to a different travel item
+  const moveDeclarationMutation = useMutation({
+    mutationFn: ({ declarationId, targetItemId }: { declarationId: string; targetItemId: string }) =>
+      participantApi.updateDeclarationOfTravel(token, declarationId, { travelItemId: targetItemId || null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      toast.success('Declaration moved');
+    },
+    onError: () => toast.error('Failed to move declaration'),
+  });
 
   // Local state for text inputs - prevents re-renders on every keystroke
   const [localFrom, setLocalFrom] = useState(item.fromLocation);
@@ -2147,8 +2246,9 @@ function TravelItemCard({
 
   return (
     <div className={clsx(
-      'bg-gray-50 rounded-2xl relative overflow-hidden',
-      item.checked && 'ring-2 ring-emerald-500'
+      'rounded-2xl relative overflow-hidden',
+      item.excludedFromReimbursement ? 'bg-gray-100 opacity-60' : 'bg-gray-50',
+      item.checked && !item.excludedFromReimbursement && 'ring-2 ring-emerald-500'
     )}>
       <div className="p-6">
       {/* Boarding Pass / Declaration Status Bar for Flights */}
@@ -2252,9 +2352,17 @@ function TravelItemCard({
           <Icon className={clsx('w-6 h-6', transportIconColors[item.modeOfTransport])} />
         </div>
         <div className="flex-1">
-          <p className="font-semibold text-gray-900">
-            {item.fromLocation} → {item.toLocation}
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="font-semibold text-gray-900">
+              {item.fromLocation} → {item.toLocation}
+            </p>
+            {item.excludedFromReimbursement && (
+              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-medium rounded-full flex items-center gap-1">
+                <EyeOff className="w-3 h-3" />
+                Excluded
+              </span>
+            )}
+          </div>
           <p className="text-sm text-gray-500">
             {formatDate(item.departureDate)}
             {item.flightNumber && ` • ${item.flightNumber}`}
@@ -2290,38 +2398,133 @@ function TravelItemCard({
       </div>
 
       {/* Linked Documents */}
+      {/* Hidden file input for replace */}
+      <input
+        ref={replaceFileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            setReplacingDoc(true);
+            replaceDocumentMutation.mutate(file);
+          }
+          e.target.value = '';
+        }}
+      />
       {allLinkedDocuments.length > 0 ? (
         <div className="mb-4 space-y-2">
           {allLinkedDocuments.map((doc, index) => (
-            <div
-              key={doc.id}
-              className="p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3"
-            >
-              <FileText className="w-4 h-4 text-gray-400" />
-              <div className="flex-1 min-w-0">
-                <span className="text-sm text-gray-600 truncate block">{doc.renamedFilename}</span>
-                {index > 0 && (
-                  <span className="text-xs text-gray-400">Additional document</span>
+            <div key={doc.id} className="space-y-1">
+              <div className="p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3">
+                <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm text-gray-600 truncate block">{doc.renamedFilename}</span>
+                  {index > 0 && (
+                    <span className="text-xs text-gray-400">Additional document</span>
+                  )}
+                </div>
+                <button onClick={() => onViewDocument(doc)} className="text-xs text-primary-600 hover:text-primary-700 font-medium flex-shrink-0">
+                  View
+                </button>
+                {index === 0 && (
+                  <button
+                    onClick={() => replaceFileInputRef.current?.click()}
+                    disabled={replacingDoc}
+                    className="text-xs text-blue-500 hover:text-blue-600 font-medium flex-shrink-0"
+                    title="Replace with a new file"
+                  >
+                    {replacingDoc ? 'Replacing…' : 'Replace'}
+                  </button>
                 )}
+                <button onClick={() => onUnlinkDocument(doc.id)} className="text-xs text-red-500 hover:text-red-600 font-medium flex-shrink-0">
+                  Unlink
+                </button>
+                <button
+                  onClick={() => setMovingDocId(movingDocId === doc.id ? null : doc.id)}
+                  className="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1 flex-shrink-0"
+                  title="Move to a different travel item"
+                >
+                  <ArrowRight className="w-3 h-3" />
+                  Move
+                </button>
               </div>
-              <button
-                onClick={() => onViewDocument(doc)}
-                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
-              >
-                View
-              </button>
-              <button
-                onClick={() => onUnlinkDocument(doc.id)}
-                className="text-xs text-red-500 hover:text-red-600 font-medium"
-              >
-                Unlink
-              </button>
+              {/* Inline move-to dropdown */}
+              {movingDocId === doc.id && (
+                <div className="pl-3">
+                  <select
+                    className="text-xs border border-gray-200 rounded px-2 py-1 w-full"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        moveDocumentMutation.mutate({ docId: doc.id, targetItemId: e.target.value });
+                      }
+                    }}
+                  >
+                    <option value="" disabled>Move to travel item…</option>
+                    {allTravelItems.filter(t => t.id !== item.id).map(t => (
+                      <option key={t.id} value={t.id}>
+                        {t.fromLocation} → {t.toLocation} ({new Date(t.departureDate).toLocaleDateString()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           ))}
         </div>
       ) : (
         <div className="mb-4">
           <InlineDocumentUpload token={token} onUpdate={onUpdate} />
+        </div>
+      )}
+
+      {/* Linked Declarations of Travel */}
+      {itemDeclarations.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {itemDeclarations.map((dec) => (
+            <div key={dec.id} className="space-y-1">
+              <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200 flex items-center gap-3">
+                <FileCheck className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm text-emerald-800 truncate block">
+                    Declaration of Travel — {dec.fromPlace} → {dec.toPlace}
+                  </span>
+                  <span className="text-xs text-emerald-600">{formatDate(dec.travelDate)}</span>
+                </div>
+                <button
+                  onClick={() => setMovingDocId(movingDocId === `dec-${dec.id}` ? null : `dec-${dec.id}`)}
+                  className="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1 flex-shrink-0"
+                  title="Move to a different travel item"
+                >
+                  <ArrowRight className="w-3 h-3" />
+                  Move
+                </button>
+              </div>
+              {movingDocId === `dec-${dec.id}` && (
+                <div className="pl-3">
+                  <select
+                    className="text-xs border border-gray-200 rounded px-2 py-1 w-full"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        moveDeclarationMutation.mutate({ declarationId: dec.id, targetItemId: e.target.value });
+                        setMovingDocId(null);
+                      }
+                    }}
+                  >
+                    <option value="" disabled>Move to travel item…</option>
+                    {allTravelItems.filter(t => t.id !== item.id).map(t => (
+                      <option key={t.id} value={t.id}>
+                        {t.fromLocation} → {t.toLocation} ({new Date(t.departureDate).toLocaleDateString()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -2486,14 +2689,40 @@ function TravelItemCard({
         )}
       </div>
 
+      {/* Exclude from reimbursement toggle */}
+      <div className="mt-4 pt-4 border-t border-gray-200">
+        <button
+          type="button"
+          onClick={() => onUpdate({ excludedFromReimbursement: !item.excludedFromReimbursement })}
+          className={clsx(
+            'flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg transition-colors',
+            item.excludedFromReimbursement
+              ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+          )}
+        >
+          {item.excludedFromReimbursement ? (
+            <>
+              <Eye className="w-4 h-4" />
+              Re-include in reimbursement
+            </>
+          ) : (
+            <>
+              <EyeOff className="w-4 h-4" />
+              Exclude from reimbursement
+            </>
+          )}
+        </button>
       </div>
 
       {/* Confirmation Bottom Bar */}
       <div className={clsx(
         'px-6 py-4 flex items-center justify-between border-t transition-colors',
-        item.checked
-          ? 'bg-emerald-50 border-emerald-200'
-          : 'bg-white border-gray-200'
+        item.excludedFromReimbursement
+          ? 'bg-gray-100 border-gray-200'
+          : item.checked
+            ? 'bg-emerald-50 border-emerald-200'
+            : 'bg-white border-gray-200'
       )}>
         <div className="flex items-center gap-3">
           {item.checked ? (
@@ -2528,6 +2757,7 @@ function TravelItemCard({
           {item.checked ? 'Edit' : 'Confirm'}
         </button>
       </div>
+      </div>
     </div>
   );
 }
@@ -2561,6 +2791,7 @@ function AddTravelModal({
     currencyOriginal: 'EUR',
     flightNumber: '',
     bookingReference: '',
+    companyName: '',
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>('');
@@ -2636,6 +2867,7 @@ function AddTravelModal({
         currencyOriginal: 'EUR',
         flightNumber: '',
         bookingReference: '',
+        companyName: '',
       });
       setSelectedFile(null);
       setSelectedExistingDocId('');
@@ -3026,6 +3258,13 @@ function AddTravelModal({
                 required
               />
             </div>
+
+            <Input
+              label="Company / Airline / Operator Name"
+              value={formData.companyName}
+              onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+              placeholder="e.g., KLM, Flixbus, SNCF"
+            />
 
             {/* Amount section - different for CAR mode */}
             {formData.modeOfTransport === 'CAR' ? (

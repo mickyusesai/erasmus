@@ -73,6 +73,8 @@ const updateTravelItemSchema = z.object({
   isDriverCarpool: z.boolean().optional(),
   // Company / airline name
   companyName: z.string().nullable().optional(),
+  // Exclude from reimbursement
+  excludedFromReimbursement: z.boolean().optional(),
 });
 
 const declarationOnHonorSchema = z.object({
@@ -271,6 +273,16 @@ router.post(
       throw new ForbiddenError('Cannot upload documents after approval');
     }
 
+    // Enforce 15-document limit
+    const existingDocCount = await prisma.document.count({
+      where: { participantId: participant.id },
+    });
+    if (existingDocCount >= 15) {
+      throw new ValidationError(
+        'You have reached the maximum of 15 documents. Only upload documents for travel items you will claim reimbursement for. If you have additional evidence, you can add more detail manually after AI consolidation.'
+      );
+    }
+
     const storage = getStorageService();
 
     // Generate storage path
@@ -466,6 +478,9 @@ const createTravelItemSchema = z.object({
   // Car travel specific
   distanceKm: z.number().nullable().optional(),
   isDriverCarpool: z.boolean().nullable().optional(),
+  // Company / airline name and comment
+  companyName: z.string().nullable().optional(),
+  comment: z.string().nullable().optional(),
 });
 
 /**
@@ -531,6 +546,9 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
       // Car travel specific fields
       distanceKm: result.data.distanceKm || null,
       isDriverCarpool: result.data.isDriverCarpool ?? false,
+      // Optional fields
+      companyName: result.data.companyName || null,
+      comment: result.data.comment || null,
     },
   });
 
@@ -1259,6 +1277,62 @@ router.delete('/declarations-of-travel/:id', participantAuth, asyncHandler(async
   });
 
   res.json({ success: true });
+}));
+
+/**
+ * PATCH /api/participant/declarations-of-travel/:id
+ * Update a declaration of travel (e.g. reassign to a different travel item)
+ */
+const updateDeclarationSchema = z.object({
+  travelItemId: z.string().uuid().nullable().optional(),
+});
+
+router.patch('/declarations-of-travel/:id', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot modify declarations after approval');
+  }
+
+  const result = updateDeclarationSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const declaration = await prisma.declarationOfTravel.findFirst({
+    where: { id: req.params.id, participantId: participant.id },
+  });
+
+  if (!declaration) {
+    throw new NotFoundError('Declaration not found');
+  }
+
+  // If travelItemId is provided, verify it belongs to this participant
+  if (result.data.travelItemId) {
+    const travelItem = await prisma.travelItem.findFirst({
+      where: { id: result.data.travelItemId, participantId: participant.id },
+    });
+    if (!travelItem) {
+      throw new NotFoundError('Travel item not found');
+    }
+  }
+
+  const updated = await prisma.declarationOfTravel.update({
+    where: { id: declaration.id },
+    data: { travelItemId: result.data.travelItemId },
+  });
+
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId: participant.id,
+      userType: 'PARTICIPANT',
+      fieldName: 'declaration.travelItemId',
+      previousValue: declaration.travelItemId ?? '(none)',
+      newValue: result.data.travelItemId ?? '(none)',
+    },
+  });
+
+  res.json(updated);
 }));
 
 /**

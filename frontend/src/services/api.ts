@@ -517,6 +517,15 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  updateDeclarationOfTravel: async (token: string, declarationId: string, data: { travelItemId?: string | null }) => {
+    const res = await fetch(`${API_BASE}/participant/declarations-of-travel/${declarationId}?token=${token}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<DeclarationOfTravel>(res);
+  },
+
   // Dissemination Activities
   getDisseminationStatus: async (token: string) => {
     const res = await fetch(`${API_BASE}/participant/dissemination/status?token=${token}`);
@@ -1779,3 +1788,149 @@ export interface SocialMediaPost {
   description?: string;
   uploadedAt: string;
 }
+
+// =============================================================================
+// Super Admin API
+// =============================================================================
+
+function getSuperAdminHeaders(): HeadersInit {
+  const token = localStorage.getItem('super-admin-token');
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+export interface SuperAdminParticipantSummary {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  status: string;
+  magicLinkToken: string;
+  magicLinkActive: boolean;
+  tokenExpiresAt?: string;
+  createdAt: string;
+}
+
+export interface SuperAdminProject {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  participants: SuperAdminParticipantSummary[];
+}
+
+export interface SuperAdminPurchase {
+  id: string;
+  type: string;
+  amountCents: number;
+  currency: string;
+  creditsGranted: number;
+  status: string;
+  completedAt?: string;
+  createdAt: string;
+}
+
+export interface SuperAdminOrg {
+  id: string;
+  name: string;
+  email: string;
+  projectCredits: number;
+  hasAnnualLicense: boolean;
+  annualLicenseExpiresAt?: string;
+  isActive: boolean;
+  createdAt: string;
+  projects: SuperAdminProject[];
+  purchases: SuperAdminPurchase[];
+}
+
+export const superAdminApi = {
+  getOrganisations: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ organisations: SuperAdminOrg[]; stats: { totalOrganisations: number; totalProjects: number; totalCreditsOutstanding: number } }>(res);
+  },
+
+  getOrganisation: async (id: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${id}`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ organisation: SuperAdminOrg }>(res);
+  },
+
+  updateOrgEmail: async (id: string, email: string, reason: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${id}`, {
+      method: 'PATCH',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ email, reason }),
+    });
+    return handleResponse<{ message: string; organisation: SuperAdminOrg }>(res);
+  },
+
+  grantCredits: async (orgId: string, credits: number) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${orgId}/grant-credits`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ credits }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  toggleOrgActive: async (orgId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${orgId}/toggle-active`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; organisation: SuperAdminOrg }>(res);
+  },
+
+  forceReopenParticipant: async (participantId: string, message?: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${participantId}/force-reopen`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ message }),
+    });
+    return handleResponse<{ message: string; previousStatus: string }>(res);
+  },
+
+  regenerateParticipantToken: async (participantId: string, sendEmail: boolean) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${participantId}/regenerate-token`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ sendEmail }),
+    });
+    return handleResponse<{ message: string; newToken: string; magicLink: string; tokenExpiresAt: string }>(res);
+  },
+
+  mergeParticipants: async (targetId: string, sourceId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${targetId}/merge-from/${sourceId}`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; targetId: string; sourceDeleted: string }>(res);
+  },
+
+  transferParticipant: async (participantId: string, targetProjectId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${participantId}/transfer-to-project`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ targetProjectId }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  recalculateTokenExpiry: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/projects/${projectId}/recalculate-token-expiry`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; participantsUpdated: number; newTokenExpiresAt: string }>(res);
+  },
+
+  refundPurchase: async (purchaseId: string, reason: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/purchases/${purchaseId}/refund`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ reason }),
+    });
+    return handleResponse<{ message: string; creditsRestored: number }>(res);
+  },
+};

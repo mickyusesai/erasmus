@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { LogOut, Building2, CreditCard, Users, Plus, RefreshCw } from 'lucide-react';
+import { LogOut, Building2, CreditCard, Users, Plus, RefreshCw, ExternalLink } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
@@ -258,13 +258,22 @@ export default function SuperAdminDashboard() {
                         )}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => openGrantModal(org)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 text-white text-sm font-medium rounded-lg transition-colors"
-                        >
-                          <Plus className="w-4 h-4" />
-                          Grant
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => openGrantModal(org)}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 text-white text-sm font-medium rounded-lg transition-colors"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Grant
+                          </button>
+                          <Link
+                            to={`/super-admin/org/${org.id}`}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            Manage
+                          </Link>
+                        </div>
                       </td>
                     </tr>
                   ))

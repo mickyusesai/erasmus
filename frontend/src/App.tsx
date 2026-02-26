@@ -24,6 +24,7 @@ import OrgResetPassword from './pages/organisation/ResetPassword';
 // Super Admin pages
 import SuperAdminLogin from './pages/superadmin/Login';
 import SuperAdminDashboard from './pages/superadmin/Dashboard';
+import SuperAdminOrgDetail from './pages/superadmin/OrgDetail';
 
 // Participant pages
 import ParticipantLayout from './components/participant/ParticipantLayout';
@@ -75,6 +76,7 @@ function App() {
       {/* Super Admin routes */}
       <Route path="/super-admin/login" element={<SuperAdminLogin />} />
       <Route path="/super-admin/dashboard" element={<SuperAdminDashboard />} />
+      <Route path="/super-admin/org/:id" element={<SuperAdminOrgDetail />} />
 
       {/* Participant routes */}
       <Route path="/reimbursement" element={<ParticipantLayout />}>
