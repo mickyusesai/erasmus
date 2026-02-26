@@ -146,11 +146,9 @@ function TokenResultModal({
 function ProjectSection({
   project,
   orgId,
-  allProjects,
 }: {
   project: SuperAdminProject;
   orgId: string;
-  allProjects: SuperAdminProject[];
 }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -555,7 +553,6 @@ export default function SuperAdminOrgDetail() {
                   key={project.id}
                   project={project}
                   orgId={org.id}
-                  allProjects={org.projects}
                 />
               ))
             )}
