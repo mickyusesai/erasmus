@@ -950,10 +950,10 @@ Do NOT include in warnings (these are handled elsewhere):
 
       const response = await this.client.messages.create({
         model: this.model,
-        max_tokens: 24000,
+        max_tokens: 28000,
         thinking: {
           type: 'enabled',
-          budget_tokens: 10000, // Extended thinking budget; remaining ~14k for the JSON response
+          budget_tokens: 12000, // ~12k for reasoning, ~16k available for the JSON response
         } as Anthropic.ThinkingConfigParam,
         messages: [
           {
