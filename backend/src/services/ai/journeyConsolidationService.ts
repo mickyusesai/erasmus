@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
@@ -19,15 +19,15 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
  * - The full journey story: home → event location → home
  */
 export class JourneyConsolidationService {
-  private client: OpenAI;
-  private model: string = 'gpt-5.2'; // GPT-5.2 with native PDF and vision support
+  private client: Anthropic;
+  private model: string = 'claude-sonnet-4-6';
 
   constructor() {
-    this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      timeout: 10 * 60 * 1000, // 10-minute safety net — prevents infinite hangs if OpenAI stops responding
+    this.client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: 10 * 60 * 1000, // 10-minute safety net
     });
-    console.log(`[Consolidation Service] Using OpenAI ${this.model} for document extraction and analysis`);
+    console.log(`[Consolidation Service] Using Anthropic ${this.model} for document extraction and analysis`);
   }
 
   /**
@@ -94,25 +94,19 @@ export class JourneyConsolidationService {
     const isPdf = mimeType.includes('pdf');
 
     // Build the content array for the API request
-    // GPT-5.2 supports both images and PDFs natively
     type ContentPart =
-      | { type: 'image_url'; image_url: { url: string; detail: 'high' | 'low' | 'auto' } }
-      | { type: 'file'; file: { file_data: string; filename: string } }
+      | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+      | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string } }
       | { type: 'text'; text: string };
 
     const contentParts: ContentPart[] = [];
 
     if (isPdf) {
-      // Send PDF directly - GPT-5.2 has native PDF support
       const base64Data = fileBuffer.toString('base64');
       console.log(`[Consolidation] Sending PDF directly (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
-
       contentParts.push({
-        type: 'file',
-        file: {
-          file_data: `data:application/pdf;base64,${base64Data}`,
-          filename: 'document.pdf',
-        },
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
       });
     } else {
       // Process image - resize if needed
@@ -124,11 +118,8 @@ export class JourneyConsolidationService {
       else if (mimeType.includes('webp')) mediaType = 'image/webp';
 
       contentParts.push({
-        type: 'image_url',
-        image_url: {
-          url: `data:${mediaType};base64,${base64Data}`,
-          detail: 'high',
-        },
+        type: 'image',
+        source: { type: 'base64', media_type: mediaType, data: base64Data },
       });
     }
 
@@ -275,21 +266,23 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
     try {
       console.log(`[Extraction] Quick extraction for UI feedback using ${this.model}`);
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.client.messages.create({
         model: this.model,
-        max_completion_tokens: 2000, // Light extraction - keep it fast
-        reasoning_effort: 'low',
+        max_tokens: 2000, // Light extraction - keep it fast, no extended thinking
         messages: [
           {
             role: 'user',
-            content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
+            content: contentParts as Anthropic.MessageParam['content'],
           },
         ],
       });
 
-      const responseText = response.choices[0]?.message?.content;
+      const responseText = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map(b => b.text)
+        .join('');
       if (!responseText) {
-        throw new Error('No response from OpenAI');
+        throw new Error('No response from Anthropic');
       }
 
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -896,8 +889,8 @@ Do NOT include in warnings (these are handled elsewhere):
       const storageService = getStorageService();
 
       type ContentPart =
-        | { type: 'image_url'; image_url: { url: string; detail: 'high' | 'low' | 'auto' } }
-        | { type: 'file'; file: { file_data: string; filename: string } }
+        | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+        | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string } }
         | { type: 'text'; text: string };
 
       const contentParts: ContentPart[] = [];
@@ -917,15 +910,11 @@ Do NOT include in warnings (these are handled elsewhere):
           });
 
           if (isPdf) {
-            // Send PDF directly
             const base64Data = fileBuffer.toString('base64');
             console.log(`[Consolidation] Adding document ${i + 1}: PDF (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
             contentParts.push({
-              type: 'file',
-              file: {
-                file_data: `data:application/pdf;base64,${base64Data}`,
-                filename: `document_${i + 1}.pdf`,
-              },
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
             });
           } else {
             // Process image - resize if needed
@@ -938,11 +927,8 @@ Do NOT include in warnings (these are handled elsewhere):
 
             console.log(`[Consolidation] Adding document ${i + 1}: ${mediaType} (${(processedBuffer.length / 1024).toFixed(1)}KB)`);
             contentParts.push({
-              type: 'image_url',
-              image_url: {
-                url: `data:${mediaType};base64,${base64Data}`,
-                detail: 'high',
-              },
+              type: 'image',
+              source: { type: 'base64', media_type: mediaType, data: base64Data },
             });
           }
         } catch (docError) {
@@ -960,23 +946,30 @@ Do NOT include in warnings (these are handled elsewhere):
         text: prompt + `\n\nPREVIOUS EXTRACTION SUMMARIES (for reference - verify against actual documents above):\n${JSON.stringify(extractionSummary, null, 2)}`,
       });
 
-      console.log(`[Consolidation] Using OpenAI ${this.model} for journey consolidation with ${contentParts.length} content parts`);
+      console.log(`[Consolidation] Using Anthropic ${this.model} with extended thinking for journey consolidation with ${contentParts.length} content parts`);
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.client.messages.create({
         model: this.model,
-        max_completion_tokens: 16000,
-        reasoning_effort: 'high',
+        max_tokens: 24000,
+        thinking: {
+          type: 'enabled',
+          budget_tokens: 10000, // Extended thinking budget; remaining ~14k for the JSON response
+        } as Anthropic.ThinkingConfigParam,
         messages: [
           {
             role: 'user',
-            content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
+            content: contentParts as Anthropic.MessageParam['content'],
           },
         ],
       });
 
-      const responseText = response.choices[0]?.message?.content;
+      // Filter out thinking blocks — only keep the text output
+      const responseText = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map(b => b.text)
+        .join('');
       if (!responseText) {
-        throw new Error('No response from OpenAI');
+        throw new Error('No response from Anthropic');
       }
 
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
