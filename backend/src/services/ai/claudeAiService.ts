@@ -628,13 +628,12 @@ export async function generateParticipantReview(data: {
   } | null;
   bankDetailsComplete: boolean;
 }): Promise<(ReviewFinding & { travelItemId?: string | null })[]> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
   }
 
-  const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey });
+  const client = new Anthropic({ apiKey });
 
   // Build rules section from configurable rules
   const { buildRulesPrompt } = await import('./reviewRules.js');
@@ -720,14 +719,13 @@ IMPORTANT RULES:
 - Return ONLY the JSON array`;
 
   try {
-    const response = await client.chat.completions.create({
-      model: 'gpt-5.2',
-      max_completion_tokens: 8000,
-      reasoning_effort: 'high',
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
-    } as any);
+    });
 
-    const text = response.choices[0]?.message?.content?.trim() || '[]';
+    const text = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]';
 
     // Parse JSON from response (handle potential markdown wrapping)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
