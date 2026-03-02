@@ -404,6 +404,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         project: true,
         documents: {
           include: { extraction: true },
+          orderBy: { createdAt: 'asc' },
         },
         travelItems: true,
       },
@@ -908,6 +909,13 @@ Do NOT include in warnings (these are handled elsewhere):
           const fileBuffer = await storageService.retrieve(doc.storedFilePath);
           const isPdf = doc.mimeType.includes('pdf');
 
+          // Add the text label BEFORE the document content so the AI clearly
+          // knows which document (and UUID) it is about to see
+          contentParts.push({
+            type: 'text',
+            text: `[Document ${i + 1} - ID: ${doc.id}]`,
+          });
+
           if (isPdf) {
             // Send PDF directly
             const base64Data = fileBuffer.toString('base64');
@@ -937,12 +945,6 @@ Do NOT include in warnings (these are handled elsewhere):
               },
             });
           }
-
-          // Add a text label for this document
-          contentParts.push({
-            type: 'text',
-            text: `[Document ${i + 1} - ID: ${doc.id}]`,
-          });
         } catch (docError) {
           console.error(`[Consolidation] Failed to load document ${doc.id}:`, docError);
           contentParts.push({
