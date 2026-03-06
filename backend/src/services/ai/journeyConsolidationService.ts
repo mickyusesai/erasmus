@@ -26,6 +26,7 @@ export class JourneyConsolidationService {
     this.client = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
       timeout: 10 * 60 * 1000, // 10-minute safety net
+      maxRetries: 6, // Retry up to 6x on rate limit (SDK respects retry-after header automatically)
     });
     console.log(`[Consolidation Service] Using Anthropic ${this.model} for document extraction and analysis`);
   }

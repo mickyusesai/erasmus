@@ -633,7 +633,7 @@ export async function generateParticipantReview(data: {
     return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
   }
 
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, maxRetries: 6 });
 
   // Build rules section from configurable rules
   const { buildRulesPrompt } = await import('./reviewRules.js');
