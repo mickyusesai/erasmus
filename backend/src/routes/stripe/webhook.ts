@@ -46,6 +46,18 @@ router.post(
 
       const credits = parseInt(creditsGranted || '0', 10);
 
+      // Retrieve the hosted invoice URL if Stripe generated one
+      let invoiceUrl: string | null = null;
+      if (typeof session.invoice === 'string') {
+        try {
+          const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+          const invoice = await stripe.invoices.retrieve(session.invoice);
+          invoiceUrl = invoice.hosted_invoice_url ?? null;
+        } catch (invoiceErr) {
+          console.error('[Stripe Webhook] Failed to retrieve invoice URL:', invoiceErr);
+        }
+      }
+
       try {
         await prisma.$transaction([
           prisma.purchase.update({
@@ -56,6 +68,7 @@ router.post(
               stripePaymentIntentId: typeof session.payment_intent === 'string'
                 ? session.payment_intent
                 : session.payment_intent?.id ?? null,
+              stripeInvoiceUrl: invoiceUrl,
             },
           }),
           prisma.organisation.update({

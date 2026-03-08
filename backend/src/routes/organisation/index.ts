@@ -505,6 +505,7 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
       quantity: 1,
     }],
     mode: 'payment',
+    invoice_creation: { enabled: true },
     success_url: `${frontendUrl}/org/billing?success=1`,
     cancel_url: `${frontendUrl}/org/billing`,
     metadata: {
