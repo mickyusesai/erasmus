@@ -508,7 +508,7 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
     invoice_creation: {
       enabled: true,
       invoice_data: {
-        footer: 'Vrijgesteld van BTW op grond van de Kleineondernemersregeling (KOR), artikel 25 Wet OB 1968, en de EU-Kleineondernemersregeling (EU-KOR), EU-richtlijn 2020/285. BTW-tarief: 0%.',
+        footer: 'VAT exempt under the Dutch Small Business Scheme (KOR), Article 25 Dutch VAT Act 1968, and the EU Small Business Scheme (EU-KOR), EU Directive 2020/285. VAT rate: 0%.',
       },
     },
     success_url: `${frontendUrl}/org/billing?success=1`,
