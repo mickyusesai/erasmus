@@ -505,7 +505,12 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
       quantity: 1,
     }],
     mode: 'payment',
-    invoice_creation: { enabled: true },
+    invoice_creation: {
+      enabled: true,
+      invoice_data: {
+        footer: 'Vrijgesteld van BTW op grond van de Kleineondernemersregeling (KOR), artikel 25 Wet OB 1968.',
+      },
+    },
     success_url: `${frontendUrl}/org/billing?success=1`,
     cancel_url: `${frontendUrl}/org/billing`,
     metadata: {
