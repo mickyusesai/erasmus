@@ -120,6 +120,7 @@ export interface EmailService {
     organisationName: string,
     credits: number,
     totalCredits: number,
-    dashboardUrl: string
+    dashboardUrl: string,
+    invoiceUrl?: string | null
   ): Promise<EmailResult>;
 }

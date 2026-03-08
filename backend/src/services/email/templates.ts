@@ -160,7 +160,7 @@ export function creditPurchaseSubject(credits: number): string {
   return `Your ${credits} EasyReimburse Credit${credits !== 1 ? 's are' : ' is'} Ready`;
 }
 
-export function creditPurchaseText(organisationName: string, credits: number, totalCredits: number, dashboardUrl: string): string {
+export function creditPurchaseText(organisationName: string, credits: number, totalCredits: number, dashboardUrl: string, invoiceUrl?: string | null): string {
   return `Hello ${organisationName},
 
 Your purchase was successful! ${credits} project credit${credits !== 1 ? 's have' : ' has'} been added to your account.
@@ -170,7 +170,7 @@ You now have ${totalCredits} credit${totalCredits !== 1 ? 's' : ''} available.
 Each credit lets you create one project with up to 60 participants. If a project grows beyond 60 participants, you can expand its capacity by 60 using one additional credit — directly from the project page.
 
 Go to your dashboard to create a new project: ${dashboardUrl}
-
+${invoiceUrl ? `\nView your invoice: ${invoiceUrl}\n` : ''}
 If you have any questions, feel free to reach out.
 
 Best regards,
@@ -180,7 +180,7 @@ The EasyReimburse Team
 This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
 }
 
-export function creditPurchaseHtml(organisationName: string, credits: number, totalCredits: number, dashboardUrl: string): string {
+export function creditPurchaseHtml(organisationName: string, credits: number, totalCredits: number, dashboardUrl: string, invoiceUrl?: string | null): string {
   return wrapInLayout(`
     <p>Hello <strong>${organisationName}</strong>,</p>
     ${successBox(`Your purchase was successful! <strong>${credits} project credit${credits !== 1 ? 's have' : ' has'}</strong> been added to your account.`)}
@@ -190,6 +190,7 @@ export function creditPurchaseHtml(organisationName: string, credits: number, to
     </div>
     ${infoBox('Each credit lets you create one project with up to <strong>60 participants</strong>. If a project grows beyond 60, you can expand its capacity by 60 using one additional credit — directly from the project page.')}
     ${button(dashboardUrl, 'Go to Dashboard')}
+    ${invoiceUrl ? `<p style="text-align: center; margin-top: 16px; font-size: 14px; color: #6b7280;">Need a copy for your records? <a href="${invoiceUrl}" style="color: #7c3aed;">View your invoice</a></p>` : ''}
   `);
 }
 

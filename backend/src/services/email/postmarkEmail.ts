@@ -120,12 +120,12 @@ export class PostmarkEmailService implements EmailService {
     });
   }
 
-  async sendCreditPurchase(to: string, organisationName: string, credits: number, totalCredits: number, dashboardUrl: string): Promise<EmailResult> {
+  async sendCreditPurchase(to: string, organisationName: string, credits: number, totalCredits: number, dashboardUrl: string, invoiceUrl?: string | null): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.creditPurchaseSubject(credits),
-      text: templates.creditPurchaseText(organisationName, credits, totalCredits, dashboardUrl),
-      html: templates.creditPurchaseHtml(organisationName, credits, totalCredits, dashboardUrl),
+      text: templates.creditPurchaseText(organisationName, credits, totalCredits, dashboardUrl, invoiceUrl),
+      html: templates.creditPurchaseHtml(organisationName, credits, totalCredits, dashboardUrl, invoiceUrl),
     });
   }
 }

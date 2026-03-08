@@ -84,7 +84,7 @@ router.post(
           const org = await prisma.organisation.findUnique({ where: { id: organisationId } });
           if (org) {
             const dashboardUrl = `${process.env.FRONTEND_URL || 'https://app.easyreimburse.ai'}/org/dashboard`;
-            await getEmailService().sendCreditPurchase(org.email, org.name, credits, org.projectCredits, dashboardUrl);
+            await getEmailService().sendCreditPurchase(org.email, org.name, credits, org.projectCredits, dashboardUrl, invoiceUrl);
           }
         } catch (emailErr) {
           // Non-fatal — credits are already granted, just log the failure
