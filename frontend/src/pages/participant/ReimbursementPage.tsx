@@ -446,6 +446,7 @@ export default function ReimbursementPage() {
                       toast.error('Failed to submit');
                     }
                   } else {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                     setCurrentStep(2);
                   }
                 }}
@@ -456,8 +457,8 @@ export default function ReimbursementPage() {
               <Step2CheckData
                 data={data}
                 token={token}
-                onBack={() => setCurrentStep(1)}
-                onNext={() => setCurrentStep(3)}
+                onBack={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(1); }}
+                onNext={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(3); }}
                 aiWarnings={aiConsolidationWarnings}
               />
             )}
@@ -465,7 +466,7 @@ export default function ReimbursementPage() {
               <Step3Confirm
                 data={data}
                 token={token}
-                onBack={() => setCurrentStep(2)}
+                onBack={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(2); }}
               />
             )}
           </>

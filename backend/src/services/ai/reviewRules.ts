@@ -47,7 +47,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'critical',
     label: 'Missing Price',
     description: 'Travel item has no price — cannot reimburse',
-    prompt: 'If a travel item has PRICE MISSING → flag it, can\'t reimburse without amount.',
+    prompt: 'If a travel item has PRICE MISSING → flag it, can\'t reimburse without amount. IMPORTANT: Do NOT flag this for items where amountIncludedInRoundTrip=true — the price is correctly counted on the outbound leg.',
     enabled: true,
   },
   {
@@ -55,7 +55,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'critical',
     label: 'No Document',
     description: 'Travel item has no supporting document',
-    prompt: 'If a travel item has NO DOCUMENT LINKED → flag it, no proof of travel.',
+    prompt: 'If a travel item that EXISTS IN THE TRAVEL ITEMS LIST has NO DOCUMENT LINKED → flag it, no proof of travel. Only apply this to items actually present in the data.',
     enabled: true,
   },
 
@@ -121,11 +121,19 @@ export const REVIEW_RULES: ReviewRule[] = [
   // ─── INFORMATIONAL (good to know) ───
 
   {
+    id: 'missing-leg',
+    severity: 'info',
+    label: 'Missing Leg',
+    description: 'A journey leg that logically should exist is not in the travel items',
+    prompt: 'If the travel pattern suggests a journey leg (e.g. a return trip) that is NOT present in the TRAVEL ITEMS list → create an info finding: "The journey from [X] to [Y] seems not to be included in this reimbursement. Verify if this is correct." Do NOT say "no document" — the leg simply may not have been claimed (tourist leg, personal cost, etc.). IMPORTANT: Only flag legs you can reasonably infer from the existing items (e.g. if there is an outbound leg but no return). Do NOT invent legs that have no basis in the data.',
+    enabled: true,
+  },
+  {
     id: 'non-eur-no-purchase-date',
     severity: 'info',
     label: 'Exchange Rate',
     description: 'Non-EUR currency without purchase date for exchange rate',
-    prompt: 'Non-EUR currency without purchase date (exchange rate may be approximate). IMPORTANT: Do NOT flag this if the travel item already has a purchaseDate value — only flag when purchaseDate is actually null/missing. Do NOT flag this for return legs of round-trip bookings (amountIncludedInRoundTrip=true) — those don\'t need a purchase date since the price is on the outbound leg. Also, if the participant manually filled in the purchase date (manuallyEdited=true), mention that the purchase date was entered by the participant.',
+    prompt: 'ONLY apply this rule when the travel item\'s currency is NOT EUR. Never flag purchase date for EUR items. Non-EUR currency without purchase date (exchange rate may be approximate). IMPORTANT: Do NOT flag this if the travel item already has a purchaseDate value — only flag when purchaseDate is actually null/missing. Do NOT flag this for return legs of round-trip bookings (amountIncludedInRoundTrip=true) — those don\'t need a purchase date since the price is on the outbound leg. Also, if the participant manually filled in the purchase date (manuallyEdited=true), mention that the purchase date was entered by the participant.',
     enabled: true,
   },
   {
@@ -133,7 +141,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'info',
     label: 'Date Range',
     description: 'Travel dates more than 4 days outside project window',
-    prompt: 'Travel dates more than 4 days outside project window. IMPORTANT: 1-4 days before/after project dates is perfectly normal for travel — only flag when it\'s MORE than 4 days outside the window.',
+    prompt: 'Travel dates more than 4 days outside project window. IMPORTANT: 1-4 days before/after project dates is perfectly normal for travel — only flag when it\'s MORE than 4 days outside the window. If travel is within 4 days of the project window → do NOT create any finding about travel dates.',
     enabled: true,
   },
   {
@@ -142,7 +150,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     label: 'Bank Details',
     description: 'Bank details are incomplete',
     prompt: 'Bank details incomplete (missing IBAN, holder name, or BIC).',
-    enabled: true,
+    enabled: false,
   },
   {
     id: 'unlinked-documents',
@@ -180,8 +188,8 @@ export const REVIEW_RULES: ReviewRule[] = [
     id: 'luggage-fee',
     severity: 'info',
     label: 'Luggage Fee',
-    description: 'Luggage fee added from separate invoice',
-    prompt: 'If a luggage fee was added to a flight from a separate invoice → inform the org so they can verify the luggage invoice matches the flight.',
+    description: 'Luggage fee added from separate invoice — informational',
+    prompt: 'If a luggage fee was added to a flight from a separate invoice → inform the org that this participant bought luggage, mentioning the amount and booking reference. Keep it simple and informational — no action is required from the org.',
     enabled: true,
   },
 ];

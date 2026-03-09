@@ -324,6 +324,7 @@ Other important notes:
         documents: true,
         travelItems: true,
         declarationsOnHonor: true,
+        declarationsOfTravel: true,
       },
     });
 
@@ -395,11 +396,14 @@ Other important notes:
         const hasBoardingPass = participant.documents.some(
           (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_BOARDING_PASS
         );
-        const hasDeclaration = participant.declarationsOnHonor.some(
+        const hasDeclarationOnHonor = participant.declarationsOnHonor.some(
           (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_BOARDING_PASS
         );
+        const hasDeclarationOfTravel = participant.declarationsOfTravel.some(
+          (dec: { travelItemId: string | null }) => dec.travelItemId === item.id
+        );
 
-        if (!hasBoardingPass && !hasDeclaration) {
+        if (!hasBoardingPass && !hasDeclarationOnHonor && !hasDeclarationOfTravel) {
           missingItems.push({
             type: 'document',
             description: 'Boarding pass or declaration on honor required for flight',
@@ -479,6 +483,9 @@ Other important notes:
     for (const item of participant.travelItems) {
       if (!item.excludedFromReimbursement && item.amountEur !== null) {
         totalEur += item.amountEur;
+        if (item.luggageAmountEur !== null && item.luggageAmountEur !== undefined) {
+          totalEur += item.luggageAmountEur;
+        }
       }
     }
 
@@ -488,8 +495,13 @@ Other important notes:
     );
     const maxReimbursementAllowed = countryLimit?.maxReimbursementAmount || 0;
 
-    // Calculate amount to reimburse (capped at max, or 100% if no max is configured)
-    const amountToReimburse = maxReimbursementAllowed > 0
+    // If any travel item is a multi-person booking, do not apply the per-person cap
+    const hasMultiPersonBooking = participant.travelItems.some(
+      (item) => item.numberOfPassengers !== null && item.numberOfPassengers > 1
+    );
+
+    // Calculate amount to reimburse (capped at max, or 100% if no max is configured or multi-person)
+    const amountToReimburse = (maxReimbursementAllowed > 0 && !hasMultiPersonBooking)
       ? Math.min(totalEur, maxReimbursementAllowed)
       : totalEur;
 
@@ -710,9 +722,15 @@ IMPORTANT RULES:
 - Do NOT confuse the participant's home country (${data.participantCountry}) with the project country (${data.projectCountry})
 - Declaration of Travel = the replacement document EXISTS and needs checking, NOT that something is missing
 - NEVER flag bank detail fields (IBAN, BIC, holder name, bank name, address) as manual edits — participants always fill these in themselves
+- NEVER create any finding about bank details being entered, cleared, or changed in the changelog — this is always expected participant behavior
 - NEVER create a "Participant Note" finding unless the PARTICIPANT'S OWN NOTE field above actually contains text
 - For route matching, use geographic knowledge: match cities to their countries (Chisinau=Moldova, Skopje=North Macedonia, Amsterdam/Eindhoven=Netherlands, etc.)
 - numberOfPassengers=1 means ONE person, which is normal. Only flag shared bookings when numberOfPassengers is GREATER than 1.
+- The no-document-linked rule ONLY applies to travel items that exist in the TRAVEL ITEMS list. Never apply it to journey legs that are not in the list.
+- Do NOT flag name variations that are transliterations of the same name (e.g., Olexandr vs Oleksandr) — these are the same person.
+- For round-trip return legs (amountIncludedInRoundTrip=true), NEVER create any finding — a €0 price on the return leg is correct expected behavior.
+- For luggage fees, create exactly ONE informational finding. Do NOT create additional "Amount Check", "Invoice Check", or similar findings about the same booking amounts.
+- Do NOT flag document type misclassifications (e.g., a bus ticket stored as TRAIN_TICKET) — the type is assigned during upload and cannot be changed by the organisation, making this unactionable.
 - If everything is fine, pick ONE of these messages at random (vary your choice for each participant — never pick the same one twice in a row): "Everything looks perfect! Nothing to review here — go grab a coffee!", "Flawless submission! All documents check out. Time for a well-deserved break!", "All clear! This participant has their travel docs in perfect order. Gold star!", "Spotless! Every document, route, and amount checks out. Enjoy the free time!", "Nothing to flag here — this reimbursement is as clean as it gets!", "A+ submission! All checks passed with flying colors. You can skip to the next one!", "Zero issues found. This participant deserves an award for organisation!", "Everything matches perfectly. We checked twice — still perfect!". Return it as: [{"severity":"info","message":"<your chosen message>","category":"All Clear"}]
 - Maximum 12 findings, prioritize critical > important > info
 - travelItemIndex MUST be a valid 1-based index from the TRAVEL ITEMS list, or null. Do NOT guess.
