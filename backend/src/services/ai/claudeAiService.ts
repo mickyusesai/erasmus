@@ -766,6 +766,15 @@ IMPORTANT RULES:
           category: f.category,
           travelItemId,
         };
+      })
+      // "No Document" findings must reference a real travel item — never an inferred/missing leg
+      .filter((f) => !(f.category === 'No Document' && f.travelItemId === null))
+      // "Low Confidence" findings must only appear when a document actually has confidence < 0.70
+      .filter((f) => {
+        if (f.category !== 'Low Confidence') return true;
+        // Extract all percentages from the message and verify at least one is genuinely < 70
+        const pcts = [...f.message.matchAll(/(\d+(?:\.\d+)?)%/g)].map((m) => parseFloat(m[1]));
+        return pcts.length === 0 || pcts.some((p) => p < 70);
       });
     return findings;
   } catch (error) {

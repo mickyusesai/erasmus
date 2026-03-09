@@ -106,7 +106,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'important',
     label: 'Manual Edit',
     description: 'Participant changed important fields in changelog',
-    prompt: 'If the changelog shows the participant changed important fields like amounts, routes, or dates (NOT just filling in empty fields — only flag actual changes from one value to another). Use the correct category: "Flight Edit" for flight numbers, "Route Edit" for locations, "Amount Edit" for prices. IMPORTANT: Do NOT flag changes to bank details fields (IBAN, BIC, account holder name, bank name, personal address fields) — participants always fill these in themselves, so any "change" is just them entering their data.',
+    prompt: 'If the changelog shows the participant changed important fields like amounts, routes, or dates (NOT just filling in empty fields — only flag actual changes from one value to another). Use the correct category: "Flight Edit" for flight numbers, "Route Edit" for locations, "Amount Edit" for prices. IMPORTANT: Do NOT flag changes to any of the following fields — participants always fill these in themselves and any edit is expected: IBAN, BIC, account holder name, bank name, address, street, city, country, postal code, zip code, phone number, personal details.',
     enabled: true,
   },
   {
