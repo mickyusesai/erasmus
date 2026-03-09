@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import prisma from '../../utils/prisma.js';
 import { getStorageService } from '../storage/index.js';
+import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 
 // ── Fonts ───────────────────────────────────────────────────────────────────
 const BUNDLED_FONT_DIR = path.join(__dirname, 'fonts');
@@ -81,6 +82,7 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
   });
 
   if (!participant) throw new Error('Participant not found');
+  participant.travelItems = sortTravelItemsByJourney(participant.travelItems);
 
   const exportTimestamp = new Date().toLocaleString('en-GB', {
     day: '2-digit', month: '2-digit', year: 'numeric',

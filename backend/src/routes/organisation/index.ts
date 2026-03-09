@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getEmailService } from '../../services/email/index.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { generateAuditPdf } from '../../services/pdf/index.js';
+import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import archiver from 'archiver';
 import multer from 'multer';
 
@@ -904,6 +905,7 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
   res.json({
     participant: {
       ...participant,
+      travelItems: sortTravelItemsByJourney(participant.travelItems),
       maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
       greenTravel: countryLimit?.greenTravel || false,
     },
@@ -1056,6 +1058,8 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     res.json({ findings: [] });
     return;
   }
+
+  participant.travelItems = sortTravelItemsByJourney(participant.travelItems);
 
   // Get country limit
   const countryLimit = await prisma.projectCountryLimit.findFirst({

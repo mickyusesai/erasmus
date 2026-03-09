@@ -9,6 +9,7 @@ import { getEmailService } from '../../services/email/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { ParticipantStatus, DocumentType, TransportMode } from '@prisma/client';
+import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -178,6 +179,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 
   res.json({
     ...participant,
+    travelItems: sortTravelItemsByJourney(participant.travelItems),
     maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
     disseminationStatus,
   });

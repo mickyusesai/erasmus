@@ -14,6 +14,7 @@ import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../servi
 import { getEmailService } from '../../services/email/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
+import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import disseminationRoutes from './dissemination.js';
 
 // Initialize the consolidation service
@@ -241,7 +242,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       organisation: data?.project.organisation || null,
     },
     documents: data?.documents,
-    travelItems: data?.travelItems,
+    travelItems: sortTravelItemsByJourney(data?.travelItems ?? []),
     reimbursementSummary: data?.reimbursementSummary,
     declarationsOnHonor: data?.declarationsOnHonor,
     declarationsOfTravel: data?.declarationsOfTravel,
@@ -1447,6 +1448,8 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
       });
 
       if (!fullParticipant || fullParticipant.travelItems.length === 0) return;
+
+      fullParticipant.travelItems = sortTravelItemsByJourney(fullParticipant.travelItems);
 
       const countryLimit = await prisma.projectCountryLimit.findFirst({
         where: { projectId: fullParticipant.projectId, country: fullParticipant.country },
