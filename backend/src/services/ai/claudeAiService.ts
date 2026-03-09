@@ -714,6 +714,7 @@ Return a JSON array. Each finding:
 - "travelItemIndex": The 1-based index number of the travel item this finding relates to (from the TRAVEL ITEMS list above), or null if the finding is general / not about a specific travel item.
 
 IMPORTANT RULES:
+- ACTIONABILITY TEST (apply this to every potential finding before including it): Ask yourself "What specific action must the organisation take, and do I have concrete evidence of a real problem?" If your only answer is "check" or "verify" with no actual evidence of wrongdoing, do NOT include it.
 - ONLY report PROBLEMS or things that need attention. NEVER report things that are fine/correct/matching/within limits.
 - Do NOT create findings saying "X is correct" or "X matches" or "X is within limits". The organisation only wants to see issues, not confirmations.
 - Examples of what NOT to report: "Home country matches", "Route matches expected pattern", "Bank details complete", "Total within limit", "Travel dates within range", "Document count matches", "Round-trip price counted correctly"
@@ -722,7 +723,7 @@ IMPORTANT RULES:
 - Do NOT confuse the participant's home country (${data.participantCountry}) with the project country (${data.projectCountry})
 - Declaration of Travel = the replacement document EXISTS and needs checking, NOT that something is missing
 - NEVER flag bank detail fields (IBAN, BIC, holder name, bank name, address) as manual edits — participants always fill these in themselves
-- NEVER create any finding about bank details being entered, cleared, or changed in the changelog — this is always expected participant behavior
+- NEVER create any finding about bank details being entered, cleared, or changed in the changelog — this is always expected participant behavior. This includes findings framed as "verify IBAN is correct" or "confirm bank details" where the ONLY source of concern is changelog activity — changelog evidence alone is NOT a valid reason to flag bank details.
 - NEVER create a "Participant Note" finding unless the PARTICIPANT'S OWN NOTE field above actually contains text
 - For route matching, use geographic knowledge: match cities to their countries (Chisinau=Moldova, Skopje=North Macedonia, Amsterdam/Eindhoven=Netherlands, etc.)
 - numberOfPassengers=1 means ONE person, which is normal. Only flag shared bookings when numberOfPassengers is GREATER than 1.
@@ -737,13 +738,18 @@ IMPORTANT RULES:
 - Return ONLY the JSON array`;
 
   try {
-    const response = await client.messages.create({
+    const response = await (client.messages.create as Function)({
       model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
+      max_tokens: 10000,
+      thinking: { type: 'enabled', budget_tokens: 8000 },
       messages: [{ role: 'user', content: prompt }],
     });
 
-    const text = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]';
+    // Extended thinking returns multiple content blocks; find the text block for JSON
+    const textBlock = (response.content as Array<{ type: string; text?: string }>).find(
+      (b) => b.type === 'text',
+    );
+    const text = textBlock?.text?.trim() ?? '[]';
 
     // Parse JSON from response (handle potential markdown wrapping)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
