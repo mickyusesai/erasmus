@@ -749,6 +749,20 @@ export const organisationApi = {
     return handleResponse<OrgBillingData>(res);
   },
 
+  // Affiliate
+  getAffiliate: async () => {
+    const res = await fetch(`${API_BASE}/organisation/affiliate`, { headers: getOrgAuthHeaders() });
+    return handleResponse<AffiliateDashboardData>(res);
+  },
+
+  requestAffiliatePayout: async () => {
+    const res = await fetch(`${API_BASE}/organisation/affiliate/request-payout`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; pendingBalanceCents: number; message: string }>(res);
+  },
+
   // Settings
   getSettings: async () => {
     const res = await fetch(`${API_BASE}/organisation/settings`, {
@@ -1168,7 +1182,7 @@ export interface OrgProjectDetail extends OrgProject {
 }
 
 export interface OrgDashboardData {
-  organisation: { id: string; name: string; email: string };
+  organisation: { id: string; name: string; email: string; isAffiliate?: boolean; affiliateActive?: boolean };
   credits: OrgCreditStatus;
   stats: { projectCount: number; totalParticipants: number };
   projects: OrgProject[];
@@ -1190,6 +1204,45 @@ export interface OrgPurchase {
 export interface OrgBillingData {
   credits: OrgCreditStatus & { projectCredits: number };
   purchases: OrgPurchase[];
+  organisation?: { isAffiliate: boolean; affiliateActive: boolean };
+}
+
+export interface AffiliateCustomerPurchase {
+  purchaseId: string;
+  completedAt: string | null;
+  purchaseType: string;
+  amountCents: number;
+  commissionCents: number;
+  commissionStatus: 'PENDING' | 'PAID' | 'REVERSED';
+}
+
+export interface AffiliateCustomer {
+  orgName: string;
+  linkedAt: string;
+  purchases: AffiliateCustomerPurchase[];
+}
+
+export interface AffiliateDashboardData {
+  affiliateCode: string | null;
+  commissionRate: number | null;
+  affiliateActive: boolean;
+  linkedCustomers: AffiliateCustomer[];
+  totalEarnedCents: number;
+  pendingBalanceCents: number;
+  minPayoutCents: number;
+}
+
+export interface SuperAdminAffiliate {
+  id: string;
+  name: string;
+  email: string;
+  affiliateCode: string | null;
+  affiliateActive: boolean;
+  commissionRate: number | null;
+  linkedCustomerCount: number;
+  totalEarnedCents: number;
+  pendingBalanceCents: number;
+  createdAt: string;
 }
 
 export interface CreateOrgProjectData {
@@ -1932,5 +1985,42 @@ export const superAdminApi = {
       body: JSON.stringify({ reason }),
     });
     return handleResponse<{ message: string; creditsRestored: number }>(res);
+  },
+
+  // Affiliates
+  getAffiliates: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ affiliates: SuperAdminAffiliate[] }>(res);
+  },
+
+  createAffiliate: async (data: { organisationId: string; affiliateCode: string; commissionRate: number }) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  toggleAffiliateActive: async (orgId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/${orgId}/toggle-active`, {
+      method: 'PATCH',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; affiliateActive: boolean }>(res);
+  },
+
+  getAffiliatePayoutRequests: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/payout-requests`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ affiliates: Array<{ id: string; name: string; email: string; affiliateCode: string | null; pendingBalanceCents: number }> }>(res);
+  },
+
+  confirmAffiliatePayout: async (orgId: string, notes?: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/${orgId}/confirm-payout`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ notes }),
+    });
+    return handleResponse<{ payout: { id: string; amountCents: number }; commissionsUpdated: number; totalCents: number }>(res);
   },
 };

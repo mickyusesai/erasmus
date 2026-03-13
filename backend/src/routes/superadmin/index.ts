@@ -653,11 +653,205 @@ router.post('/purchases/:purchaseId/refund', asyncHandler(async (req: Request, r
 
   console.log(`[SuperAdmin] Refunded purchase ${purchaseId} for org ${purchase.organisationId} (${purchase.organisation.name}). Credits restored: ${creditsToRestore}. Reason: ${reason}`);
 
+  // Reverse any PENDING affiliate commission for this purchase (non-fatal)
+  let commissionReversed = false;
+  try {
+    const commission = await prisma.affiliateCommission.findUnique({ where: { purchaseId } });
+    if (commission?.status === 'PENDING') {
+      await prisma.affiliateCommission.update({
+        where: { id: commission.id },
+        data: { status: 'REVERSED' },
+      });
+      commissionReversed = true;
+      console.log(`[SuperAdmin] Reversed PENDING commission ${commission.id} for refunded purchase ${purchaseId}`);
+    }
+  } catch (commErr) {
+    console.error('[SuperAdmin] Failed to reverse commission (non-fatal):', commErr);
+  }
+
   res.json({
     message: `Purchase refunded. ${creditsToRestore > 0 ? `${creditsToRestore} credit(s) removed from organisation.` : 'No credits to restore.'}`,
     purchase: updatedPurchase,
     creditsRestored: creditsToRestore,
+    commissionReversed,
   });
+}));
+
+// =============================================================================
+// AFFILIATE MANAGEMENT
+// =============================================================================
+
+/**
+ * GET /api/super-admin/affiliates
+ * List all affiliate organisations with their stats
+ */
+router.get('/affiliates', asyncHandler(async (req: Request, res: Response) => {
+  const affiliates = await prisma.organisation.findMany({
+    where: { isAffiliate: true },
+    orderBy: { name: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      affiliateCode: true,
+      affiliateActive: true,
+      commissionRate: true,
+      createdAt: true,
+      affiliateLinks: {
+        select: {
+          id: true,
+          commissions: { where: { status: 'PENDING' }, select: { amountCents: true } },
+        },
+      },
+      commissionsEarned: {
+        where: { status: { not: 'REVERSED' } },
+        select: { amountCents: true },
+      },
+    },
+  });
+
+  const result = affiliates.map((a) => ({
+    id: a.id,
+    name: a.name,
+    email: a.email,
+    affiliateCode: a.affiliateCode,
+    affiliateActive: a.affiliateActive,
+    commissionRate: a.commissionRate,
+    createdAt: a.createdAt,
+    linkedCustomerCount: a.affiliateLinks.length,
+    totalEarnedCents: a.commissionsEarned.reduce((s, c) => s + c.amountCents, 0),
+    pendingBalanceCents: a.affiliateLinks.flatMap((l) => l.commissions).reduce((s, c) => s + c.amountCents, 0),
+  }));
+
+  res.json({ affiliates: result });
+}));
+
+/**
+ * POST /api/super-admin/affiliates
+ * Make an existing organisation an affiliate
+ */
+const createAffiliateSchema = z.object({
+  organisationId: z.string().uuid(),
+  affiliateCode: z.string().min(2).max(50).regex(/^[A-Z0-9_-]+$/i, 'Code must be alphanumeric (A-Z, 0-9, -, _)'),
+  commissionRate: z.number().min(0.01).max(0.99),
+});
+
+router.post('/affiliates', asyncHandler(async (req: Request, res: Response) => {
+  const result = createAffiliateSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+
+  const { organisationId, affiliateCode, commissionRate } = result.data;
+  const normalizedCode = affiliateCode.toUpperCase();
+
+  const org = await prisma.organisation.findUnique({ where: { id: organisationId } });
+  if (!org) throw new NotFoundError('Organisation not found');
+  if (org.isAffiliate) throw new ValidationError('Organisation is already an affiliate');
+
+  const codeConflict = await prisma.organisation.findFirst({ where: { affiliateCode: normalizedCode } });
+  if (codeConflict) throw new ValidationError(`Affiliate code "${normalizedCode}" is already in use`);
+
+  const updated = await prisma.organisation.update({
+    where: { id: organisationId },
+    data: { isAffiliate: true, affiliateCode: normalizedCode, affiliateActive: true, commissionRate },
+  });
+
+  console.log(`[SuperAdmin] Made org ${organisationId} (${org.name}) an affiliate with code ${normalizedCode}`);
+  res.json({ message: `${org.name} is now an affiliate`, organisation: updated });
+}));
+
+/**
+ * PATCH /api/super-admin/affiliates/:orgId/toggle-active
+ * Activate or deactivate an affiliate (existing links and commissions unaffected)
+ */
+router.patch('/affiliates/:orgId/toggle-active', asyncHandler(async (req: Request, res: Response) => {
+  const { orgId } = req.params;
+  const org = await prisma.organisation.findUnique({ where: { id: orgId } });
+  if (!org) throw new NotFoundError('Organisation not found');
+  if (!org.isAffiliate) throw new ValidationError('Organisation is not an affiliate');
+
+  const updated = await prisma.organisation.update({
+    where: { id: orgId },
+    data: { affiliateActive: !org.affiliateActive },
+  });
+
+  res.json({
+    message: `Affiliate ${updated.name} is now ${updated.affiliateActive ? 'active' : 'deactivated'}`,
+    affiliateActive: updated.affiliateActive,
+  });
+}));
+
+/**
+ * GET /api/super-admin/affiliates/payout-requests
+ * List all affiliates that have a pending balance > 0
+ */
+router.get('/affiliates/payout-requests', asyncHandler(async (req: Request, res: Response) => {
+  const affiliates = await prisma.organisation.findMany({
+    where: { isAffiliate: true },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      affiliateCode: true,
+      affiliateLinks: {
+        select: { commissions: { where: { status: 'PENDING' }, select: { amountCents: true, id: true } } },
+      },
+    },
+  });
+
+  const withPending = affiliates
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      email: a.email,
+      affiliateCode: a.affiliateCode,
+      pendingBalanceCents: a.affiliateLinks.flatMap((l) => l.commissions).reduce((s, c) => s + c.amountCents, 0),
+    }))
+    .filter((a) => a.pendingBalanceCents > 0)
+    .sort((a, b) => b.pendingBalanceCents - a.pendingBalanceCents);
+
+  res.json({ affiliates: withPending });
+}));
+
+/**
+ * POST /api/super-admin/affiliates/:orgId/confirm-payout
+ * Confirm a payout: mark all PENDING commissions as PAID and log the payout
+ */
+const confirmPayoutSchema = z.object({ notes: z.string().optional() });
+
+router.post('/affiliates/:orgId/confirm-payout', asyncHandler(async (req: Request, res: Response) => {
+  const { orgId } = req.params;
+  const result = confirmPayoutSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+
+  const org = await prisma.organisation.findUnique({ where: { id: orgId } });
+  if (!org || !org.isAffiliate) throw new NotFoundError('Affiliate not found');
+
+  const links = await prisma.affiliateLink.findMany({
+    where: { affiliateId: orgId },
+    include: { commissions: { where: { status: 'PENDING' } } },
+  });
+  const pendingCommissions = links.flatMap((l) => l.commissions);
+
+  if (pendingCommissions.length === 0) {
+    throw new ValidationError('No pending commissions to pay out');
+  }
+
+  const totalCents = pendingCommissions.reduce((s, c) => s + c.amountCents, 0);
+  const confirmedBy = req.superAdmin!.email;
+
+  const payout = await prisma.$transaction(async (tx) => {
+    const p = await tx.affiliatePayout.create({
+      data: { affiliateId: orgId, amountCents: totalCents, confirmedBy, notes: result.data.notes },
+    });
+    await tx.affiliateCommission.updateMany({
+      where: { id: { in: pendingCommissions.map((c) => c.id) } },
+      data: { status: 'PAID', payoutId: p.id },
+    });
+    return p;
+  });
+
+  console.log(`[SuperAdmin] Confirmed payout ${payout.id} for affiliate ${org.name}: €${(totalCents / 100).toFixed(2)}`);
+  res.json({ payout, commissionsUpdated: pendingCommissions.length, totalCents });
 }));
 
 export default router;

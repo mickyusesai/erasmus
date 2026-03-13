@@ -92,6 +92,8 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       id: org.id,
       name: org.name,
       email: org.email,
+      isAffiliate: org.isAffiliate,
+      affiliateActive: org.affiliateActive,
     },
     credits: {
       available: creditStatus.availableCredits,
@@ -452,6 +454,10 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
       createdAt: p.createdAt,
       completedAt: p.completedAt,
     })),
+    organisation: {
+      isAffiliate: org.isAffiliate,
+      affiliateActive: org.affiliateActive,
+    },
   });
 }));
 
@@ -2400,6 +2406,116 @@ router.post('/projects/:id/upgrade-from-test', ensureOwnProject, asyncHandler(as
   ]);
 
   res.json({ success: true, message: 'Project upgraded to full project. 1 credit used.' });
+}));
+
+// =============================================================================
+// AFFILIATE DASHBOARD
+// =============================================================================
+
+/**
+ * GET /api/organisation/affiliate
+ * Get affiliate dashboard data (affiliate orgs only)
+ */
+router.get('/affiliate', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  if (!org.isAffiliate) {
+    res.status(403).json({ error: 'This organisation is not an affiliate' });
+    return;
+  }
+
+  const links = await prisma.affiliateLink.findMany({
+    where: { affiliateId: org.id },
+    include: {
+      customer: { select: { name: true } },
+      commissions: {
+        include: {
+          purchase: { select: { amountCents: true, completedAt: true, type: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const linkedCustomers = links.map((link) => ({
+    orgName: link.customer.name,
+    linkedAt: link.createdAt,
+    purchases: link.commissions.map((c) => ({
+      purchaseId: c.purchaseId,
+      completedAt: c.purchase.completedAt,
+      purchaseType: c.purchase.type,
+      amountCents: c.purchase.amountCents,
+      commissionCents: c.amountCents,
+      commissionStatus: c.status,
+    })),
+  }));
+
+  const allCommissions = links.flatMap((l) => l.commissions);
+  const totalEarnedCents = allCommissions
+    .filter((c) => c.status !== 'REVERSED')
+    .reduce((s, c) => s + c.amountCents, 0);
+  const pendingBalanceCents = allCommissions
+    .filter((c) => c.status === 'PENDING')
+    .reduce((s, c) => s + c.amountCents, 0);
+
+  res.json({
+    affiliateCode: org.affiliateCode,
+    commissionRate: org.commissionRate,
+    affiliateActive: org.affiliateActive,
+    linkedCustomers,
+    totalEarnedCents,
+    pendingBalanceCents,
+    minPayoutCents: 10000,
+  });
+}));
+
+/**
+ * POST /api/organisation/affiliate/request-payout
+ * Request a payout (min €100 pending balance)
+ */
+router.post('/affiliate/request-payout', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  if (!org.isAffiliate) {
+    res.status(403).json({ error: 'This organisation is not an affiliate' });
+    return;
+  }
+
+  const links = await prisma.affiliateLink.findMany({
+    where: { affiliateId: org.id },
+    include: { commissions: { where: { status: 'PENDING' } } },
+  });
+  const pendingCents = links.flatMap((l) => l.commissions).reduce((s, c) => s + c.amountCents, 0);
+
+  if (pendingCents < 10000) {
+    res.status(400).json({
+      error: `Minimum payout is €100. Your pending balance is €${(pendingCents / 100).toFixed(2)}.`,
+    });
+    return;
+  }
+
+  await getEmailService().send({
+    to: 'micky@easyreimburse.ai',
+    subject: `Affiliate Payout Request — ${org.name} (€${(pendingCents / 100).toFixed(2)})`,
+    text: [
+      'Affiliate payout request received.',
+      '',
+      `Organisation: ${org.name}`,
+      `Email: ${org.email}`,
+      `Affiliate Code: ${org.affiliateCode ?? '—'}`,
+      `Pending Balance: €${(pendingCents / 100).toFixed(2)}`,
+      '',
+      'To confirm this payout, go to the Super Admin → Affiliates panel.',
+    ].join('\n'),
+    html: `<p>Payout request from <strong>${org.name}</strong> (${org.email}), code <code>${org.affiliateCode ?? '—'}</code>.</p><p>Pending: <strong>€${(pendingCents / 100).toFixed(2)}</strong></p><p>Confirm via the Super Admin → Affiliates panel.</p>`,
+  });
+
+  console.log(`[Affiliate] Payout request from ${org.name} (${org.email}): €${(pendingCents / 100).toFixed(2)}`);
+
+  res.json({
+    success: true,
+    pendingBalanceCents: pendingCents,
+    message: 'Your payout request has been submitted. We will process it within a few business days.',
+  });
 }));
 
 export default router;

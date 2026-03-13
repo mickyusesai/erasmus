@@ -90,6 +90,62 @@ router.post(
           // Non-fatal — credits are already granted, just log the failure
           console.error('[Stripe Webhook] Failed to send purchase confirmation email:', emailErr);
         }
+
+        // Affiliate commission tracking (non-fatal)
+        try {
+          // Extract coupon ID used in this checkout session
+          const rawDiscounts = (session as any).discounts as Array<{ coupon?: { id?: string } | string }> | undefined;
+          const firstCoupon = rawDiscounts?.[0]?.coupon;
+          const couponId: string | null = typeof firstCoupon === 'string'
+            ? firstCoupon
+            : (firstCoupon as any)?.id ?? null;
+
+          // If a coupon was used, try to create an AffiliateLink for this customer
+          if (couponId) {
+            const affiliate = await prisma.organisation.findFirst({
+              where: { affiliateCode: couponId, isAffiliate: true, affiliateActive: true },
+            });
+            if (affiliate && affiliate.id !== organisationId) {
+              // Only link if not already linked to any affiliate
+              await prisma.affiliateLink.upsert({
+                where: { customerId: organisationId },
+                create: { affiliateId: affiliate.id, customerId: organisationId },
+                update: {}, // already linked — keep original
+              });
+              console.log(`[Affiliate] Linked org ${organisationId} to affiliate ${affiliate.id} via coupon ${couponId}`);
+            }
+          }
+
+          // Create commission for any linked customer (whether code used now or previously)
+          const link = await prisma.affiliateLink.findUnique({
+            where: { customerId: organisationId },
+            include: { affiliate: { select: { id: true, commissionRate: true, isAffiliate: true } } },
+          });
+          if (link && link.affiliate.isAffiliate && (link.affiliate.commissionRate ?? 0) > 0) {
+            const purchaseRecord = await prisma.purchase.findUnique({ where: { id: purchaseId } });
+            const paidCents = session.amount_total ?? purchaseRecord?.amountCents ?? 0;
+            if (paidCents > 0) {
+              const commissionCents = Math.round(paidCents * link.affiliate.commissionRate!);
+              if (commissionCents > 0) {
+                await prisma.affiliateCommission.upsert({
+                  where: { purchaseId },
+                  create: {
+                    affiliateId: link.affiliateId,
+                    affiliateLinkId: link.id,
+                    purchaseId,
+                    amountCents: commissionCents,
+                    commissionRate: link.affiliate.commissionRate!,
+                    status: 'PENDING',
+                  },
+                  update: {}, // idempotent on webhook retry
+                });
+                console.log(`[Affiliate] Commission ${commissionCents}¢ for affiliate ${link.affiliateId}`);
+              }
+            }
+          }
+        } catch (affiliateErr) {
+          console.error('[Stripe Webhook] Affiliate processing failed (non-fatal):', affiliateErr);
+        }
       } catch (err) {
         console.error('[Stripe Webhook] DB update failed:', err);
         res.status(500).json({ error: 'DB update failed' });

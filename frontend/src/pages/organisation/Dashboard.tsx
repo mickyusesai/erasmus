@@ -120,6 +120,14 @@ export default function OrgDashboard() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {dashboard.organisation.isAffiliate && dashboard.organisation.affiliateActive && (
+              <Link
+                to="/org/affiliate"
+                className="px-3 py-2 text-sm text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-lg transition-colors font-medium"
+              >
+                Affiliate Program
+              </Link>
+            )}
             <Link
               to="/org/billing"
               className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"

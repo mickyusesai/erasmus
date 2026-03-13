@@ -34,6 +34,12 @@ model Organisation {
   // Account status
   isActive                Boolean   @default(true)
 
+  // Affiliate programme
+  isAffiliate             Boolean   @default(false)
+  affiliateCode           String?   @unique  // Matches Stripe coupon ID (e.g. "YASIR10")
+  affiliateActive         Boolean   @default(true)  // false = deactivated; existing links unchanged
+  commissionRate          Float?                    // e.g. 0.10 = 10%
+
   // Metadata
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
@@ -41,6 +47,10 @@ model Organisation {
   // Relations
   projects                Project[]
   purchases               Purchase[]
+  affiliateLinks          AffiliateLink[]  @relation("AffiliateOrg")
+  customerLink            AffiliateLink?   @relation("CustomerOrg")
+  commissionsEarned       AffiliateCommission[]
+  affiliatePayouts        AffiliatePayout[]
 }
 
 // Purchase history for audit trail and Stripe integration
@@ -62,6 +72,8 @@ model Purchase {
   status            PurchaseStatus @default(PENDING)
   createdAt         DateTime       @default(now())
   completedAt       DateTime?
+
+  commission        AffiliateCommission?
 
   @@index([organisationId])
   @@index([stripeSessionId])
@@ -511,6 +523,63 @@ model SocialMediaPost {
   fileSize         Int
   description      String?
   uploadedAt       DateTime    @default(now())
+}
+
+// =============================================================================
+// AFFILIATE PROGRAMME
+// =============================================================================
+
+// Links a customer org to their affiliate (one affiliate per customer, forever)
+model AffiliateLink {
+  id              String       @id @default(uuid())
+  affiliateId     String
+  affiliate       Organisation @relation("AffiliateOrg", fields: [affiliateId], references: [id], onDelete: Cascade)
+  customerId      String       @unique
+  customer        Organisation @relation("CustomerOrg", fields: [customerId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+  commissions     AffiliateCommission[]
+
+  @@index([affiliateId])
+}
+
+// Commission earned by an affiliate for one purchase
+model AffiliateCommission {
+  id              String           @id @default(uuid())
+  affiliateId     String
+  affiliate       Organisation     @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliateLinkId String
+  affiliateLink   AffiliateLink    @relation(fields: [affiliateLinkId], references: [id], onDelete: Cascade)
+  purchaseId      String           @unique
+  purchase        Purchase         @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  amountCents     Int              // commission amount (purchase amount × rate)
+  commissionRate  Float            // snapshot of rate at time of purchase
+  status          CommissionStatus @default(PENDING)
+  payoutId        String?
+  payout          AffiliatePayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  createdAt       DateTime         @default(now())
+
+  @@index([affiliateId])
+  @@index([status])
+}
+
+enum CommissionStatus {
+  PENDING
+  PAID
+  REVERSED
+}
+
+// Payout record — created when super admin confirms payment
+model AffiliatePayout {
+  id            String                @id @default(uuid())
+  affiliateId   String
+  affiliate     Organisation          @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  amountCents   Int
+  confirmedBy   String?               // super admin email
+  notes         String?
+  confirmedAt   DateTime              @default(now())
+  commissions   AffiliateCommission[]
+
+  @@index([affiliateId])
 }
 
 // Declaration of Travel - for missing boarding passes with signature
