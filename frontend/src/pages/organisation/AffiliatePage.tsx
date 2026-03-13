@@ -30,7 +30,6 @@ function CommissionBadge({ status }: { status: AffiliateCustomerPurchase['commis
 export default function AffiliatePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
   const [showTerms, setShowTerms] = useState(false);
   const [showPayoutConfirm, setShowPayoutConfirm] = useState(false);
 
