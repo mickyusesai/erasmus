@@ -105,7 +105,7 @@ router.post(
             const affiliate = await prisma.organisation.findFirst({
               where: { affiliateCode: couponId, isAffiliate: true, affiliateActive: true },
             });
-            if (affiliate && affiliate.id !== organisationId) {
+            if (affiliate) {
               // Only link if not already linked to any affiliate
               await prisma.affiliateLink.upsert({
                 where: { customerId: organisationId },
