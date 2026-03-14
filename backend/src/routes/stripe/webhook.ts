@@ -24,9 +24,9 @@ router.post(
       return;
     }
 
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
     let event: Stripe.Event;
     try {
-      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
       event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
     } catch (err) {
       console.error('[Stripe Webhook] Signature verification failed:', err);
@@ -93,17 +93,39 @@ router.post(
 
         // Affiliate commission tracking (non-fatal)
         try {
-          // Extract coupon ID used in this checkout session
-          const rawDiscounts = (session as any).discounts as Array<{ coupon?: { id?: string } | string }> | undefined;
-          const firstCoupon = rawDiscounts?.[0]?.coupon;
-          const couponId: string | null = typeof firstCoupon === 'string'
-            ? firstCoupon
-            : (firstCoupon as any)?.id ?? null;
+          // Extract the human-readable promotion code string (e.g. "YASIR10")
+          const rawDiscounts = (session as any).discounts as Array<{
+            coupon?: { id?: string } | string;
+            promotion_code?: { id?: string } | string;
+          }> | undefined;
+          const firstDiscount = rawDiscounts?.[0];
 
-          // If a coupon was used, try to create an AffiliateLink for this customer
-          if (couponId) {
+          let affiliateLookupCode: string | null = null;
+
+          // Prefer promotion_code (human-readable string) over raw coupon ID
+          const rawPromoCode = firstDiscount?.promotion_code;
+          const promoCodeId = typeof rawPromoCode === 'string' ? rawPromoCode : (rawPromoCode as any)?.id ?? null;
+          if (promoCodeId) {
+            try {
+              const promoCode = await stripe.promotionCodes.retrieve(promoCodeId);
+              affiliateLookupCode = promoCode.code;
+            } catch {
+              // fall through to coupon ID
+            }
+          }
+
+          // Fallback: use coupon ID directly
+          if (!affiliateLookupCode) {
+            const firstCoupon = firstDiscount?.coupon;
+            affiliateLookupCode = typeof firstCoupon === 'string'
+              ? firstCoupon
+              : (firstCoupon as any)?.id ?? null;
+          }
+
+          // If a code was used, try to create an AffiliateLink for this customer
+          if (affiliateLookupCode) {
             const affiliate = await prisma.organisation.findFirst({
-              where: { affiliateCode: couponId, isAffiliate: true, affiliateActive: true },
+              where: { affiliateCode: affiliateLookupCode, isAffiliate: true, affiliateActive: true },
             });
             if (affiliate) {
               // Only link if not already linked to any affiliate
@@ -112,7 +134,7 @@ router.post(
                 create: { affiliateId: affiliate.id, customerId: organisationId },
                 update: {}, // already linked — keep original
               });
-              console.log(`[Affiliate] Linked org ${organisationId} to affiliate ${affiliate.id} via coupon ${couponId}`);
+              console.log(`[Affiliate] Linked org ${organisationId} to affiliate ${affiliate.id} via code ${affiliateLookupCode}`);
             }
           }
 

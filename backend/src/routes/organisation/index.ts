@@ -527,6 +527,7 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
       creditsGranted: String(plan.credits),
     },
     customer_email: org.email,
+    allow_promotion_codes: true,
   });
 
   // Save Stripe session ID on the purchase
