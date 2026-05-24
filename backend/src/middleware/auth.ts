@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { UnauthorizedError, ForbiddenError } from './errorHandler.js';
+import { UnauthorizedError, ForbiddenError, asyncHandler } from './errorHandler.js';
 import prisma from '../utils/prisma.js';
 import { Participant, Organisation, SuperAdmin } from '@prisma/client';
 
@@ -107,11 +107,11 @@ export function adminAuth(req: Request, _res: Response, next: NextFunction): voi
  * Participant authentication middleware
  * Validates magic link token from query parameter or header
  */
-export async function participantAuth(
+export const participantAuth = asyncHandler(async (
   req: Request,
   _res: Response,
   next: NextFunction
-): Promise<void> {
+): Promise<void> => {
   const token = req.query.token as string || req.headers['x-magic-token'] as string;
 
   if (!token) {
@@ -139,7 +139,7 @@ export async function participantAuth(
 
   req.participant = participant;
   next();
-}
+});
 
 /**
  * Ensure participant can only access their own data
@@ -166,11 +166,11 @@ export function ensureOwnParticipant(
  * Organisation authentication middleware
  * Validates JWT token from Authorization header
  */
-export async function organisationAuth(
+export const organisationAuth = asyncHandler(async (
   req: Request,
   _res: Response,
   next: NextFunction
-): Promise<void> {
+): Promise<void> => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
@@ -204,17 +204,17 @@ export async function organisationAuth(
   req.organisation = organisation;
   req.tokenPayload = payload;
   next();
-}
+});
 
 /**
  * Super Admin authentication middleware
  * Validates JWT token from Authorization header
  */
-export async function superAdminAuth(
+export const superAdminAuth = asyncHandler(async (
   req: Request,
   _res: Response,
   next: NextFunction
-): Promise<void> {
+): Promise<void> => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
@@ -244,7 +244,7 @@ export async function superAdminAuth(
   req.superAdmin = admin;
   req.tokenPayload = payload;
   next();
-}
+});
 
 /**
  * Ensure organisation can only access their own projects
