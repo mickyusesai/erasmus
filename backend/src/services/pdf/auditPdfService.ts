@@ -183,7 +183,9 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
       return doc.y + 6;
     }
 
-    const orgName = participant.project.organisation?.name || '—';
+    const org = participant.project.organisation;
+    const orgName = org?.legalName || org?.name || '—';
+    const orgVat = org?.vatNumber || null;
 
     const projectStart = formatDate(participant.project.startDate);
     const projectEnd   = formatDate(participant.project.endDate);
@@ -195,6 +197,12 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
     doc.font('B').fontSize(9).fillColor('#888888').text('ORGANISATION', col1X, leftY, { width: colW, lineBreak: false });
     doc.font('R').fontSize(11).fillColor('#111111').text(orgName, col1X, leftY + 14, { width: colW });
     leftY = doc.y + 6;
+
+    if (orgVat) {
+      doc.font('B').fontSize(9).fillColor('#888888').text('VAT NUMBER', col1X, leftY, { width: colW, lineBreak: false });
+      doc.font('R').fontSize(11).fillColor('#111111').text(orgVat, col1X, leftY + 14, { width: colW });
+      leftY = doc.y + 6;
+    }
 
     doc.font('B').fontSize(9).fillColor('#888888').text('PROJECT TITLE', col1X, leftY, { width: colW, lineBreak: false });
     doc.font('R').fontSize(11).fillColor('#111111').text(participant.project.name, col1X, leftY + 14, { width: colW });
@@ -246,6 +254,27 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
 
     drawTable(doc, summaryRows, doc.y + 8);
 
+    // ── Payment & Address Details (for the accountant) ──────────────────────
+    const addressParts = [
+      participant.personalAddress,
+      [participant.personalPostalCode, participant.personalCity].filter(Boolean).join(' '),
+      participant.personalCountry,
+    ].filter((p) => p && p.trim().length > 0);
+
+    const paymentRows: [string, string][] = [];
+    if (participant.bankAccountHolderName) paymentRows.push(['Account Holder', participant.bankAccountHolderName]);
+    // IBAN is stored space-free (accountant requirement) — print as-is.
+    if (participant.bankAccountIban) paymentRows.push(['IBAN', participant.bankAccountIban]);
+    if (participant.bankAccountBic) paymentRows.push(['BIC / SWIFT', participant.bankAccountBic]);
+    if (participant.bankName) paymentRows.push(['Bank Name', participant.bankName]);
+    if (addressParts.length > 0) paymentRows.push(['Address', addressParts.join(', ')]);
+
+    if (paymentRows.length > 0) {
+      doc.moveDown(1.2);
+      sectionHeading(doc, 'Payment & Address Details');
+      drawTable(doc, paymentRows, doc.y + 8);
+    }
+
     // ── SECTION 3: Travel Items Breakdown ───────────────────────────────────
     doc.moveDown(1.5);
     sectionHeading(doc, 'Travel Items Breakdown');
@@ -285,6 +314,16 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
       } else if (item.amountOriginal != null) {
         const eurStr = item.amountEur != null ? `  (${formatEur(item.amountEur)})` : '';
         kvRows.push(['Amount', `${item.amountOriginal.toFixed(2)} ${item.currencyOriginal}${eurStr}`]);
+        // Explicit exchange rate for non-EUR items (accountant requirement)
+        if (
+          item.currencyOriginal &&
+          item.currencyOriginal !== 'EUR' &&
+          item.amountEur != null &&
+          item.amountOriginal > 0
+        ) {
+          const rate = item.amountEur / item.amountOriginal;
+          kvRows.push(['Exchange Rate', `1 ${item.currencyOriginal} = ${rate.toFixed(4)} EUR`]);
+        }
       } else {
         kvRows.push(['Amount', 'Not specified']);
       }

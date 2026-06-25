@@ -30,6 +30,7 @@ import {
   EyeOff,
   Eye,
   ArrowRight,
+  Repeat,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -1411,30 +1412,57 @@ function Step2CheckData({
 
           {data.travelItems.length > 0 ? (
             <div className="space-y-6">
-              {data.travelItems.map((item) => (
-                <TravelItemCard
-                  key={item.id}
-                  item={item}
-                  allTravelItems={data.travelItems}
-                  documents={data.documents}
-                  declarationsOfTravel={data.declarationsOfTravel || []}
-                  token={token}
-                  onUpdate={(updates) =>
-                    updateMutation.mutate({ id: item.id, updates })
-                  }
-                  onDelete={() => {
-                    setDeleteConfirmItem(item);
-                    setDeleteWithDocuments(false);
-                  }}
-                  onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
-                  onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
-                  onViewDocument={setViewingDocument}
-                  onUnlinkDocument={(docId) =>
-                    unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
-                  }
-                  onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
-                />
-              ))}
+              {groupTravelItemsByBooking(data.travelItems).map((group) => {
+                const renderCard = (item: TravelItem) => (
+                  <TravelItemCard
+                    key={item.id}
+                    item={item}
+                    allTravelItems={data.travelItems}
+                    documents={data.documents}
+                    declarationsOfTravel={data.declarationsOfTravel || []}
+                    token={token}
+                    onUpdate={(updates) =>
+                      updateMutation.mutate({ id: item.id, updates })
+                    }
+                    onDelete={() => {
+                      setDeleteConfirmItem(item);
+                      setDeleteWithDocuments(false);
+                    }}
+                    onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
+                    onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+                    onViewDocument={setViewingDocument}
+                    onUnlinkDocument={(docId) =>
+                      unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
+                    }
+                    onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
+                  />
+                );
+
+                // Single-item "groups" render as a plain card (unchanged behaviour)
+                if (group.items.length < 2) {
+                  return renderCard(group.items[0]);
+                }
+
+                // Multi-leg booking — wrap the legs together so it's clear they
+                // belong to one purchase (and the price is counted only once).
+                const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
+                return (
+                  <div key={group.key} className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
+                    <div className="flex items-center gap-2 mb-3 px-1">
+                      <Repeat className="w-4 h-4 text-purple-600" />
+                      <span className="text-sm font-semibold text-purple-800">
+                        {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
+                      </span>
+                      <span className="text-xs text-purple-500">
+                        · {group.items.length} legs on one purchase · price counted once
+                      </span>
+                    </div>
+                    <div className="space-y-4">
+                      {group.items.map((item) => renderCard(item))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="text-center py-8">
@@ -1780,6 +1808,34 @@ function Step2CheckData({
       )}
     </div>
   );
+}
+
+// Group travel items that belong to the same booking (round-trip / multi-leg).
+// Legs of one booking share a non-null bookingId. Items without a bookingId,
+// or a booking with only one leg, become their own single-item group.
+// First-appearance order is preserved so the list keeps its journey ordering.
+interface TravelItemGroup {
+  key: string;
+  items: TravelItem[];
+}
+function groupTravelItemsByBooking(items: TravelItem[]): TravelItemGroup[] {
+  const groups: TravelItemGroup[] = [];
+  const byBooking = new Map<string, TravelItemGroup>();
+  for (const item of items) {
+    const bookingId = item.bookingId || null;
+    if (bookingId) {
+      let group = byBooking.get(bookingId);
+      if (!group) {
+        group = { key: `booking-${bookingId}`, items: [] };
+        byBooking.set(bookingId, group);
+        groups.push(group);
+      }
+      group.items.push(item);
+    } else {
+      groups.push({ key: item.id, items: [item] });
+    }
+  }
+  return groups;
 }
 
 // Journey Visualization Component - Clean transport-focused design
@@ -3486,6 +3542,7 @@ function Step3Confirm({
   const [confirmations, setConfirmations] = useState({
     dataCorrect: false,
     erasmusRules: false,
+    ibanCorrect: false,
   });
   const [showDeclarationModal, setShowDeclarationModal] = useState(false);
   const [selectedMissingDoc, setSelectedMissingDoc] = useState<DocumentType | null>(null);
@@ -3548,9 +3605,17 @@ function Step3Confirm({
     validation.isComplete &&
     confirmations.dataCorrect &&
     confirmations.erasmusRules &&
+    confirmations.ibanCorrect &&
     bankDetails.bankAccountIban &&
     bankDetails.bankAccountHolderName &&
     bankDetails.bankAccountBic;
+
+  // Display IBAN grouped in 4-char blocks for readability (stored value stays space-free)
+  const formattedIban = (bankDetails.bankAccountIban || '')
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .replace(/(.{4})/g, '$1 ')
+    .trim();
 
   return (
     <>
@@ -3654,7 +3719,16 @@ function Step3Confirm({
                 onChange={(e) =>
                   setBankDetails({ ...bankDetails, bankAccountIban: e.target.value })
                 }
-                onBlur={() => updateBankMutation.mutate()}
+                onBlur={() => {
+                  // Strip spaces so the stored IBAN is always space-free, then save.
+                  const cleaned = (bankDetails.bankAccountIban || '').replace(/\s+/g, '').toUpperCase();
+                  if (cleaned !== bankDetails.bankAccountIban) {
+                    setBankDetails({ ...bankDetails, bankAccountIban: cleaned });
+                  }
+                  // Reset the IBAN confirmation if the value changed since they last confirmed.
+                  setConfirmations((c) => ({ ...c, ibanCorrect: false }));
+                  updateBankMutation.mutate();
+                }}
                 placeholder="DE89 3704 0044 0532 0130 00"
               />
               <Input
@@ -3775,6 +3849,29 @@ function Step3Confirm({
 
           {/* Confirmations */}
           <div className="mt-8 space-y-4">
+            {/* IBAN confirmation — shows their actual IBAN so they read it before ticking */}
+            <label className={`flex items-start gap-3 cursor-pointer p-4 rounded-xl border ${confirmations.ibanCorrect ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+              <input
+                type="checkbox"
+                checked={confirmations.ibanCorrect}
+                disabled={!bankDetails.bankAccountIban}
+                onChange={(e) =>
+                  setConfirmations({ ...confirmations, ibanCorrect: e.target.checked })
+                }
+                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-40"
+              />
+              <span className="text-sm text-gray-800">
+                {bankDetails.bankAccountIban ? (
+                  <>
+                    I confirm my bank account IBAN{' '}
+                    <span className="font-mono font-semibold tracking-wide">{formattedIban}</span>{' '}
+                    is correct. This is the account the reimbursement will be paid to.
+                  </>
+                ) : (
+                  <span className="text-gray-500">Enter your IBAN above to confirm it.</span>
+                )}
+              </span>
+            </label>
             <label className="flex items-start gap-3 cursor-pointer">
               <input
                 type="checkbox"

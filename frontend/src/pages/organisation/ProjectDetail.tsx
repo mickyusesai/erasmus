@@ -21,13 +21,15 @@ import {
   Download,
   X,
   Archive,
+  Plus,
+  RefreshCw,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, OrgParticipant, ImportPreview } from '../../services/api';
+import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult } from '../../services/api';
 import { clsx } from 'clsx';
 
 // Helper function to format dates as DD-MM-YYYY (European format)
@@ -1513,6 +1515,9 @@ function SettingsTab({
       {/* Feature Settings */}
       <FeatureSettingsCard project={project} projectId={projectId} />
 
+      {/* Exchange Rate Settings */}
+      <ExchangeRateSettingsCard project={project} projectId={projectId} />
+
       {/* Upgrade Test Project */}
       {project.isTestProject && (
         <Card className="lg:col-span-2 border-amber-200">
@@ -1636,6 +1641,237 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
                 <span className="text-sm text-gray-500">EUR/km</span>
               </div>
             </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Common currencies for the "add currency" dropdown (covers Erasmus+ regions)
+const OVERRIDE_CURRENCY_OPTIONS = [
+  'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'SEK', 'DKK', 'NOK', 'GBP', 'USD',
+  'CHF', 'TRY', 'UAH', 'RSD', 'MKD', 'ALL', 'BAM', 'GEL', 'MDL', 'ISK',
+];
+
+interface OverrideRow {
+  currencyCode: string;
+  rate: string;          // user input (empty = no override, use mode-based rate)
+  effectiveRate?: number; // current effective rate, shown as placeholder
+}
+
+function ExchangeRateSettingsCard({ project, projectId }: { project: any; projectId: string }) {
+  const queryClient = useQueryClient();
+
+  const [mode, setMode] = useState<ExchangeRateMode>(project.exchangeRateMode || 'PURCHASE_DATE');
+  const [manualDate, setManualDate] = useState<string>(
+    project.exchangeRateManualDate ? String(project.exchangeRateManualDate).slice(0, 10) : ''
+  );
+  const [rows, setRows] = useState<OverrideRow[]>([]);
+  const [addCurrency, setAddCurrency] = useState('');
+  const [lastResult, setLastResult] = useState<ProjectRecalcResult | null>(null);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['org-project-currency-rates', projectId],
+    queryFn: () => organisationApi.getProjectCurrencyRates(projectId),
+  });
+
+  // Build the editable override rows from detected currencies + saved overrides
+  useEffect(() => {
+    if (!data) return;
+    setMode(data.exchangeRateMode);
+    setManualDate(data.exchangeRateManualDate ? data.exchangeRateManualDate.slice(0, 10) : '');
+
+    const overrideByCur = new Map(data.overrides.map((o) => [o.currencyCode, o.rate]));
+    const seen = new Set<string>();
+    const next: OverrideRow[] = [];
+    for (const dc of data.detectedCurrencies) {
+      seen.add(dc.currencyCode);
+      next.push({
+        currencyCode: dc.currencyCode,
+        rate: overrideByCur.has(dc.currencyCode) ? String(overrideByCur.get(dc.currencyCode)) : '',
+        effectiveRate: dc.effectiveRate,
+      });
+    }
+    // Include overrides for currencies not (yet) present in any travel item
+    for (const o of data.overrides) {
+      if (!seen.has(o.currencyCode)) {
+        next.push({ currencyCode: o.currencyCode, rate: String(o.rate) });
+      }
+    }
+    setRows(next);
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      // Persist mode/date if it changed
+      const modeChanged =
+        mode !== (data?.exchangeRateMode || 'PURCHASE_DATE') ||
+        (manualDate || null) !== (data?.exchangeRateManualDate ? data.exchangeRateManualDate.slice(0, 10) : null);
+      let recalc: ProjectRecalcResult | undefined;
+      if (modeChanged) {
+        const resp = await organisationApi.updateProject(projectId, {
+          exchangeRateMode: mode,
+          exchangeRateManualDate: mode === 'MANUAL_DATE' ? (manualDate || null) : null,
+        });
+        recalc = resp.recalc;
+      }
+      // Persist per-currency overrides (rows with a valid positive number)
+      const overrides = rows
+        .map((r) => ({ currencyCode: r.currencyCode.toUpperCase(), rate: parseFloat(r.rate) }))
+        .filter((o) => o.currencyCode && !isNaN(o.rate) && o.rate > 0);
+      const resp2 = await organisationApi.updateProjectCurrencyRates(projectId, overrides);
+      return resp2.recalc ?? recalc;
+    },
+    onSuccess: (recalc) => {
+      setLastResult(recalc ?? null);
+      toast.success('Exchange rates saved and amounts recalculated');
+      queryClient.invalidateQueries({ queryKey: ['org-project-currency-rates', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-participants', projectId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to save exchange rates');
+    },
+  });
+
+  const handleSave = () => {
+    if (mode === 'MANUAL_DATE' && !manualDate) {
+      toast.error('Please choose the date to use for exchange rates');
+      return;
+    }
+    if (!window.confirm('This updates converted EUR amounts for all participants except those already marked Paid. Continue?')) {
+      return;
+    }
+    saveMutation.mutate();
+  };
+
+  const addRow = () => {
+    if (!addCurrency) return;
+    if (rows.some((r) => r.currencyCode === addCurrency)) {
+      toast.error(`${addCurrency} is already in the list`);
+      return;
+    }
+    setRows([...rows, { currencyCode: addCurrency, rate: '' }]);
+    setAddCurrency('');
+  };
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <h3 className="font-semibold text-gray-900">Exchange Rate Settings</h3>
+        <p className="text-sm text-gray-500 mt-1">
+          Control how foreign-currency receipts are converted to EUR for this project.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-5">
+          {/* Mode selector */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Conversion basis</label>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as ExchangeRateMode)}
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            >
+              <option value="PURCHASE_DATE">By purchase date (recommended)</option>
+              <option value="PROJECT_END_DATE">By project end date (one rate per currency)</option>
+              <option value="MANUAL_DATE">By a specific date (one rate per currency)</option>
+            </select>
+            {mode === 'MANUAL_DATE' && (
+              <div className="mt-3">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Exchange rate date</label>
+                <Input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="w-full sm:w-56" />
+                <p className="text-xs text-gray-500 mt-1">
+                  If this month's official rates aren't published yet, the latest available rate is used — re-save after the date to refresh.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Per-currency overrides */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Manual rate overrides</label>
+            <p className="text-xs text-gray-500 mb-3">
+              Override the rate for specific currencies. Leave blank to use the conversion basis above. 1 unit of currency = X EUR.
+            </p>
+            {isLoading ? (
+              <p className="text-sm text-gray-400">Loading currencies…</p>
+            ) : (
+              <div className="space-y-2">
+                {rows.length === 0 && (
+                  <p className="text-sm text-gray-400">No currencies detected yet. Add one below to pre-set its rate.</p>
+                )}
+                {rows.map((row, idx) => (
+                  <div key={row.currencyCode} className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-xl">
+                    <span className="font-mono font-semibold text-gray-800 w-14">{row.currencyCode}</span>
+                    <div className="flex items-center gap-2 flex-1">
+                      <span className="text-sm text-gray-500">1 {row.currencyCode} =</span>
+                      <Input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        value={row.rate}
+                        placeholder={row.effectiveRate != null ? row.effectiveRate.toFixed(4) : 'rate'}
+                        onChange={(e) => {
+                          const next = [...rows];
+                          next[idx] = { ...row, rate: e.target.value };
+                          setRows(next);
+                        }}
+                        className="w-32 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                      <span className="text-sm text-gray-500">EUR</span>
+                      {row.rate === '' && row.effectiveRate != null && (
+                        <span className="text-xs text-gray-400">(currently {row.effectiveRate.toFixed(4)})</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setRows(rows.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                      title="Remove override"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+
+                {/* Add currency */}
+                <div className="flex items-center gap-2 pt-1">
+                  <select
+                    value={addCurrency}
+                    onChange={(e) => setAddCurrency(e.target.value)}
+                    className="px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  >
+                    <option value="">Add a currency…</option>
+                    {OVERRIDE_CURRENCY_OPTIONS.filter((c) => !rows.some((r) => r.currencyCode === c)).map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={addRow}
+                    disabled={!addCurrency}
+                    className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium text-primary-600 hover:bg-primary-50 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {lastResult && (
+            <div className="text-xs text-gray-500 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+              Recalculated {lastResult.itemsUpdated} travel item(s) across {lastResult.participantsUpdated} participant(s).
+              {lastResult.itemsSkippedPaid > 0 && ` ${lastResult.itemsSkippedPaid} item(s) on already-paid participants were left unchanged.`}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button onClick={handleSave} loading={saveMutation.isPending}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Save &amp; recalculate
+            </Button>
           </div>
         </div>
       </CardContent>

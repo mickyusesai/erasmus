@@ -683,13 +683,13 @@ export const organisationApi = {
     return handleResponse<{ message: string }>(res);
   },
 
-  updateProfile: async (data: { name?: string; email?: string }) => {
+  updateProfile: async (data: { name?: string; email?: string; legalName?: string | null; vatNumber?: string | null }) => {
     const res = await fetch(`${API_BASE}/auth/profile`, {
       method: 'PATCH',
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ message: string; organisation: { id: string; name: string; email: string } }>(res);
+    return handleResponse<{ message: string; organisation: { id: string; name: string; email: string; legalName?: string | null; vatNumber?: string | null } }>(res);
   },
 
   // Dashboard
@@ -730,7 +730,24 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ message: string; project: OrgProject }>(res);
+    return handleResponse<{ message: string; project: OrgProject; recalc?: ProjectRecalcResult }>(res);
+  },
+
+  // Exchange-rate per-currency overrides
+  getProjectCurrencyRates: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}/currency-rates`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<ProjectCurrencyRates>(res);
+  },
+
+  updateProjectCurrencyRates: async (id: string, overrides: { currencyCode: string; rate: number }[]) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}/currency-rates`, {
+      method: 'PUT',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ overrides }),
+    });
+    return handleResponse<{ message: string; recalc: ProjectRecalcResult }>(res);
   },
 
   deleteProject: async (id: string) => {
@@ -1145,6 +1162,8 @@ export interface OrganisationInfo {
   name: string;
   email: string;
   oid?: string;
+  legalName?: string | null;
+  vatNumber?: string | null;
   projectCredits: number;
   hasAnnualLicense: boolean;
   annualLicenseExpiresAt?: string;
@@ -1168,6 +1187,8 @@ export interface OrgProject {
   endDate: string;
   disseminationEnabled: boolean;
   carRatePerKm: number;
+  exchangeRateMode?: ExchangeRateMode;
+  exchangeRateManualDate?: string | null;
   participantCount: number;
   creditSource?: string;
   isTestProject: boolean;
@@ -1245,6 +1266,8 @@ export interface SuperAdminAffiliate {
   createdAt: string;
 }
 
+export type ExchangeRateMode = 'PURCHASE_DATE' | 'PROJECT_END_DATE' | 'MANUAL_DATE';
+
 export interface CreateOrgProjectData {
   name: string;
   description?: string;
@@ -1253,6 +1276,22 @@ export interface CreateOrgProjectData {
   startDate: string;
   endDate: string;
   carRatePerKm?: number;
+  exchangeRateMode?: ExchangeRateMode;
+  exchangeRateManualDate?: string | null;
+}
+
+export interface ProjectRecalcResult {
+  participantsUpdated: number;
+  itemsUpdated: number;
+  itemsSkippedPaid: number;
+  itemsSkippedOverride: number;
+}
+
+export interface ProjectCurrencyRates {
+  exchangeRateMode: ExchangeRateMode;
+  exchangeRateManualDate: string | null;
+  overrides: { currencyCode: string; rate: number }[];
+  detectedCurrencies: { currencyCode: string; effectiveRate: number; hasOverride: boolean }[];
 }
 
 export interface OrgParticipant {
@@ -1512,6 +1551,7 @@ export interface TravelItem {
   priceMissing?: boolean;
   // Round-trip bookings
   isRoundTrip?: boolean;
+  bookingId?: string | null;  // Shared by all legs of the same booking (round-trip / multi-leg)
   tripGroupId?: string;  // Legacy
   priceAllocation?: number;  // Legacy
   totalGroupPrice?: number;  // Legacy

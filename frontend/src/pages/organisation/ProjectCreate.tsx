@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { organisationApi } from '../../services/api';
+import { organisationApi, ExchangeRateMode } from '../../services/api';
 import toast from 'react-hot-toast';
 import { ArrowLeft, AlertTriangle, HelpCircle } from 'lucide-react';
 
@@ -13,6 +13,8 @@ export default function ProjectCreate() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [venueAddress, setVenueAddress] = useState('');
+  const [exchangeRateMode, setExchangeRateMode] = useState<ExchangeRateMode>('PURCHASE_DATE');
+  const [exchangeRateManualDate, setExchangeRateManualDate] = useState('');
 
   // Check if logged in
   useEffect(() => {
@@ -37,6 +39,8 @@ export default function ProjectCreate() {
       venueAddress: venueAddress || undefined,
       startDate,
       endDate,
+      exchangeRateMode,
+      exchangeRateManualDate: exchangeRateMode === 'MANUAL_DATE' ? (exchangeRateManualDate || null) : null,
     }),
     onSuccess: (data) => {
       toast.success(`Project created! Used ${data.creditUsed === 'FOUNDING' ? 'founding credit' : data.creditUsed === 'ANNUAL' ? 'annual license' : '1 credit'}.`);
@@ -52,6 +56,11 @@ export default function ProjectCreate() {
 
     if (new Date(endDate) < new Date(startDate)) {
       toast.error('End date must be after start date');
+      return;
+    }
+
+    if (exchangeRateMode === 'MANUAL_DATE' && !exchangeRateManualDate) {
+      toast.error('Please choose the date to use for exchange rates');
       return;
     }
 
@@ -217,6 +226,52 @@ export default function ProjectCreate() {
                   className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
               </div>
+            </div>
+
+            {/* Exchange rate handling */}
+            <div className="pt-2 border-t border-gray-100">
+              <div className="flex items-center gap-1 mb-1 mt-3">
+                <label className="block text-sm font-medium text-gray-700">
+                  Currency Exchange Rate
+                </label>
+                <div className="relative group">
+                  <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-72 z-10">
+                    Choose which exchange rate to apply when converting foreign-currency receipts to EUR. You can fine-tune individual currencies later in project settings.
+                    <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+                  </div>
+                </div>
+              </div>
+              <select
+                value={exchangeRateMode}
+                onChange={(e) => setExchangeRateMode(e.target.value as ExchangeRateMode)}
+                disabled={!canCreate}
+                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+              >
+                <option value="PURCHASE_DATE">By purchase date (recommended)</option>
+                <option value="PROJECT_END_DATE">By project end date (one rate per currency)</option>
+                <option value="MANUAL_DATE">By a specific date (one rate per currency)</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                {exchangeRateMode === 'PURCHASE_DATE' && 'Each receipt is converted using the official rate for its purchase month.'}
+                {exchangeRateMode === 'PROJECT_END_DATE' && 'All receipts use the official rate from the project end date — one rate per currency.'}
+                {exchangeRateMode === 'MANUAL_DATE' && 'All receipts use the official rate from the date you choose — one rate per currency.'}
+              </p>
+              {exchangeRateMode === 'MANUAL_DATE' && (
+                <div className="mt-3">
+                  <label htmlFor="exchangeRateManualDate" className="block text-sm font-medium text-gray-700 mb-1">
+                    Exchange rate date *
+                  </label>
+                  <input
+                    id="exchangeRateManualDate"
+                    type="date"
+                    value={exchangeRateManualDate}
+                    onChange={(e) => setExchangeRateManualDate(e.target.value)}
+                    disabled={!canCreate}
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex gap-4 pt-4">

@@ -210,6 +210,74 @@ export async function convertToEur(
   return Math.round(eurAmount * 100) / 100; // Round to 2 decimals
 }
 
+// ── Project-aware rate resolution ────────────────────────────────────────────
+
+export type ExchangeRateMode = 'PURCHASE_DATE' | 'PROJECT_END_DATE' | 'MANUAL_DATE';
+
+export interface ProjectRateConfig {
+  exchangeRateMode: string | null;
+  exchangeRateManualDate: Date | null;
+  endDate: Date;
+}
+
+/**
+ * Resolve the effective EUR rate for a currency given a project's exchange-rate
+ * configuration and (optionally) a per-currency manual override map.
+ *
+ * Priority (highest first):
+ *   1. EUR → 1.0
+ *   2. Per-project per-currency override (currencyRates map)
+ *   3. Mode-based InforEuro lookup:
+ *        PURCHASE_DATE    → the item's purchase date (falls back to project end date)
+ *        PROJECT_END_DATE → the project's end date
+ *        MANUAL_DATE      → the project's manual date (falls back to end date)
+ *
+ * Note: the per-item `exchangeRateOverride` (on TravelItem) is handled by callers
+ * and takes precedence over everything here.
+ */
+export async function getEffectiveRate(
+  project: ProjectRateConfig,
+  currencyRates: Map<string, number>,
+  currencyCode: string,
+  purchaseDate?: Date | null
+): Promise<number> {
+  const currency = currencyCode.toUpperCase();
+
+  if (currency === 'EUR') return 1.0;
+
+  // Per-currency manual override wins over any date-based lookup
+  const override = currencyRates.get(currency);
+  if (override != null) return override;
+
+  const mode = (project.exchangeRateMode || 'PURCHASE_DATE') as ExchangeRateMode;
+  let lookupDate: Date;
+  if (mode === 'PROJECT_END_DATE') {
+    lookupDate = project.endDate;
+  } else if (mode === 'MANUAL_DATE') {
+    lookupDate = project.exchangeRateManualDate || project.endDate;
+  } else {
+    // PURCHASE_DATE (default)
+    lookupDate = purchaseDate || project.endDate || new Date();
+  }
+
+  return getExchangeRate(currency, lookupDate);
+}
+
+/**
+ * Project-aware conversion to EUR. Mirrors convertToEur() but routes the rate
+ * lookup through getEffectiveRate() so project mode + per-currency overrides apply.
+ */
+export async function convertToEurForProject(
+  amount: number,
+  currencyCode: string,
+  project: ProjectRateConfig,
+  currencyRates: Map<string, number>,
+  purchaseDate?: Date | null
+): Promise<number> {
+  const rate = await getEffectiveRate(project, currencyRates, currencyCode, purchaseDate);
+  return Math.round(amount * rate * 100) / 100;
+}
+
 /**
  * Get all cached rates (for admin view)
  */

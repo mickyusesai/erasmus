@@ -34,6 +34,10 @@ model Organisation {
   // Account status
   isActive                Boolean   @default(true)
 
+  // Accountant / invoicing details (optional; shown on audit PDFs)
+  legalName               String?   // Official registered name, if different from display name
+  vatNumber               String?   // VAT identification number
+
   // Affiliate programme
   isAffiliate             Boolean   @default(false)
   affiliateCode           String?   @unique  // Matches Stripe coupon ID (e.g. "YASIR10")
@@ -124,6 +128,10 @@ model Project {
   carRatePerKm             Float                   @default(0.22)   // Rate per km for car travel reimbursement (EUR)
   venueAddress             String?                                  // Address of the project venue (helps AI understand travel destination)
 
+  // Exchange rate handling
+  exchangeRateMode         String                  @default("PURCHASE_DATE")  // PURCHASE_DATE | PROJECT_END_DATE | MANUAL_DATE
+  exchangeRateManualDate   DateTime?                                          // Used only when exchangeRateMode = MANUAL_DATE
+
   // Test project - automatically created for new organisations (max 10 participants)
   isTestProject            Boolean                 @default(false)
   maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects
@@ -136,6 +144,21 @@ model Project {
   countryLimits            ProjectCountryLimit[]
   participants             Participant[]
   disseminationActivities  DisseminationActivity[]
+  currencyRates            ProjectCurrencyRate[]
+}
+
+// Per-project manual exchange rate override for a specific currency
+// Applies on top of the project's exchangeRateMode; one row per currency.
+model ProjectCurrencyRate {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  currencyCode String                       // e.g. "PLN"
+  rate         Float                        // 1 unit of currency = X EUR
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([projectId, currencyCode])
 }
 
 // Maximum reimbursement amounts per sending country for a project

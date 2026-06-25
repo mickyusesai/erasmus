@@ -160,6 +160,8 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
       disseminationEnabled: p.disseminationEnabled,
       carRatePerKm: p.carRatePerKm,
       venueAddress: p.venueAddress,
+      exchangeRateMode: p.exchangeRateMode,
+      exchangeRateManualDate: p.exchangeRateManualDate,
       participantCount: p._count.participants,
       creditSource: p.creditSource,
       isTestProject: p.isTestProject,
@@ -171,6 +173,8 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+const exchangeRateModeEnum = z.enum(['PURCHASE_DATE', 'PROJECT_END_DATE', 'MANUAL_DATE']);
+
 const createProjectSchema = z.object({
   name: z.string().min(1, 'Project name is required'),
   description: z.string().optional(),
@@ -179,6 +183,8 @@ const createProjectSchema = z.object({
   endDate: z.string().transform((s) => new Date(s)),
   carRatePerKm: z.number().min(0).default(0.22),
   venueAddress: z.string().optional(),
+  exchangeRateMode: exchangeRateModeEnum.optional(),
+  exchangeRateManualDate: z.string().transform((s) => new Date(s)).nullish(),
 });
 
 /**
@@ -201,7 +207,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Consume credit and create project in a transaction
-  const { name, description, country, startDate, endDate, carRatePerKm, venueAddress } = result.data;
+  const { name, description, country, startDate, endDate, carRatePerKm, venueAddress, exchangeRateMode, exchangeRateManualDate } = result.data;
 
   // Refresh org data to get latest credit count
   const freshOrg = await prisma.organisation.findUnique({
@@ -226,6 +232,8 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
       endDate,
       carRatePerKm,
       venueAddress,
+      ...(exchangeRateMode && { exchangeRateMode }),
+      ...(exchangeRateManualDate !== undefined && { exchangeRateManualDate: exchangeRateManualDate || null }),
       creditSource,
       maxParticipants: 60,
     },
@@ -302,6 +310,8 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       endDate: project.endDate,
       disseminationEnabled: project.disseminationEnabled,
       carRatePerKm: project.carRatePerKm,
+      exchangeRateMode: project.exchangeRateMode,
+      exchangeRateManualDate: project.exchangeRateManualDate,
       creditSource: project.creditSource,
       countryLimits: project.countryLimits,
       participants: project.participants,
@@ -321,6 +331,8 @@ const updateProjectSchema = z.object({
   disseminationEnabled: z.boolean().optional(),
   carRatePerKm: z.number().min(0).optional(),
   venueAddress: z.string().optional(),
+  exchangeRateMode: exchangeRateModeEnum.optional(),
+  exchangeRateManualDate: z.string().transform((s) => new Date(s)).nullish(),
 });
 
 /**
@@ -349,10 +361,21 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
     throw new ValidationError(result.error.errors[0].message);
   }
 
+  const data = { ...result.data } as Record<string, unknown>;
+  if ('exchangeRateManualDate' in data && data.exchangeRateManualDate == null) {
+    data.exchangeRateManualDate = null;
+  }
+
+  // Detect whether the exchange-rate configuration changed (triggers a recompute)
+  const exchangeRateChanged =
+    (result.data.exchangeRateMode !== undefined && result.data.exchangeRateMode !== existing.exchangeRateMode) ||
+    (result.data.exchangeRateManualDate !== undefined &&
+      (result.data.exchangeRateManualDate?.getTime() ?? null) !== (existing.exchangeRateManualDate?.getTime() ?? null));
+
   // Update project
   const project = await prisma.project.update({
     where: { id: projectId },
-    data: result.data,
+    data,
     include: {
       _count: {
         select: { participants: true },
@@ -360,8 +383,16 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
     },
   });
 
+  // Recompute EUR amounts for all non-paid participants when the FX config changed
+  let recalc: import('../../services/exchangeRate/index.js').ProjectRecalcResult | undefined;
+  if (exchangeRateChanged) {
+    const { recalculateProjectExchangeRates } = await import('../../services/exchangeRate/index.js');
+    recalc = await recalculateProjectExchangeRates(projectId);
+  }
+
   res.json({
     message: 'Project updated successfully',
+    recalc,
     project: {
       id: project.id,
       name: project.name,
@@ -372,12 +403,122 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
       endDate: project.endDate,
       disseminationEnabled: project.disseminationEnabled,
       carRatePerKm: project.carRatePerKm,
+      exchangeRateMode: project.exchangeRateMode,
+      exchangeRateManualDate: project.exchangeRateManualDate,
       creditSource: project.creditSource,
       participantCount: project._count.participants,
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     },
   });
+}));
+
+/**
+ * GET /api/organisation/projects/:id/currency-rates
+ * Returns the project's exchange-rate mode, manual date, existing per-currency
+ * overrides, and the currencies detected in its travel items (with current
+ * effective rate) so the settings UI can pre-fill the override list.
+ */
+router.get('/projects/:id/currency-rates', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { currencyRates: true },
+  });
+  if (!project) throw new NotFoundError('Project not found');
+
+  // Distinct non-EUR currencies actually used across the project's travel items
+  const items = await prisma.travelItem.findMany({
+    where: { participant: { projectId }, currencyOriginal: { not: 'EUR' } },
+    select: { currencyOriginal: true, purchaseDate: true },
+  });
+
+  const { getEffectiveRate } = await import('../../services/exchangeRate/index.js');
+  const rateConfig = {
+    exchangeRateMode: project.exchangeRateMode,
+    exchangeRateManualDate: project.exchangeRateManualDate,
+    endDate: project.endDate,
+  };
+  const overrideMap = new Map<string, number>();
+  for (const cr of project.currencyRates) overrideMap.set(cr.currencyCode.toUpperCase(), cr.rate);
+
+  // One representative purchase date per currency (most recent) for rate preview
+  const latestDateByCurrency = new Map<string, Date | null>();
+  for (const it of items) {
+    const cur = (it.currencyOriginal || '').toUpperCase();
+    if (!cur) continue;
+    const prev = latestDateByCurrency.get(cur);
+    if (prev === undefined || (it.purchaseDate && (!prev || it.purchaseDate > prev))) {
+      latestDateByCurrency.set(cur, it.purchaseDate ?? prev ?? null);
+    }
+  }
+
+  const detected = await Promise.all(
+    Array.from(latestDateByCurrency.keys()).sort().map(async (currencyCode) => {
+      const effectiveRate = await getEffectiveRate(rateConfig, overrideMap, currencyCode, latestDateByCurrency.get(currencyCode));
+      return {
+        currencyCode,
+        effectiveRate,
+        hasOverride: overrideMap.has(currencyCode),
+      };
+    })
+  );
+
+  res.json({
+    exchangeRateMode: project.exchangeRateMode,
+    exchangeRateManualDate: project.exchangeRateManualDate,
+    overrides: project.currencyRates.map((cr) => ({ currencyCode: cr.currencyCode, rate: cr.rate })),
+    detectedCurrencies: detected,
+  });
+}));
+
+/**
+ * PUT /api/organisation/projects/:id/currency-rates
+ * Replaces the project's per-currency override set, then recomputes EUR amounts
+ * for all non-paid participants.
+ */
+const currencyRatesSchema = z.object({
+  overrides: z.array(z.object({
+    currencyCode: z.string().min(3).max(3).transform((s) => s.toUpperCase()),
+    rate: z.number().positive('Rate must be greater than 0'),
+  })),
+});
+
+router.put('/projects/:id/currency-rates', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new NotFoundError('Project not found');
+
+  const result = currencyRatesSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+
+  // De-duplicate by currency (last one wins), drop EUR (always 1:1)
+  const wanted = new Map<string, number>();
+  for (const o of result.data.overrides) {
+    if (o.currencyCode === 'EUR') continue;
+    wanted.set(o.currencyCode, o.rate);
+  }
+
+  // Replace the set: upsert wanted, delete the rest
+  await prisma.$transaction(async (tx) => {
+    await tx.projectCurrencyRate.deleteMany({
+      where: { projectId, currencyCode: { notIn: Array.from(wanted.keys()) } },
+    });
+    for (const [currencyCode, rate] of wanted) {
+      await tx.projectCurrencyRate.upsert({
+        where: { projectId_currencyCode: { projectId, currencyCode } },
+        create: { projectId, currencyCode, rate },
+        update: { rate },
+      });
+    }
+  });
+
+  const { recalculateProjectExchangeRates } = await import('../../services/exchangeRate/index.js');
+  const recalc = await recalculateProjectExchangeRates(projectId);
+
+  res.json({ message: 'Exchange rate overrides saved', recalc });
 }));
 
 /**
@@ -556,6 +697,8 @@ router.get('/settings', asyncHandler(async (req: Request, res: Response) => {
       name: org.name,
       email: org.email,
       oid: org.oid,
+      legalName: org.legalName,
+      vatNumber: org.vatNumber,
       createdAt: org.createdAt,
     },
   });
@@ -1112,6 +1255,8 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       validationWarnings: item.validationWarnings,
       documentId: item.documentId,
       amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
+      isRoundTrip: item.isRoundTrip,
+      bookingId: item.bookingId,
       luggageAmount: item.luggageAmount,
       luggageAmountEur: item.luggageAmountEur,
       purchaseDateAutoFilled: item.purchaseDateAutoFilled,
@@ -1853,10 +1998,9 @@ router.patch('/participants/:id/travel-items/:itemId', asyncHandler(async (req: 
       // Manual override: amountEur = amountOriginal * overrideRate
       updateData.amountEur = current.amountOriginal * result.data.exchangeRateOverride;
     } else if (result.data.exchangeRateOverride === null && current.amountOriginal != null && current.currencyOriginal !== 'EUR') {
-      // Cleared override: recalculate with auto rate
-      const { getAiService: getAi } = await import('../../services/ai/index.js');
-      const ai = getAi();
-      updateData.amountEur = await ai.convertToEur(current.amountOriginal, current.currencyOriginal, current.purchaseDate ?? undefined);
+      // Cleared override: recalculate using the project's exchange-rate mode + overrides
+      const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
+      updateData.amountEur = await convertToEurForParticipant(participantId, current.amountOriginal, current.currencyOriginal, current.purchaseDate ?? undefined);
     }
   }
 

@@ -37,6 +37,7 @@ import {
   Upload,
   X,
   Link2,
+  Repeat,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -103,6 +104,32 @@ function getLinkedDocIds(item: TravelItem): string[] {
     ids.push(item.luggageDocumentId);
   }
   return ids;
+}
+
+// Group travel items belonging to the same booking (round-trip / multi-leg).
+// Legs of one booking share a non-null bookingId; everything else is standalone.
+interface OrgTravelItemGroup {
+  key: string;
+  items: TravelItem[];
+}
+function groupOrgTravelItemsByBooking(items: TravelItem[]): OrgTravelItemGroup[] {
+  const groups: OrgTravelItemGroup[] = [];
+  const byBooking = new Map<string, OrgTravelItemGroup>();
+  for (const item of items) {
+    const bookingId = item.bookingId || null;
+    if (bookingId) {
+      let group = byBooking.get(bookingId);
+      if (!group) {
+        group = { key: `booking-${bookingId}`, items: [] };
+        byBooking.set(bookingId, group);
+        groups.push(group);
+      }
+      group.items.push(item);
+    } else {
+      groups.push({ key: item.id, items: [item] });
+    }
+  }
+  return groups;
 }
 
 function parseValidationWarnings(warnings?: string): string[] {
@@ -559,29 +586,53 @@ export default function OrgParticipantDetail() {
                 <CardContent>
                   {participant.travelItems.length > 0 ? (
                     <div className="space-y-3">
-                      {participant.travelItems.map((item) => (
-                        <TravelItemCard
-                          key={item.id}
-                          item={item}
-                          expanded={expandedItems.has(item.id)}
-                          highlighted={highlightedItemId === item.id}
-                          onToggleExpand={() => toggleExpand(item.id)}
-                          findings={findingsByItem[item.id] || []}
-                          onToggleFinding={(findingId) => toggleFindingMutation.mutate({ findingId })}
-                          docsById={docsById}
-                          participantId={participant.id}
-                          allDocuments={participant.documents}
-                          onEdit={(itemId, data) => updateTravelItemMutation.mutate({ itemId, data })}
-                          onDelete={(itemId) => {
-                            if (confirm('Delete this travel item? This cannot be undone.')) {
-                              deleteTravelItemMutation.mutate(itemId);
-                            }
-                          }}
-                          onLinkDocument={(itemId, docId) => linkDocumentMutation.mutate({ itemId, docId })}
-                          onUnlinkDocument={(itemId, docId) => unlinkDocumentMutation.mutate({ itemId, docId })}
-                          isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending}
-                        />
-                      ))}
+                      {groupOrgTravelItemsByBooking(participant.travelItems).map((group) => {
+                        const renderCard = (item: typeof group.items[number]) => (
+                          <TravelItemCard
+                            key={item.id}
+                            item={item}
+                            expanded={expandedItems.has(item.id)}
+                            highlighted={highlightedItemId === item.id}
+                            onToggleExpand={() => toggleExpand(item.id)}
+                            findings={findingsByItem[item.id] || []}
+                            onToggleFinding={(findingId) => toggleFindingMutation.mutate({ findingId })}
+                            docsById={docsById}
+                            participantId={participant.id}
+                            allDocuments={participant.documents}
+                            onEdit={(itemId, data) => updateTravelItemMutation.mutate({ itemId, data })}
+                            onDelete={(itemId) => {
+                              if (confirm('Delete this travel item? This cannot be undone.')) {
+                                deleteTravelItemMutation.mutate(itemId);
+                              }
+                            }}
+                            onLinkDocument={(itemId, docId) => linkDocumentMutation.mutate({ itemId, docId })}
+                            onUnlinkDocument={(itemId, docId) => unlinkDocumentMutation.mutate({ itemId, docId })}
+                            isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending}
+                          />
+                        );
+
+                        if (group.items.length < 2) {
+                          return renderCard(group.items[0]);
+                        }
+
+                        const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
+                        return (
+                          <div key={group.key} className="rounded-xl border-2 border-purple-200 bg-purple-50/40 p-2.5">
+                            <div className="flex items-center gap-2 mb-2 px-1">
+                              <Repeat className="w-3.5 h-3.5 text-purple-600" />
+                              <span className="text-xs font-semibold text-purple-800">
+                                {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
+                              </span>
+                              <span className="text-[11px] text-purple-500">
+                                · {group.items.length} legs · one purchase · price counted once
+                              </span>
+                            </div>
+                            <div className="space-y-3">
+                              {group.items.map((item) => renderCard(item))}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <p className="text-gray-500 text-center py-6">No travel items</p>

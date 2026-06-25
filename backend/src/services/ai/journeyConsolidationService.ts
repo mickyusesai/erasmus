@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
 import { getStorageService } from '../storage/index.js';
-import { convertToEur as convertToEurService } from '../exchangeRate/infoEuroService.js';
+import { convertToEurForParticipant } from '../exchangeRate/projectRecalc.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -1030,7 +1030,7 @@ Do NOT include in warnings (these are handled elsewhere):
         const currency = booking.currency || 'EUR';
         const totalAmount = booking.totalAmount ?? null;
         const totalAmountEur = totalAmount !== null && currency !== 'EUR'
-          ? await convertToEurService(totalAmount, currency)
+          ? await convertToEurForParticipant(participantId, totalAmount, currency)
           : totalAmount;
 
         const travelBooking = await prisma.travelBooking.create({
@@ -1145,7 +1145,7 @@ Do NOT include in warnings (these are handled elsewhere):
         let amountEur: number | null = baseAmount;
         if (baseAmount !== null && currency !== 'EUR') {
           const purchaseDateForConversion = purchaseDateValue || new Date();
-          amountEur = await convertToEurService(baseAmount, currency, purchaseDateForConversion);
+          amountEur = await convertToEurForParticipant(participantId, baseAmount, currency, purchaseDateForConversion);
         }
 
         // Resolve price source document ID
@@ -1178,7 +1178,7 @@ Do NOT include in warnings (these are handled elsewhere):
         if (luggageAmount !== null) {
           if (luggageCurrency !== 'EUR') {
             const purchaseDateForLuggage = item.purchaseDate ? new Date(item.purchaseDate) : new Date();
-            luggageAmountEur = await convertToEurService(luggageAmount, luggageCurrency, purchaseDateForLuggage);
+            luggageAmountEur = await convertToEurForParticipant(participantId, luggageAmount, luggageCurrency, purchaseDateForLuggage);
           } else {
             luggageAmountEur = luggageAmount;
           }

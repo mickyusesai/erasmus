@@ -41,7 +41,8 @@ const upload = multer({
 
 // Validation schemas
 const updateBankDetailsSchema = z.object({
-  bankAccountIban: z.string().min(1, 'IBAN is required'),
+  // Strip all whitespace from IBAN so it is always stored space-free (accountant requirement)
+  bankAccountIban: z.string().min(1, 'IBAN is required').transform((s) => s.replace(/\s+/g, '').toUpperCase()),
   bankAccountHolderName: z.string().min(1, 'Account holder name is required'),
   bankAccountBic: z.string().optional(),
   bankName: z.string().optional(),
@@ -503,12 +504,14 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
 
   const aiService = getAiService();
 
-  // Convert currency to EUR if not already
+  // Convert currency to EUR if not already (respect the project's exchange-rate mode)
   let amountEur = result.data.amountEur as number | undefined;
   const amountOriginal = result.data.amountOriginal as number;
   const currencyOriginal = result.data.currencyOriginal as string;
   if (!amountEur && amountOriginal && currencyOriginal) {
-    amountEur = await aiService.convertToEur(
+    const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
+    amountEur = await convertToEurForParticipant(
+      participant.id,
       amountOriginal,
       currencyOriginal,
       (result.data.purchaseDate as Date | null) || undefined
@@ -605,13 +608,25 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
     }
   }
 
-  // Recalculate amountEur when amountOriginal changes
-  // For EUR currency, amountEur equals amountOriginal
-  // For non-EUR, keep existing amountEur (will be recalculated by currency conversion)
-  if (result.data.amountOriginal !== undefined) {
-    const currency = result.data.currencyOriginal || current.currencyOriginal;
-    if (currency === 'EUR') {
-      updateData.amountEur = result.data.amountOriginal;
+  // Recalculate amountEur when the amount, currency, or purchase date changes.
+  const amountOrCurrencyOrDateChanged =
+    result.data.amountOriginal !== undefined ||
+    result.data.currencyOriginal !== undefined ||
+    result.data.purchaseDate !== undefined;
+  if (amountOrCurrencyOrDateChanged) {
+    const newAmount = (result.data.amountOriginal ?? current.amountOriginal) as number | null;
+    const currency = (result.data.currencyOriginal || current.currencyOriginal) as string;
+    const newPurchaseDate = (result.data.purchaseDate as Date | undefined) ?? current.purchaseDate ?? undefined;
+    if (newAmount != null) {
+      if (currency === 'EUR') {
+        updateData.amountEur = newAmount;
+      } else if (current.exchangeRateOverride != null) {
+        // Respect an org-set per-item override
+        updateData.amountEur = Math.round(newAmount * current.exchangeRateOverride * 100) / 100;
+      } else {
+        const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
+        updateData.amountEur = await convertToEurForParticipant(participant.id, newAmount, currency, newPurchaseDate);
+      }
     }
   }
 
@@ -1609,7 +1624,9 @@ router.get('/exchange-rate', participantAuth, asyncHandler(async (req: Request, 
     return;
   }
 
-  const rate = await getExchangeRate(currencyCode, date);
+  // Use the project's exchange-rate mode + per-currency overrides
+  const { getEffectiveRateForParticipant } = await import('../../services/exchangeRate/index.js');
+  const rate = await getEffectiveRateForParticipant(req.participant!.id, currencyCode, date);
 
   res.json({
     currency: currencyCode,
@@ -1634,8 +1651,10 @@ router.post('/convert-currency', participantAuth, asyncHandler(async (req: Reque
   }
 
   const date = purchaseDate ? new Date(purchaseDate) : new Date();
-  const eurAmount = await convertToEur(amount, currency, date);
-  const rate = await getExchangeRate(currency, date);
+  // Use the project's exchange-rate mode + per-currency overrides
+  const { getEffectiveRateForParticipant } = await import('../../services/exchangeRate/index.js');
+  const rate = await getEffectiveRateForParticipant(req.participant!.id, currency, date);
+  const eurAmount = Math.round(amount * rate * 100) / 100;
 
   res.json({
     originalAmount: amount,

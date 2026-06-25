@@ -97,13 +97,15 @@ export default function Settings() {
   );
 }
 
-function ProfileSection({ organisation, queryClient }: { organisation: { id: string; name: string; email: string; oid?: string; createdAt?: string }; queryClient: ReturnType<typeof useQueryClient> }) {
+function ProfileSection({ organisation, queryClient }: { organisation: { id: string; name: string; email: string; oid?: string; legalName?: string | null; vatNumber?: string | null; createdAt?: string }; queryClient: ReturnType<typeof useQueryClient> }) {
   const [name, setName] = useState(organisation.name);
   const [email, setEmail] = useState(organisation.email);
+  const [legalName, setLegalName] = useState(organisation.legalName ?? '');
+  const [vatNumber, setVatNumber] = useState(organisation.vatNumber ?? '');
   const [isEditing, setIsEditing] = useState(false);
 
   const updateMutation = useMutation({
-    mutationFn: () => organisationApi.updateProfile({ name, email }),
+    mutationFn: () => organisationApi.updateProfile({ name, email, legalName: legalName.trim() || null, vatNumber: vatNumber.trim() || null }),
     onSuccess: () => {
       toast.success('Profile updated successfully');
       queryClient.invalidateQueries({ queryKey: ['org-settings'] });
@@ -165,12 +167,47 @@ function ProfileSection({ organisation, queryClient }: { organisation: { id: str
               className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
           </div>
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs text-gray-500 mb-3">
+              Optional — shown on the audit PDFs your accountant receives.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="legalName" className="block text-sm font-medium text-gray-700 mb-1">
+                  Official / Legal Name <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  id="legalName"
+                  type="text"
+                  value={legalName}
+                  onChange={(e) => setLegalName(e.target.value)}
+                  placeholder="e.g. Stichting Example Foundation"
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label htmlFor="vatNumber" className="block text-sm font-medium text-gray-700 mb-1">
+                  VAT Number <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  id="vatNumber"
+                  type="text"
+                  value={vatNumber}
+                  onChange={(e) => setVatNumber(e.target.value)}
+                  placeholder="e.g. NL123456789B01"
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+          </div>
           <div className="flex gap-3">
             <button
               type="button"
               onClick={() => {
                 setName(organisation.name);
                 setEmail(organisation.email);
+                setLegalName(organisation.legalName ?? '');
+                setVatNumber(organisation.vatNumber ?? '');
                 setIsEditing(false);
               }}
               className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
@@ -195,6 +232,14 @@ function ProfileSection({ organisation, queryClient }: { organisation: { id: str
           <div className="flex justify-between">
             <span className="text-gray-600">Email</span>
             <span className="text-gray-900">{organisation.email}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-600">Official / Legal Name</span>
+            <span className="text-gray-900">{organisation.legalName || <span className="text-gray-400">Not set</span>}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-600">VAT Number</span>
+            <span className="text-gray-900">{organisation.vatNumber || <span className="text-gray-400">Not set</span>}</span>
           </div>
         </div>
       )}
