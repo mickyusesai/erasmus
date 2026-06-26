@@ -23,6 +23,7 @@ import {
   Archive,
   Plus,
   RefreshCw,
+  Info,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -1795,6 +1796,16 @@ function ExchangeRateSettingsCard({ project, projectId }: { project: any; projec
             <p className="text-xs text-gray-500 mb-3">
               Override the rate for specific currencies. Leave blank to use the conversion basis above. 1 unit of currency = X EUR.
             </p>
+            {mode === 'PURCHASE_DATE' && (
+              <div className="flex items-start gap-2 rounded-lg bg-blue-50 border border-blue-200 p-3 mb-3 text-xs text-blue-800">
+                <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>
+                  Each travel item is converted at the official rate for its own purchase date, so the rate differs
+                  across items — there is no single rate per currency. Add an override below only if you want to lock a
+                  specific rate for a currency (it then applies to all of that currency's items regardless of date).
+                </span>
+              </div>
+            )}
             {isLoading ? (
               <p className="text-sm text-gray-400">Loading currencies…</p>
             ) : (
@@ -1812,7 +1823,7 @@ function ExchangeRateSettingsCard({ project, projectId }: { project: any; projec
                         step="0.0001"
                         min="0"
                         value={row.rate}
-                        placeholder={row.effectiveRate != null ? row.effectiveRate.toFixed(4) : 'rate'}
+                        placeholder={mode !== 'PURCHASE_DATE' && row.effectiveRate != null ? row.effectiveRate.toFixed(4) : 'rate'}
                         onChange={(e) => {
                           const next = [...rows];
                           next[idx] = { ...row, rate: e.target.value };
@@ -1821,8 +1832,12 @@ function ExchangeRateSettingsCard({ project, projectId }: { project: any; projec
                         className="w-32 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                       <span className="text-sm text-gray-500">EUR</span>
-                      {row.rate === '' && row.effectiveRate != null && (
-                        <span className="text-xs text-gray-400">(currently {row.effectiveRate.toFixed(4)})</span>
+                      {row.rate === '' && (
+                        mode === 'PURCHASE_DATE' ? (
+                          <span className="text-xs text-gray-400 italic">(varies by purchase date)</span>
+                        ) : row.effectiveRate != null ? (
+                          <span className="text-xs text-gray-400">(currently {row.effectiveRate.toFixed(4)})</span>
+                        ) : null
                       )}
                     </div>
                     <button
