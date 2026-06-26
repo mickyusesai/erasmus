@@ -31,6 +31,7 @@ import {
   Eye,
   ArrowRight,
   Repeat,
+  Camera,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -38,6 +39,9 @@ import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
 import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
+import { BottomSheet } from '../../components/participant/BottomSheet';
+import { SwipeableCardDeck } from '../../components/participant/SwipeableCardDeck';
+import { TravelItemReviewCard } from '../../components/participant/TravelItemReviewCard';
 import DisseminationPage from './DisseminationPage';
 import {
   participantApi,
@@ -50,6 +54,21 @@ import {
   ApiError,
 } from '../../services/api';
 import { clsx } from 'clsx';
+
+// Map of IBAN 2-letter country codes to flag emoji
+function ibanCountryFlag(iban: string): string {
+  const code = (iban || '').replace(/\s/g, '').slice(0, 2).toUpperCase();
+  if (code.length < 2) return '';
+  // Convert letters to regional indicator symbols (U+1F1E6 = 🇦)
+  const flagOffset = 0x1F1E6 - 65;
+  return String.fromCodePoint(code.charCodeAt(0) + flagOffset) +
+    String.fromCodePoint(code.charCodeAt(1) + flagOffset);
+}
+
+// Format IBAN with a space every 4 characters for display
+function formatIbanDisplay(iban: string): string {
+  return iban.replace(/\s+/g, '').replace(/(.{4})/g, '$1 ').trim();
+}
 
 // Helper function to format dates as DD-MM-YYYY (European format)
 function formatDate(dateInput: string | Date): string {
@@ -483,50 +502,22 @@ export default function ReimbursementPage() {
 }
 
 function ProgressSteps({ currentStep }: { currentStep: Step }) {
-  const steps = [
-    { num: 1, label: 'Upload Documents' },
-    { num: 2, label: 'Check Data' },
-    { num: 3, label: 'Confirm & Submit' },
-  ];
+  const stepLabels: Record<Step, string> = {
+    1: 'Upload documents',
+    2: 'Review travel items',
+    3: 'Bank details & confirm',
+  };
+  const pct = ((currentStep - 1) / 2) * 100;
 
   return (
-    <div className="flex items-center justify-between">
-      {steps.map((step, i) => (
-        <div key={step.num} className="flex items-center flex-1">
-          <div className="flex items-center gap-3">
-            <div
-              className={clsx(
-                'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
-                currentStep >= step.num
-                  ? 'bg-white text-primary-600'
-                  : 'bg-white/20 text-white/60'
-              )}
-            >
-              {currentStep > step.num ? (
-                <CheckCircle className="w-5 h-5" />
-              ) : (
-                step.num
-              )}
-            </div>
-            <span
-              className={clsx(
-                'text-sm hidden sm:block',
-                currentStep >= step.num ? 'text-white' : 'text-white/60'
-              )}
-            >
-              {step.label}
-            </span>
-          </div>
-          {i < steps.length - 1 && (
-            <div
-              className={clsx(
-                'flex-1 h-0.5 mx-4',
-                currentStep > step.num ? 'bg-white' : 'bg-white/20'
-              )}
-            />
-          )}
-        </div>
-      ))}
+    <div>
+      <p className="text-white/80 text-sm mb-2">{stepLabels[currentStep]}</p>
+      <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-white rounded-full transition-all duration-500"
+          style={{ width: `${Math.max(pct, 10)}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -659,7 +650,7 @@ function Step1Upload({
   }, [uploadMutation]);
 
   const atDocumentLimit = data.documents.length >= 15;
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
     disabled: atDocumentLimit || uploading,
     accept: {
@@ -669,6 +660,7 @@ function Step1Upload({
       'image/webp': ['.webp'],
     },
     maxSize: 10 * 1024 * 1024,
+    noClick: true,
   });
 
   const docTypeLabels: Record<string, string> = {
@@ -756,166 +748,176 @@ function Step1Upload({
       ) : (
       <Card>
         <CardHeader>
-          <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
-        <p className="text-gray-500 mt-1">
-          {isGreenTravel ? (
-            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). For best results, upload everything at once so our AI can understand your complete journey and link related documents together.</>
-          ) : (
-            'Upload all your travel tickets, invoices, and boarding passes. For best results, upload everything at once so our AI can understand your complete journey and link related documents together.'
-          )}
-        </p>
-        {isGreenTravel && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-            <p className="text-sm text-emerald-700">
-              <strong>Green Travel:</strong> Since you're traveling by train/bus (eco-friendly), you can also upload hotel invoices for overnight stays that were needed due to the longer travel time.
-            </p>
-          </div>
-        )}
-      </CardHeader>
-      <CardContent>
-        {/* Document count and hint */}
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm text-gray-500">
-            Only upload documents for trips you will claim reimbursement for. You can add extra items manually after AI consolidation.
+          <h2 className="text-xl font-bold text-gray-900">Add your travel documents</h2>
+          <p className="text-gray-500 mt-1 text-sm">
+            {isGreenTravel
+              ? 'Upload tickets, invoices, boarding passes, and hotel invoices for green travel.'
+              : 'Upload tickets, invoices, and boarding passes for all your travel.'}
           </p>
-          <span className={clsx(
-            'text-sm font-medium ml-4 whitespace-nowrap',
-            atDocumentLimit ? 'text-red-600' : data.documents.length >= 12 ? 'text-amber-600' : 'text-gray-500'
-          )}>
-            {data.documents.length} / 15
-          </span>
-        </div>
-
-        {/* Dropzone */}
-        {atDocumentLimit ? (
-          <div className="p-6 border-2 border-dashed border-red-200 bg-red-50 rounded-xl text-center">
-            <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-2" />
-            <p className="text-sm font-medium text-red-700">Document limit reached (15/15)</p>
-            <p className="text-xs text-red-600 mt-1">
-              You can add any remaining travel items manually in Step 2 after AI consolidation.
-            </p>
+          {isGreenTravel && (
+            <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+              <p className="text-sm text-emerald-700">
+                <strong>Green Travel:</strong> Hotel invoices for overnight stays are also eligible.
+              </p>
+            </div>
+          )}
+        </CardHeader>
+        <CardContent>
+          {/* Hidden dropzone input — controlled manually */}
+          <div {...getRootProps()} className="hidden">
+            <input {...getInputProps()} />
           </div>
-        ) : (
-        <div
-          {...getRootProps()}
-          className={clsx('dropzone', isDragActive && 'active')}
-        >
-          <input {...getInputProps()} />
-          {uploading ? (
-            <div className="text-center">
-              <Loader2 className="w-12 h-12 text-primary-400 animate-spin mx-auto mb-4" />
-              {uploadProgress.total > 1 ? (
-                <>
-                  <p className="text-gray-600 font-medium">
+
+          {/* Hero camera button + category pills */}
+          {atDocumentLimit ? (
+            <div className="p-6 border-2 border-dashed border-red-200 bg-red-50 rounded-2xl text-center mb-6">
+              <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-2" />
+              <p className="text-sm font-medium text-red-700">Document limit reached (15/15)</p>
+              <p className="text-xs text-red-600 mt-1">Add remaining items manually in the next step.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center mb-6">
+              {/* Big camera button */}
+              <button
+                onClick={open}
+                disabled={uploading}
+                className="w-28 h-28 rounded-full bg-primary-600 hover:bg-primary-700 active:scale-95 transition-all shadow-lg flex flex-col items-center justify-center gap-1.5 text-white disabled:opacity-50 disabled:cursor-not-allowed mb-4"
+              >
+                {uploading ? (
+                  <Loader2 className="w-10 h-10 animate-spin" />
+                ) : (
+                  <>
+                    <Camera className="w-10 h-10" />
+                    <span className="text-xs font-medium">Add files</span>
+                  </>
+                )}
+              </button>
+
+              {/* Upload progress */}
+              {uploading && uploadProgress.total > 1 && (
+                <div className="w-full max-w-xs text-center mb-3">
+                  <p className="text-sm text-gray-600 font-medium mb-1.5">
                     Uploading {uploadProgress.current} of {uploadProgress.total}
                   </p>
-                  <p className="text-sm text-gray-500 mt-1 truncate max-w-xs mx-auto">
-                    {uploadProgress.filename}
-                  </p>
-                  <div className="w-48 h-2 bg-gray-200 rounded-full mx-auto mt-3">
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                     <div
-                      className="h-2 bg-primary-500 rounded-full transition-all duration-300"
+                      className="h-full bg-primary-500 rounded-full transition-all duration-300"
                       style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
                     />
                   </div>
-                </>
-              ) : (
-                <p className="text-gray-600">Uploading document...</p>
+                </div>
               )}
-            </div>
-          ) : (
-            <>
-              <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">
-                {isDragActive
-                  ? 'Drop the files here'
-                  : 'Drag and drop files here, or click to select'}
-              </p>
-              <p className="text-sm text-gray-400 mt-2">
-                PDF, JPG, PNG up to 10MB
-              </p>
-            </>
-          )}
-        </div>
-        )}
 
-        {/* Uploaded Documents */}
-        {data.documents.length > 0 && (
-          <div className="mt-6">
-            <h3 className="font-semibold text-gray-900 mb-4">Uploaded Documents</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {data.documents.map((doc) => {
-                return (
-                  <div key={doc.id} className="p-4 rounded-xl bg-gray-50">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0 bg-white border-gray-200">
-                        <FileText className="w-5 h-5 text-gray-400" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate text-sm">
-                          {doc.renamedFilename}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {docTypeLabels[doc.documentType] || 'Document'}
-                        </p>
-                      </div>
+              {/* Category shortcut pills */}
+              <p className="text-xs text-gray-400 mb-3">Tap to add by type</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {[
+                  { label: '✈️ Flights', hint: 'invoices & boarding passes' },
+                  { label: '🚌 Bus / Train', hint: 'tickets & reservations' },
+                  { label: '🚗 Car', hint: 'fuel receipts' },
+                  { label: '🎫 Other', hint: 'any other document' },
+                ].map((cat) => (
+                  <button
+                    key={cat.label}
+                    onClick={open}
+                    disabled={uploading}
+                    title={cat.hint}
+                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all rounded-full text-sm font-medium text-gray-700 disabled:opacity-40"
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+
+              {isDragActive && (
+                <div className="mt-4 p-4 border-2 border-dashed border-primary-400 bg-primary-50 rounded-xl text-center w-full">
+                  <p className="text-primary-600 font-medium">Drop files here</p>
+                </div>
+              )}
+
+              <p className="text-xs text-gray-400 mt-3">PDF, JPG, PNG up to 10 MB each</p>
+            </div>
+          )}
+
+          {/* Uploaded document tiles (horizontal scroll on mobile, grid on desktop) */}
+          {data.documents.length > 0 && (
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900 text-sm">
+                  Uploaded ({data.documents.length})
+                </h3>
+                <span className={clsx(
+                  'text-xs font-medium',
+                  atDocumentLimit ? 'text-red-600' : data.documents.length >= 12 ? 'text-amber-600' : 'text-gray-400'
+                )}>
+                  {data.documents.length} / 15
+                </span>
+              </div>
+              <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1">
+                {data.documents.map((doc) => (
+                  <div key={doc.id} className="flex-shrink-0 w-36 bg-gray-50 rounded-2xl p-3 border border-gray-200">
+                    <div className="w-full h-16 rounded-xl bg-white border border-gray-100 flex items-center justify-center mb-2">
+                      <FileText className="w-7 h-7 text-gray-300" />
                     </div>
-                    <div className="flex gap-3 mt-3">
+                    <p className="text-xs font-medium text-gray-800 truncate" title={doc.renamedFilename}>
+                      {doc.renamedFilename}
+                    </p>
+                    <p className="text-xs text-gray-400 mb-2">{docTypeLabels[doc.documentType] || 'Document'}</p>
+                    <div className="flex gap-2">
                       <button
                         onClick={() => handleViewDocument(doc.id)}
-                        className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
+                        className="flex-1 text-center text-xs text-primary-600 hover:text-primary-700 font-medium"
                       >
-                        <ExternalLink className="w-3 h-3" />
                         View
                       </button>
                       <button
                         onClick={() => deleteMutation.mutate(doc.id)}
-                        className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
+                        className="text-xs text-red-400 hover:text-red-600"
+                        title="Remove"
                       >
-                        <Trash2 className="w-3 h-3" />
-                        Remove
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Next Button */}
-        <div className="mt-8 flex justify-end">
-          <Button
-            onClick={() => setShowConfirmModal(true)}
-            disabled={data.documents.length === 0 || consolidating}
-            loading={consolidating}
-          >
-            {consolidating ? 'Analyzing your journey...' : 'Continue to Check Data'}
-            {!consolidating && <ChevronRight className="w-4 h-4 ml-2" />}
-          </Button>
-        </div>
-
-        {/* Confirmation Modal */}
-        {showConfirmModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-3">Before you continue</h3>
-              <p className="text-sm text-gray-600 mb-6">
-                Did you upload all documents you have? If you also have documents on another device, it's better to upload them first before continuing so the AI has the best possible understanding of your whole journey.
-              </p>
-              <div className="flex gap-3 justify-end">
-                <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>
-                  Go back
-                </Button>
-                <Button onClick={() => { setShowConfirmModal(false); handleContinue(); }}>
-                  Yes, continue
-                </Button>
+                ))}
               </div>
             </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          )}
+
+          {/* Continue button */}
+          <Button
+            onClick={() => setShowConfirmModal(true)}
+            disabled={data.documents.length === 0 || consolidating || uploading}
+            loading={consolidating}
+            className="w-full"
+          >
+            {consolidating ? 'Analyzing your journey...' : `Review travel items →`}
+          </Button>
+          {data.documents.length === 0 && (
+            <p className="text-center text-xs text-gray-400 mt-2">Upload at least one document to continue</p>
+          )}
+
+          {/* Confirmation Modal */}
+          {showConfirmModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+              <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">Ready to continue?</h3>
+                <p className="text-sm text-gray-600 mb-6">
+                  Did you upload all your documents? If you have more on another device, add them first so our AI has the full picture of your journey.
+                </p>
+                <div className="flex gap-3 justify-end">
+                  <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>
+                    Go back
+                  </Button>
+                  <Button onClick={() => { setShowConfirmModal(false); handleContinue(); }}>
+                    Yes, analyze now
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
       )}
     </>
   );
@@ -953,6 +955,8 @@ function Step2CheckData({
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<TravelItem | null>(null);
   const [deleteWithDocuments, setDeleteWithDocuments] = useState(false);
   const [showReuploadWarning, setShowReuploadWarning] = useState(false);
+  const [editingItem, setEditingItem] = useState<TravelItem | null>(null);
+  const [showConfirmedItems, setShowConfirmedItems] = useState(false);
 
   // Calculate unlinked documents (uploaded but not connected to any travel item)
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
@@ -1379,23 +1383,22 @@ function Step2CheckData({
       {/* Main Data Card */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Check Your Travel Data</h2>
-              <p className="text-gray-500 mt-1">
-                We've extracted the following information from your documents. Please verify and correct if needed.
+              <h2 className="text-xl font-bold text-gray-900">Review Travel Items</h2>
+              <p className="text-gray-500 mt-1 text-sm">
+                Swipe right to confirm each item, or left to edit it.
               </p>
             </div>
             <Button
               variant="primary"
-              size="lg"
               onClick={() => setShowAddTravelModal(true)}
-              className={hasUnlinkedDocs ? "ring-2 ring-amber-400 ring-offset-2 animate-pulse" : ""}
+              className={clsx('flex-shrink-0', hasUnlinkedDocs && 'ring-2 ring-amber-400 ring-offset-2 animate-pulse')}
             >
-              <Plus className="w-5 h-5 mr-2" />
-              Add Travel or Link Documents
+              <Plus className="w-4 h-4 mr-1.5" />
+              Add
               {hasUnlinkedDocs && (
-                <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full">
+                <span className="ml-1.5 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full">
                   {unlinkedDocs.length}
                 </span>
               )}
@@ -1406,65 +1409,90 @@ function Step2CheckData({
           {/* Eligibility guidance */}
           <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <p className="text-sm text-blue-800">
-              <strong>Important:</strong> Please only add travel items that are eligible for Erasmus+ reimbursement. This includes travel from your home country to the project location and back, within the approved project and travel dates. Do not add trips to other destinations, extra days, or personal travel. If a travel item is not eligible for reimbursement, it should not be added here.
+              <strong>Important:</strong> Only include travel eligible for Erasmus+ reimbursement — travel from home to the project location and back, within approved dates.
             </p>
           </div>
 
-          {data.travelItems.length > 0 ? (
-            <div className="space-y-6">
-              {groupTravelItemsByBooking(data.travelItems).map((group) => {
-                const renderCard = (item: TravelItem) => (
-                  <TravelItemCard
-                    key={item.id}
-                    item={item}
-                    allTravelItems={data.travelItems}
-                    documents={data.documents}
-                    declarationsOfTravel={data.declarationsOfTravel || []}
-                    token={token}
-                    onUpdate={(updates) =>
-                      updateMutation.mutate({ id: item.id, updates })
-                    }
-                    onDelete={() => {
-                      setDeleteConfirmItem(item);
-                      setDeleteWithDocuments(false);
-                    }}
-                    onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
-                    onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
-                    onViewDocument={setViewingDocument}
-                    onUnlinkDocument={(docId) =>
-                      unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
-                    }
-                    onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
-                  />
-                );
-
-                // Single-item "groups" render as a plain card (unchanged behaviour)
-                if (group.items.length < 2) {
-                  return renderCard(group.items[0]);
-                }
-
-                // Multi-leg booking — wrap the legs together so it's clear they
-                // belong to one purchase (and the price is counted only once).
-                const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
-                return (
-                  <div key={group.key} className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
-                    <div className="flex items-center gap-2 mb-3 px-1">
-                      <Repeat className="w-4 h-4 text-purple-600" />
-                      <span className="text-sm font-semibold text-purple-800">
-                        {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
-                      </span>
-                      <span className="text-xs text-purple-500">
-                        · {group.items.length} legs on one purchase · price counted once
-                      </span>
+          {data.travelItems.length > 0 ? (() => {
+            const unconfirmedItems = data.travelItems.filter(item => !item.checked);
+            const confirmedItems = data.travelItems.filter(item => item.checked);
+            return (
+              <div className="space-y-6">
+                {/* Swipe deck for unconfirmed items */}
+                <SwipeableCardDeck<TravelItem>
+                  items={unconfirmedItems}
+                  totalCount={data.travelItems.length}
+                  confirmedCount={confirmedItems.length}
+                  onSwipeRight={(item) => toggleCheckedMutation.mutate(item.id)}
+                  onSwipeLeft={(item) => setEditingItem(item)}
+                  renderCard={(item) => <TravelItemReviewCard item={item} />}
+                  allDone={
+                    <div className="bg-emerald-50 border-2 border-emerald-200 rounded-3xl p-8 text-center">
+                      <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-3">
+                        <CheckCircle className="w-9 h-9 text-emerald-600" />
+                      </div>
+                      <h3 className="text-lg font-bold text-emerald-800 mb-1">All items reviewed!</h3>
+                      <p className="text-sm text-emerald-700 mb-4">Great job. Continue to enter your bank details.</p>
+                      <Button onClick={onNext}>
+                        Continue to Bank Details
+                        <ChevronRight className="w-4 h-4 ml-2" />
+                      </Button>
                     </div>
-                    <div className="space-y-4">
-                      {group.items.map((item) => renderCard(item))}
-                    </div>
+                  }
+                />
+
+                {/* Confirmed items — collapsible */}
+                {confirmedItems.length > 0 && (
+                  <div>
+                    <button
+                      onClick={() => setShowConfirmedItems(v => !v)}
+                      className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
+                    >
+                      <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      {confirmedItems.length} confirmed item{confirmedItems.length !== 1 ? 's' : ''}
+                      <ChevronRight className={clsx('w-4 h-4 transition-transform', showConfirmedItems && 'rotate-90')} />
+                    </button>
+                    {showConfirmedItems && (
+                      <div className="mt-3 space-y-4">
+                        {groupTravelItemsByBooking(confirmedItems).map((group) => {
+                          const renderGroupCard = (item: TravelItem) => (
+                            <TravelItemCard
+                              key={item.id}
+                              item={item}
+                              allTravelItems={data.travelItems}
+                              documents={data.documents}
+                              declarationsOfTravel={data.declarationsOfTravel || []}
+                              token={token}
+                              onUpdate={(updates) => updateMutation.mutate({ id: item.id, updates })}
+                              onDelete={() => { setDeleteConfirmItem(item); setDeleteWithDocuments(false); }}
+                              onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
+                              onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+                              onViewDocument={setViewingDocument}
+                              onUnlinkDocument={(docId) => unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })}
+                              onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
+                            />
+                          );
+                          if (group.items.length < 2) return renderGroupCard(group.items[0]);
+                          const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
+                          return (
+                            <div key={group.key} className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
+                              <div className="flex items-center gap-2 mb-3 px-1">
+                                <Repeat className="w-4 h-4 text-purple-600" />
+                                <span className="text-sm font-semibold text-purple-800">
+                                  {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
+                                </span>
+                              </div>
+                              <div className="space-y-4">{group.items.map((item) => renderGroupCard(item))}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                );
-              })}
-            </div>
-          ) : (
+                )}
+              </div>
+            );
+          })() : (
             <div className="text-center py-8">
               <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
               <p className="text-gray-600 mb-4">
@@ -1806,6 +1834,37 @@ function Step2CheckData({
           </div>
         </div>
       )}
+
+      {/* Edit Travel Item — bottom sheet */}
+      <BottomSheet
+        isOpen={!!editingItem}
+        onClose={() => setEditingItem(null)}
+        title="Edit Travel Item"
+      >
+        {editingItem && (
+          <div className="p-4">
+            <TravelItemCard
+              item={editingItem}
+              allTravelItems={data.travelItems}
+              documents={data.documents}
+              declarationsOfTravel={data.declarationsOfTravel || []}
+              token={token}
+              onUpdate={(updates) => updateMutation.mutate({ id: editingItem.id, updates })}
+              onDelete={() => { setDeleteConfirmItem(editingItem); setDeleteWithDocuments(false); setEditingItem(null); }}
+              onToggleChecked={() => { toggleCheckedMutation.mutate(editingItem.id); setEditingItem(null); }}
+              onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+              onViewDocument={setViewingDocument}
+              onUnlinkDocument={(docId) => unlinkDocumentMutation.mutate({ travelItemId: editingItem.id, documentId: docId })}
+              onMissingBoardingPass={() => setMissingBoardingPassItem(editingItem)}
+            />
+            <div className="px-2 pb-6 mt-2">
+              <Button className="w-full" onClick={() => setEditingItem(null)}>
+                Done editing
+              </Button>
+            </div>
+          </div>
+        )}
+      </BottomSheet>
     </div>
   );
 }
@@ -3610,12 +3669,7 @@ function Step3Confirm({
     bankDetails.bankAccountHolderName &&
     bankDetails.bankAccountBic;
 
-  // Display IBAN grouped in 4-char blocks for readability (stored value stays space-free)
-  const formattedIban = (bankDetails.bankAccountIban || '')
-    .replace(/\s+/g, '')
-    .toUpperCase()
-    .replace(/(.{4})/g, '$1 ')
-    .trim();
+  const formattedIban = formatIbanDisplay(bankDetails.bankAccountIban || '');
 
   return (
     <>
@@ -3709,116 +3763,107 @@ function Step3Confirm({
             </div>
           )}
 
-          {/* Bank Details */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Bank Account Details</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input
-                label="IBAN"
-                value={bankDetails.bankAccountIban}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, bankAccountIban: e.target.value })
-                }
-                onBlur={() => {
-                  // Strip spaces so the stored IBAN is always space-free, then save.
-                  const cleaned = (bankDetails.bankAccountIban || '').replace(/\s+/g, '').toUpperCase();
-                  if (cleaned !== bankDetails.bankAccountIban) {
+          {/* Bank Account Details — single-column card */}
+          <div className="bg-gray-50 rounded-2xl p-5 space-y-4">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <span className="text-lg">🏦</span>
+              Bank Account
+            </h3>
+            {/* IBAN with live flag */}
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">IBAN</label>
+              <div className="flex items-center gap-2">
+                {bankDetails.bankAccountIban.length >= 2 && (
+                  <span className="text-2xl flex-shrink-0" aria-label="country">
+                    {ibanCountryFlag(bankDetails.bankAccountIban)}
+                  </span>
+                )}
+                <input
+                  type="text"
+                  value={formatIbanDisplay(bankDetails.bankAccountIban)}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/\s+/g, '').toUpperCase();
+                    setBankDetails({ ...bankDetails, bankAccountIban: raw });
+                  }}
+                  onBlur={() => {
+                    const cleaned = bankDetails.bankAccountIban.replace(/\s+/g, '').toUpperCase();
                     setBankDetails({ ...bankDetails, bankAccountIban: cleaned });
-                  }
-                  // Reset the IBAN confirmation if the value changed since they last confirmed.
-                  setConfirmations((c) => ({ ...c, ibanCorrect: false }));
-                  updateBankMutation.mutate();
-                }}
-                placeholder="DE89 3704 0044 0532 0130 00"
-              />
-              <Input
-                label="Account Holder Name"
-                value={bankDetails.bankAccountHolderName}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, bankAccountHolderName: e.target.value })
-                }
-                onBlur={() => updateBankMutation.mutate()}
-                placeholder="John Doe"
-              />
-              <div className="space-y-1">
-                <div className="flex items-center gap-1">
-                  <label className="block text-sm font-medium text-gray-700">
-                    BIC/SWIFT Code
-                  </label>
-                  <div className="relative group">
-                    <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
-                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
-                      The BIC (Bank Identifier Code) is an 8-11 character code. You can find it on your bank statement, in your banking app, or by searching &quot;[your bank name] BIC code&quot;.
-                      <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
-                    </div>
+                    setConfirmations((c) => ({ ...c, ibanCorrect: false }));
+                    updateBankMutation.mutate();
+                  }}
+                  placeholder="DE89 3704 0044 0532 0130 00"
+                  className="flex-1 px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono tracking-wide"
+                />
+              </div>
+            </div>
+            <Input
+              label="Account Holder Name"
+              value={bankDetails.bankAccountHolderName}
+              onChange={(e) => setBankDetails({ ...bankDetails, bankAccountHolderName: e.target.value })}
+              onBlur={() => updateBankMutation.mutate()}
+              placeholder="John Doe"
+            />
+            <div className="space-y-1">
+              <div className="flex items-center gap-1">
+                <label className="block text-sm font-medium text-gray-700">BIC / SWIFT Code</label>
+                <div className="relative group">
+                  <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
+                    8–11 character code from your bank statement or banking app.
                   </div>
                 </div>
-                <Input
-                  value={bankDetails.bankAccountBic}
-                  onChange={(e) =>
-                    setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
-                  }
-                  onBlur={() => updateBankMutation.mutate()}
-                  placeholder="COBADEFFXXX"
-                  required
-                />
               </div>
               <Input
-                label="Bank Name"
-                value={bankDetails.bankName}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, bankName: e.target.value })
-                }
+                value={bankDetails.bankAccountBic}
+                onChange={(e) => setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })}
                 onBlur={() => updateBankMutation.mutate()}
-                placeholder="e.g., Deutsche Bank"
+                placeholder="COBADEFFXXX"
               />
             </div>
+            <Input
+              label="Bank Name"
+              value={bankDetails.bankName}
+              onChange={(e) => setBankDetails({ ...bankDetails, bankName: e.target.value })}
+              onBlur={() => updateBankMutation.mutate()}
+              placeholder="e.g., Deutsche Bank"
+            />
           </div>
 
-          {/* Personal Address */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Personal Address</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
-                <Input
-                  label="Street Address"
-                  value={bankDetails.personalAddress}
-                  onChange={(e) =>
-                    setBankDetails({ ...bankDetails, personalAddress: e.target.value })
-                  }
-                  onBlur={() => updateBankMutation.mutate()}
-                  placeholder="e.g., Hauptstrasse 1"
-                />
-              </div>
+          {/* Personal Address — single-column card */}
+          <div className="bg-gray-50 rounded-2xl p-5 space-y-4">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <span className="text-lg">🏠</span>
+              Personal Address
+            </h3>
+            <Input
+              label="Street Address"
+              value={bankDetails.personalAddress}
+              onChange={(e) => setBankDetails({ ...bankDetails, personalAddress: e.target.value })}
+              onBlur={() => updateBankMutation.mutate()}
+              placeholder="e.g., Hauptstrasse 1"
+            />
+            <Input
+              label="City"
+              value={bankDetails.personalCity}
+              onChange={(e) => setBankDetails({ ...bankDetails, personalCity: e.target.value })}
+              onBlur={() => updateBankMutation.mutate()}
+              placeholder="e.g., Berlin"
+            />
+            <div className="grid grid-cols-2 gap-4">
               <Input
-                label="City"
-                value={bankDetails.personalCity}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, personalCity: e.target.value })
-                }
+                label="Postal Code"
+                value={bankDetails.personalPostalCode}
+                onChange={(e) => setBankDetails({ ...bankDetails, personalPostalCode: e.target.value })}
                 onBlur={() => updateBankMutation.mutate()}
-                placeholder="e.g., Berlin"
+                placeholder="10115"
               />
-              <div className="grid grid-cols-2 gap-4">
-                <Input
-                  label="Postal Code"
-                  value={bankDetails.personalPostalCode}
-                  onChange={(e) =>
-                    setBankDetails({ ...bankDetails, personalPostalCode: e.target.value })
-                  }
-                  onBlur={() => updateBankMutation.mutate()}
-                  placeholder="e.g., 10115"
-                />
-                <Input
-                  label="Country"
-                  value={bankDetails.personalCountry}
-                  onChange={(e) =>
-                    setBankDetails({ ...bankDetails, personalCountry: e.target.value })
-                  }
-                  onBlur={() => updateBankMutation.mutate()}
-                  placeholder="e.g., Germany"
-                />
-              </div>
+              <Input
+                label="Country"
+                value={bankDetails.personalCountry}
+                onChange={(e) => setBankDetails({ ...bankDetails, personalCountry: e.target.value })}
+                onBlur={() => updateBankMutation.mutate()}
+                placeholder="Germany"
+              />
             </div>
           </div>
 
@@ -3847,71 +3892,136 @@ function Step3Confirm({
             </div>
           </div>
 
-          {/* Confirmations */}
-          <div className="mt-8 space-y-4">
-            {/* IBAN confirmation — shows their actual IBAN so they read it before ticking */}
-            <label className={`flex items-start gap-3 cursor-pointer p-4 rounded-xl border ${confirmations.ibanCorrect ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+          {/* Confirmations — large tappable cards */}
+          <div className="mt-8 space-y-3">
+            <h3 className="font-semibold text-gray-900 text-sm uppercase tracking-wide text-gray-500">Confirm before submitting</h3>
+
+            {/* IBAN confirmation */}
+            <label
+              className={clsx(
+                'flex items-start gap-4 cursor-pointer p-4 rounded-2xl border-2 transition-colors min-h-[56px]',
+                !bankDetails.bankAccountIban && 'opacity-50 cursor-not-allowed',
+                confirmations.ibanCorrect
+                  ? 'bg-emerald-50 border-emerald-400'
+                  : 'bg-white border-gray-200 hover:border-gray-300'
+              )}
+            >
+              <div className={clsx(
+                'w-6 h-6 rounded-full border-2 flex-shrink-0 mt-0.5 flex items-center justify-center transition-colors',
+                confirmations.ibanCorrect ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+              )}>
+                {confirmations.ibanCorrect && <CheckCircle className="w-4 h-4 text-white" />}
+              </div>
+              <div className="flex-1">
+                <span className="text-sm text-gray-800">
+                  {bankDetails.bankAccountIban ? (
+                    <>
+                      My IBAN <span className="font-mono font-bold tracking-wide">{formattedIban}</span> is correct.
+                    </>
+                  ) : (
+                    <span className="text-gray-400">Enter your IBAN above first.</span>
+                  )}
+                </span>
+              </div>
               <input
                 type="checkbox"
                 checked={confirmations.ibanCorrect}
                 disabled={!bankDetails.bankAccountIban}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, ibanCorrect: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-40"
+                onChange={(e) => setConfirmations({ ...confirmations, ibanCorrect: e.target.checked })}
+                className="sr-only"
               />
-              <span className="text-sm text-gray-800">
-                {bankDetails.bankAccountIban ? (
-                  <>
-                    I confirm my bank account IBAN{' '}
-                    <span className="font-mono font-semibold tracking-wide">{formattedIban}</span>{' '}
-                    is correct. This is the account the reimbursement will be paid to.
-                  </>
-                ) : (
-                  <span className="text-gray-500">Enter your IBAN above to confirm it.</span>
-                )}
-              </span>
             </label>
-            <label className="flex items-start gap-3 cursor-pointer">
+
+            {/* Data correct */}
+            <label
+              className={clsx(
+                'flex items-start gap-4 cursor-pointer p-4 rounded-2xl border-2 transition-colors min-h-[56px]',
+                confirmations.dataCorrect
+                  ? 'bg-emerald-50 border-emerald-400'
+                  : 'bg-white border-gray-200 hover:border-gray-300'
+              )}
+            >
+              <div className={clsx(
+                'w-6 h-6 rounded-full border-2 flex-shrink-0 mt-0.5 flex items-center justify-center transition-colors',
+                confirmations.dataCorrect ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+              )}>
+                {confirmations.dataCorrect && <CheckCircle className="w-4 h-4 text-white" />}
+              </div>
+              <span className="text-sm text-gray-800 flex-1">
+                The information above is correct to the best of my knowledge.
+              </span>
               <input
                 type="checkbox"
                 checked={confirmations.dataCorrect}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, dataCorrect: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                onChange={(e) => setConfirmations({ ...confirmations, dataCorrect: e.target.checked })}
+                className="sr-only"
               />
-              <span className="text-sm text-gray-700">
-                I confirm that the above information is correct to the best of my knowledge.
-              </span>
             </label>
-            <label className="flex items-start gap-3 cursor-pointer">
+
+            {/* Erasmus rules */}
+            <label
+              className={clsx(
+                'flex items-start gap-4 cursor-pointer p-4 rounded-2xl border-2 transition-colors min-h-[56px]',
+                confirmations.erasmusRules
+                  ? 'bg-emerald-50 border-emerald-400'
+                  : 'bg-white border-gray-200 hover:border-gray-300'
+              )}
+            >
+              <div className={clsx(
+                'w-6 h-6 rounded-full border-2 flex-shrink-0 mt-0.5 flex items-center justify-center transition-colors',
+                confirmations.erasmusRules ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+              )}>
+                {confirmations.erasmusRules && <CheckCircle className="w-4 h-4 text-white" />}
+              </div>
+              <span className="text-sm text-gray-800 flex-1">
+                I understand that the reimbursement rules follow Erasmus+ guidelines.
+              </span>
               <input
                 type="checkbox"
                 checked={confirmations.erasmusRules}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, erasmusRules: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                onChange={(e) => setConfirmations({ ...confirmations, erasmusRules: e.target.checked })}
+                className="sr-only"
               />
-              <span className="text-sm text-gray-700">
-                I understand that the reimbursement rules follow Erasmus+ guidelines.
-              </span>
             </label>
           </div>
 
+          {/* Receipt summary */}
+          {canSubmit && (
+            <div className="mt-8 bg-gradient-to-br from-primary-600 to-primary-700 rounded-2xl p-5 text-white">
+              <p className="text-white/70 text-xs font-medium uppercase tracking-wide mb-3">Ready to submit</p>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-white/70 text-xs">Participant</p>
+                  <p className="font-semibold">{data.participant.firstName} {data.participant.lastName}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-white/70 text-xs">Amount to receive</p>
+                  <p className="text-2xl font-bold">
+                    {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(data.reimbursementSummary?.amountToReimburse || 0)}
+                  </p>
+                </div>
+              </div>
+              {bankDetails.bankAccountIban && (
+                <p className="text-white/60 text-xs font-mono">
+                  → {formatIbanDisplay(bankDetails.bankAccountIban).slice(-9)}
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Navigation */}
-          <div className="mt-8 flex justify-between">
-            <Button variant="secondary" onClick={onBack}>
-              Back to Check Data
-            </Button>
+          <div className="mt-6 space-y-3">
             <Button
               onClick={() => { setSubmitAttempted(true); markCompleteMutation.mutate(); }}
               loading={markCompleteMutation.isPending}
               disabled={!canSubmit}
+              className="w-full py-4 text-base font-semibold"
             >
-              <CheckCircle className="w-4 h-4 mr-2" />
+              <CheckCircle className="w-5 h-5 mr-2" />
               Submit Reimbursement
+            </Button>
+            <Button variant="secondary" onClick={onBack} className="w-full">
+              Back to Check Data
             </Button>
           </div>
 

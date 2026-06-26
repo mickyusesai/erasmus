@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.18.0",
+    "framer-motion": "^11.0.0",
     "@types/react-signature-canvas": "^1.0.7",
     "clsx": "^2.1.0",
     "lucide-react": "^0.323.0",
