@@ -347,12 +347,12 @@ export default function ReimbursementPage() {
     <div className="min-h-screen pb-12">
       {/* Header */}
       <div className="bg-gradient-header text-white">
-        <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
-          <h1 className="text-2xl sm:text-3xl font-bold">
+        <div className="max-w-4xl mx-auto px-4 py-5 sm:py-7">
+          <h1 className="text-xl sm:text-2xl font-bold">
             Hello {data.participant.firstName}!
           </h1>
-          <p className="text-white/80 mt-2">
-            Travel reimbursement for {data.project.name}
+          <p className="text-sm text-white/75 mt-1">
+            Travel reimbursement · {data.project.name}
           </p>
 
           {/* Tabs (when dissemination is enabled) */}
@@ -398,7 +398,7 @@ export default function ReimbursementPage() {
 
           {/* Progress Steps (only for reimbursement tab) */}
           {!isComplete && activeTab === 'reimbursement' && (
-            <div className="mt-8">
+            <div className="mt-5">
               <ProgressSteps currentStep={currentStep} />
             </div>
           )}
@@ -787,45 +787,28 @@ function Step1Upload({
     }
   };
 
+  // Toggle the "no reimbursement" opt-out with an optimistic update so the UI
+  // switches to the skip view instantly.
+  const setNoReimbursementValue = async (newValue: boolean) => {
+    queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+      if (!old) return old;
+      return { ...old, participant: { ...old.participant, noReimbursement: newValue } };
+    });
+    try {
+      await participantApi.setNoReimbursement(token, newValue);
+    } catch {
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return { ...old, participant: { ...old.participant, noReimbursement: !newValue } };
+      });
+      toast.error('Failed to update preference');
+    }
+  };
+
   return (
     <>
       {/* Show loading screen with Erasmus quotes during consolidation */}
       {consolidating && <ConsolidationLoading documentCount={data.documents.length} />}
-
-      {/* No-reimbursement option */}
-      <Card className="mb-4">
-        <CardContent className="py-4">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={data.participant.noReimbursement || false}
-              onChange={async (e) => {
-                const newValue = e.target.checked;
-                // Optimistic update so checkbox reacts instantly
-                queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
-                  if (!old) return old;
-                  return { ...old, participant: { ...old.participant, noReimbursement: newValue } };
-                });
-                try {
-                  await participantApi.setNoReimbursement(token, newValue);
-                } catch {
-                  // Revert on error
-                  queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
-                    if (!old) return old;
-                    return { ...old, participant: { ...old.participant, noReimbursement: !newValue } };
-                  });
-                  toast.error('Failed to update preference');
-                }
-              }}
-              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-5 w-5"
-            />
-            <div>
-              <p className="font-medium text-gray-900">I don't need travel reimbursement</p>
-              <p className="text-sm text-gray-500">Select this if you didn't travel or don't need to claim travel costs.</p>
-            </div>
-          </label>
-        </CardContent>
-      </Card>
 
       {data.participant.noReimbursement ? (
         <Card>
@@ -843,37 +826,37 @@ function Step1Upload({
             >
               Continue
             </button>
+            <div className="mt-4">
+              <button
+                onClick={() => setNoReimbursementValue(false)}
+                className="text-sm text-gray-400 hover:text-gray-600"
+              >
+                Actually, I do need reimbursement
+              </button>
+            </div>
           </CardContent>
         </Card>
       ) : (
       <div className="space-y-4" {...getRootProps()}>
         <input {...getInputProps()} />
 
-        {/* Status pill */}
-        <div className="flex items-center gap-2 bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
-          <span className={clsx('w-2.5 h-2.5 rounded-full', aiUnlocked ? 'bg-emerald-500' : 'bg-amber-500')} />
-          <span className="text-sm font-medium text-gray-700">
-            {aiUnlocked ? 'Project ended · ready to claim' : 'Project ongoing · keep uploading'}
-          </span>
-        </div>
-
         {/* Gradient hero */}
-        <div className="rounded-3xl p-6 sm:p-7 text-white bg-gradient-to-br from-primary-600 via-primary-600 to-fuchsia-500 shadow-lg">
+        <div className="rounded-3xl p-5 text-white bg-gradient-to-br from-primary-600 via-primary-600 to-fuchsia-500 shadow-lg">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 text-sm font-medium backdrop-blur">
             {aiUnlocked ? '✅ Project ended' : '⏳ Project in progress'}
           </span>
-          <h2 className="text-2xl sm:text-3xl font-bold mt-4 leading-tight">
+          <h2 className="text-2xl font-bold mt-3 leading-snug">
             {aiUnlocked ? 'Last check before we build your trips' : 'Collect now, claim later'}
           </h2>
-          <p className="text-white/85 mt-3 leading-relaxed">
+          <p className="text-white/85 mt-2 text-sm leading-relaxed">
             {aiUnlocked ? (
-              'Make sure every document is here. When you continue, our AI reads them and creates your travel items.'
+              "Make sure every document is here, then we'll build your trips with AI."
             ) : (
-              <>Your project runs until <strong>{formatDate(data.project.endDate)}</strong>. Add every ticket, receipt &amp; boarding pass as you get them — we keep them safe so nothing is lost.</>
+              <>Add tickets &amp; receipts as you get them — we keep them safe until the project ends on <strong>{formatDate(data.project.endDate)}</strong>.</>
             )}
           </p>
           {isGreenTravel && (
-            <p className="text-white/85 text-sm mt-3 bg-white/10 rounded-xl px-3 py-2">
+            <p className="text-white/85 text-xs mt-2 bg-white/10 rounded-xl px-3 py-2">
               <strong>Green travel:</strong> you can also upload hotel invoices for overnight stays needed due to longer eco-friendly travel.
             </p>
           )}
@@ -881,7 +864,7 @@ function Step1Upload({
             type="button"
             onClick={open}
             disabled={atDocumentLimit || uploading}
-            className="mt-5 w-full bg-white text-primary-700 rounded-2xl py-4 font-semibold text-lg hover:bg-white/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+            className="mt-4 w-full bg-white text-primary-700 rounded-2xl py-3.5 font-semibold text-lg hover:bg-white/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
           >
             {uploading ? (
               <><Loader2 className="w-5 h-5 animate-spin" /> Uploading{uploadProgress.total > 1 ? ` ${uploadProgress.current}/${uploadProgress.total}` : '…'}</>
@@ -889,13 +872,12 @@ function Step1Upload({
               <><Plus className="w-5 h-5" /> Add files</>
             )}
           </button>
-          {atDocumentLimit && (
-            <p className="text-white/80 text-xs mt-2 text-center">
+          {atDocumentLimit ? (
+            <p className="text-white/80 text-[11px] mt-2 text-center">
               Document limit reached (15/15). You can add items manually after building your trips.
             </p>
-          )}
-          {!atDocumentLimit && (
-            <p className="text-white/70 text-xs mt-2 text-center">PDF, JPG, PNG up to 10MB · or drag &amp; drop here</p>
+          ) : (
+            <p className="text-white/70 text-[11px] mt-2 text-center">PDF, JPG, PNG up to 10MB · or drag &amp; drop here</p>
           )}
         </div>
 
@@ -912,7 +894,7 @@ function Step1Upload({
           ) : (
             <ul className="divide-y divide-gray-100">
               {data.documents.map((doc) => (
-                <li key={doc.id} className="flex items-center gap-3 px-4 py-3">
+                <li key={doc.id} className="flex items-center gap-3 px-4 py-2.5">
                   <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0">
                     <FileText className="w-5 h-5 text-primary-500" />
                   </div>
@@ -965,6 +947,17 @@ function Step1Upload({
             <span className="text-sm font-medium">Available when project ends · {formatDate(data.project.endDate)}</span>
           </div>
         )}
+
+        {/* Subtle opt-out for people who didn't travel */}
+        <div className="text-center pt-1">
+          <button
+            type="button"
+            onClick={() => setNoReimbursementValue(true)}
+            className="text-sm text-gray-400 hover:text-gray-600"
+          >
+            I didn't travel / don't need reimbursement →
+          </button>
+        </div>
 
         {/* Confirmation Modal */}
         {showConfirmModal && (
