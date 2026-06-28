@@ -31,7 +31,10 @@ import {
   Eye,
   ArrowRight,
   Repeat,
+  Lock,
+  ChevronLeft,
 } from 'lucide-react';
+import { motion, AnimatePresence, useDragControls, type PanInfo } from 'framer-motion';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -335,6 +338,10 @@ export default function ReimbursementPage() {
 
   const isComplete = data.participant.status !== 'DRAFT';
   const disseminationEnabled = data.project.disseminationEnabled;
+  // AI analysis ("Build my trips") is locked until the project ends, unless the
+  // organisation opened it early. Participants upload before/during the project.
+  const aiUnlocked =
+    !!data.project.aiAnalysisUnlocked || new Date() >= new Date(data.project.endDate);
 
   return (
     <div className="min-h-screen pb-12">
@@ -434,6 +441,7 @@ export default function ReimbursementPage() {
               <Step1Upload
                 data={data}
                 token={token}
+                aiUnlocked={aiUnlocked}
                 onNext={async () => {
                   if (data.participant.noReimbursement) {
                     // Skip steps 2 & 3 — mark complete directly
@@ -483,50 +491,131 @@ export default function ReimbursementPage() {
 }
 
 function ProgressSteps({ currentStep }: { currentStep: Step }) {
-  const steps = [
-    { num: 1, label: 'Upload Documents' },
-    { num: 2, label: 'Check Data' },
-    { num: 3, label: 'Confirm & Submit' },
-  ];
+  const labels: Record<Step, string> = {
+    1: 'Upload documents',
+    2: 'Review travel items',
+    3: 'Bank details & submit',
+  };
 
   return (
-    <div className="flex items-center justify-between">
-      {steps.map((step, i) => (
-        <div key={step.num} className="flex items-center flex-1">
-          <div className="flex items-center gap-3">
-            <div
-              className={clsx(
-                'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
-                currentStep >= step.num
-                  ? 'bg-white text-primary-600'
-                  : 'bg-white/20 text-white/60'
-              )}
+    <div>
+      {/* Slim 3-segment progress bar */}
+      <div className="flex items-center gap-1.5">
+        {[1, 2, 3].map((num) => (
+          <div
+            key={num}
+            className={clsx(
+              'h-1.5 flex-1 rounded-full transition-all duration-300',
+              currentStep >= num ? 'bg-white' : 'bg-white/25'
+            )}
+          />
+        ))}
+      </div>
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-sm font-medium text-white">{labels[currentStep]}</span>
+        <span className="text-xs text-white/70">Step {currentStep} of 3</span>
+      </div>
+    </div>
+  );
+}
+
+// Horizontal swipe carousel for reviewing travel items one at a time.
+// Drag is only started when the pointer doesn't land on an interactive control,
+// so the inline edit fields inside each card keep working normally.
+function TravelSwipeCarousel({ slides }: { slides: { key: string; node: React.ReactNode }[] }) {
+  const [index, setIndex] = useState(0);
+  const controls = useDragControls();
+  const count = slides.length;
+  const clamped = Math.min(index, Math.max(0, count - 1));
+
+  useEffect(() => {
+    if (index > count - 1) setIndex(Math.max(0, count - 1));
+  }, [count, index]);
+
+  if (count === 0) return null;
+
+  const go = (delta: number) => setIndex((i) => Math.max(0, Math.min(count - 1, i + delta)));
+
+  const startDrag = (e: React.PointerEvent) => {
+    const el = e.target as HTMLElement;
+    if (el.closest('input,select,textarea,button,a,label,[role="button"],[contenteditable="true"]')) return;
+    controls.start(e);
+  };
+
+  const handleDragEnd = (_e: unknown, info: PanInfo) => {
+    if (info.offset.x < -70 && clamped < count - 1) go(1);
+    else if (info.offset.x > 70 && clamped > 0) go(-1);
+  };
+
+  return (
+    <div>
+      {/* Carousel header: position + arrows */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-medium text-gray-500">
+          Trip {clamped + 1} / {count}{count > 1 ? ' · swipe →' : ''}
+        </span>
+        {count > 1 && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              disabled={clamped === 0}
+              className="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+              aria-label="Previous trip"
             >
-              {currentStep > step.num ? (
-                <CheckCircle className="w-5 h-5" />
-              ) : (
-                step.num
-              )}
-            </div>
-            <span
-              className={clsx(
-                'text-sm hidden sm:block',
-                currentStep >= step.num ? 'text-white' : 'text-white/60'
-              )}
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => go(1)}
+              disabled={clamped === count - 1}
+              className="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+              aria-label="Next trip"
             >
-              {step.label}
-            </span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
-          {i < steps.length - 1 && (
-            <div
+        )}
+      </div>
+
+      <div className="relative overflow-hidden touch-pan-y">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={slides[clamped].key}
+            drag={count > 1 ? 'x' : false}
+            dragListener={false}
+            dragControls={controls}
+            dragConstraints={{ left: 0, right: 0 }}
+            dragElastic={0.2}
+            onDragEnd={handleDragEnd}
+            onPointerDown={count > 1 ? startDrag : undefined}
+            initial={{ opacity: 0, x: 30 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -30 }}
+            transition={{ duration: 0.18 }}
+          >
+            {slides[clamped].node}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {/* Dots */}
+      {count > 1 && (
+        <div className="flex justify-center flex-wrap gap-1.5 mt-4">
+          {slides.map((s, i) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setIndex(i)}
+              aria-label={`Go to trip ${i + 1}`}
               className={clsx(
-                'flex-1 h-0.5 mx-4',
-                currentStep > step.num ? 'bg-white' : 'bg-white/20'
+                'h-1.5 rounded-full transition-all',
+                i === clamped ? 'w-6 bg-primary-600' : 'w-1.5 bg-gray-300 hover:bg-gray-400'
               )}
             />
-          )}
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -565,11 +654,13 @@ function CompletedView({ data }: { data: ParticipantAuthResponse }) {
 function Step1Upload({
   data,
   token,
+  aiUnlocked,
   onNext,
   onAiWarnings,
 }: {
   data: ParticipantAuthResponse;
   token: string;
+  aiUnlocked: boolean;
   onNext: () => void;
   onAiWarnings: (warnings: string[]) => void;
 }) {
@@ -659,9 +750,10 @@ function Step1Upload({
   }, [uploadMutation]);
 
   const atDocumentLimit = data.documents.length >= 15;
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, open } = useDropzone({
     onDrop,
     disabled: atDocumentLimit || uploading,
+    noClick: true,
     accept: {
       'application/pdf': ['.pdf'],
       'image/jpeg': ['.jpg', '.jpeg'],
@@ -754,146 +846,125 @@ function Step1Upload({
           </CardContent>
         </Card>
       ) : (
-      <Card>
-        <CardHeader>
-          <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
-        <p className="text-gray-500 mt-1">
-          {isGreenTravel ? (
-            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). For best results, upload everything at once so our AI can understand your complete journey and link related documents together.</>
-          ) : (
-            'Upload all your travel tickets, invoices, and boarding passes. For best results, upload everything at once so our AI can understand your complete journey and link related documents together.'
-          )}
-        </p>
-        {isGreenTravel && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-            <p className="text-sm text-emerald-700">
-              <strong>Green Travel:</strong> Since you're traveling by train/bus (eco-friendly), you can also upload hotel invoices for overnight stays that were needed due to the longer travel time.
-            </p>
-          </div>
-        )}
-      </CardHeader>
-      <CardContent>
-        {/* Document count and hint */}
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm text-gray-500">
-            Only upload documents for trips you will claim reimbursement for. You can add extra items manually after AI consolidation.
-          </p>
-          <span className={clsx(
-            'text-sm font-medium ml-4 whitespace-nowrap',
-            atDocumentLimit ? 'text-red-600' : data.documents.length >= 12 ? 'text-amber-600' : 'text-gray-500'
-          )}>
-            {data.documents.length} / 15
+      <div className="space-y-4" {...getRootProps()}>
+        <input {...getInputProps()} />
+
+        {/* Status pill */}
+        <div className="flex items-center gap-2 bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
+          <span className={clsx('w-2.5 h-2.5 rounded-full', aiUnlocked ? 'bg-emerald-500' : 'bg-amber-500')} />
+          <span className="text-sm font-medium text-gray-700">
+            {aiUnlocked ? 'Project ended · ready to claim' : 'Project ongoing · keep uploading'}
           </span>
         </div>
 
-        {/* Dropzone */}
-        {atDocumentLimit ? (
-          <div className="p-6 border-2 border-dashed border-red-200 bg-red-50 rounded-xl text-center">
-            <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-2" />
-            <p className="text-sm font-medium text-red-700">Document limit reached (15/15)</p>
-            <p className="text-xs text-red-600 mt-1">
-              You can add any remaining travel items manually in Step 2 after AI consolidation.
+        {/* Gradient hero */}
+        <div className="rounded-3xl p-6 sm:p-7 text-white bg-gradient-to-br from-primary-600 via-primary-600 to-fuchsia-500 shadow-lg">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 text-sm font-medium backdrop-blur">
+            {aiUnlocked ? '✅ Project ended' : '⏳ Project in progress'}
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-bold mt-4 leading-tight">
+            {aiUnlocked ? 'Last check before we build your trips' : 'Collect now, claim later'}
+          </h2>
+          <p className="text-white/85 mt-3 leading-relaxed">
+            {aiUnlocked ? (
+              'Make sure every document is here. When you continue, our AI reads them and creates your travel items.'
+            ) : (
+              <>Your project runs until <strong>{formatDate(data.project.endDate)}</strong>. Add every ticket, receipt &amp; boarding pass as you get them — we keep them safe so nothing is lost.</>
+            )}
+          </p>
+          {isGreenTravel && (
+            <p className="text-white/85 text-sm mt-3 bg-white/10 rounded-xl px-3 py-2">
+              <strong>Green travel:</strong> you can also upload hotel invoices for overnight stays needed due to longer eco-friendly travel.
             </p>
-          </div>
-        ) : (
-        <div
-          {...getRootProps()}
-          className={clsx('dropzone', isDragActive && 'active')}
-        >
-          <input {...getInputProps()} />
-          {uploading ? (
-            <div className="text-center">
-              <Loader2 className="w-12 h-12 text-primary-400 animate-spin mx-auto mb-4" />
-              {uploadProgress.total > 1 ? (
-                <>
-                  <p className="text-gray-600 font-medium">
-                    Uploading {uploadProgress.current} of {uploadProgress.total}
-                  </p>
-                  <p className="text-sm text-gray-500 mt-1 truncate max-w-xs mx-auto">
-                    {uploadProgress.filename}
-                  </p>
-                  <div className="w-48 h-2 bg-gray-200 rounded-full mx-auto mt-3">
-                    <div
-                      className="h-2 bg-primary-500 rounded-full transition-all duration-300"
-                      style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
-                    />
-                  </div>
-                </>
-              ) : (
-                <p className="text-gray-600">Uploading document...</p>
-              )}
-            </div>
-          ) : (
-            <>
-              <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">
-                {isDragActive
-                  ? 'Drop the files here'
-                  : 'Drag and drop files here, or click to select'}
-              </p>
-              <p className="text-sm text-gray-400 mt-2">
-                PDF, JPG, PNG up to 10MB
-              </p>
-            </>
+          )}
+          <button
+            type="button"
+            onClick={open}
+            disabled={atDocumentLimit || uploading}
+            className="mt-5 w-full bg-white text-primary-700 rounded-2xl py-4 font-semibold text-lg hover:bg-white/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+          >
+            {uploading ? (
+              <><Loader2 className="w-5 h-5 animate-spin" /> Uploading{uploadProgress.total > 1 ? ` ${uploadProgress.current}/${uploadProgress.total}` : '…'}</>
+            ) : (
+              <><Plus className="w-5 h-5" /> Add files</>
+            )}
+          </button>
+          {atDocumentLimit && (
+            <p className="text-white/80 text-xs mt-2 text-center">
+              Document limit reached (15/15). You can add items manually after building your trips.
+            </p>
+          )}
+          {!atDocumentLimit && (
+            <p className="text-white/70 text-xs mt-2 text-center">PDF, JPG, PNG up to 10MB · or drag &amp; drop here</p>
           )}
         </div>
-        )}
 
-        {/* Uploaded Documents */}
-        {data.documents.length > 0 && (
-          <div className="mt-6">
-            <h3 className="font-semibold text-gray-900 mb-4">Uploaded Documents</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {data.documents.map((doc) => {
-                return (
-                  <div key={doc.id} className="p-4 rounded-xl bg-gray-50">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0 bg-white border-gray-200">
-                        <FileText className="w-5 h-5 text-gray-400" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate text-sm">
-                          {doc.renamedFilename}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {docTypeLabels[doc.documentType] || 'Document'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex gap-3 mt-3">
-                      <button
-                        onClick={() => handleViewDocument(doc.id)}
-                        className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        View
-                      </button>
-                      <button
-                        onClick={() => deleteMutation.mutate(doc.id)}
-                        className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+        {/* Uploaded list */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-900">Uploaded</h3>
+            <span className="text-sm text-gray-500">{data.documents.length} file{data.documents.length === 1 ? '' : 's'}</span>
+          </div>
+          {data.documents.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-gray-400">
+              No documents yet. Tap “Add files” to upload your tickets and receipts.
             </div>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {data.documents.map((doc) => (
+                <li key={doc.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-5 h-5 text-primary-500" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-900 truncate text-sm">{doc.renamedFilename}</p>
+                    <p className="text-xs mt-0.5">
+                      <span className="inline-block px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 font-medium mr-1">
+                        {docTypeLabels[doc.documentType] || 'Document'}
+                      </span>
+                      <span className="text-gray-400">detected type</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleViewDocument(doc.id)}
+                    className="p-2 text-gray-400 hover:text-primary-600 transition-colors"
+                    title="View document"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => deleteMutation.mutate(doc.id)}
+                    className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                    title="Remove document"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Footer CTA — locked while project ongoing, "Build my trips" once ended/unlocked */}
+        {aiUnlocked ? (
+          <div className="pt-1">
+            <button
+              onClick={() => setShowConfirmModal(true)}
+              disabled={data.documents.length === 0 || consolidating}
+              className="w-full rounded-2xl py-4 font-semibold text-white text-lg bg-gradient-to-r from-primary-600 to-fuchsia-500 shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 transition-opacity"
+            >
+              {consolidating ? 'Analyzing your journey…' : (<>Build my trips <ArrowRight className="w-5 h-5" /></>)}
+            </button>
+            {data.documents.length === 0 && (
+              <p className="text-center text-xs text-gray-400 mt-2">Upload at least one document to continue.</p>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-gray-100 border border-gray-200 px-4 py-4 flex items-center justify-center gap-2 text-gray-500">
+            <Lock className="w-4 h-4" />
+            <span className="text-sm font-medium">Available when project ends · {formatDate(data.project.endDate)}</span>
           </div>
         )}
-
-        {/* Next Button */}
-        <div className="mt-8 flex justify-end">
-          <Button
-            onClick={() => setShowConfirmModal(true)}
-            disabled={data.documents.length === 0 || consolidating}
-            loading={consolidating}
-          >
-            {consolidating ? 'Analyzing your journey...' : 'Continue to Check Data'}
-            {!consolidating && <ChevronRight className="w-4 h-4 ml-2" />}
-          </Button>
-        </div>
 
         {/* Confirmation Modal */}
         {showConfirmModal && (
@@ -914,8 +985,7 @@ function Step1Upload({
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
       )}
     </>
   );
@@ -1360,6 +1430,41 @@ function Step2CheckData({
         </div>
       )}
 
+      {/* Gradient total card */}
+      {data.travelItems.length > 0 && (() => {
+        const confirmedCount = data.travelItems.filter((i) => i.checked).length;
+        const totalItems = data.travelItems.length;
+        const totalEur = data.travelItems.reduce(
+          (s, i) => s + (i.amountEur || 0) + (i.luggageAmountEur || 0),
+          0
+        );
+        const routeLabel =
+          totalItems > 0
+            ? `${data.travelItems[0].fromLocation} → ${data.travelItems[totalItems - 1].toLocation}`
+            : '';
+        return (
+          <div className="rounded-3xl p-6 text-white bg-gradient-to-br from-primary-600 to-fuchsia-500 shadow-lg">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-white/85 font-medium truncate">
+                Total to claim{routeLabel && ` · ${routeLabel}`}
+              </p>
+              <span className="px-2.5 py-1 rounded-full bg-white/15 text-xs font-semibold whitespace-nowrap">
+                {confirmedCount}/{totalItems} confirmed
+              </span>
+            </div>
+            <p className="text-4xl font-bold mt-2">{formatCurrency(totalEur)}</p>
+            <div className="flex gap-1.5 mt-4">
+              {data.travelItems.map((it) => (
+                <div
+                  key={it.id}
+                  className={clsx('h-1.5 flex-1 rounded-full transition-colors', it.checked ? 'bg-white' : 'bg-white/30')}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Journey Visualization */}
       {data.travelItems.length > 0 && (
         <Card>
@@ -1379,7 +1484,7 @@ function Step2CheckData({
       {/* Main Data Card */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <h2 className="text-xl font-bold text-gray-900">Check Your Travel Data</h2>
               <p className="text-gray-500 mt-1">
@@ -1390,7 +1495,7 @@ function Step2CheckData({
               variant="primary"
               size="lg"
               onClick={() => setShowAddTravelModal(true)}
-              className={hasUnlinkedDocs ? "ring-2 ring-amber-400 ring-offset-2 animate-pulse" : ""}
+              className={clsx('w-full sm:w-auto flex-shrink-0', hasUnlinkedDocs && 'ring-2 ring-amber-400 ring-offset-2 animate-pulse')}
             >
               <Plus className="w-5 h-5 mr-2" />
               Add Travel or Link Documents
@@ -1411,58 +1516,64 @@ function Step2CheckData({
           </div>
 
           {data.travelItems.length > 0 ? (
-            <div className="space-y-6">
-              {groupTravelItemsByBooking(data.travelItems).map((group) => {
-                const renderCard = (item: TravelItem) => (
-                  <TravelItemCard
-                    key={item.id}
-                    item={item}
-                    allTravelItems={data.travelItems}
-                    documents={data.documents}
-                    declarationsOfTravel={data.declarationsOfTravel || []}
-                    token={token}
-                    onUpdate={(updates) =>
-                      updateMutation.mutate({ id: item.id, updates })
-                    }
-                    onDelete={() => {
-                      setDeleteConfirmItem(item);
-                      setDeleteWithDocuments(false);
-                    }}
-                    onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
-                    onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
-                    onViewDocument={setViewingDocument}
-                    onUnlinkDocument={(docId) =>
-                      unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
-                    }
-                    onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
-                  />
-                );
+            <div>
+              <p className="text-sm font-semibold text-gray-900 mb-3">AI-generated trips</p>
+              <TravelSwipeCarousel
+                slides={groupTravelItemsByBooking(data.travelItems).map((group) => {
+                  const renderCard = (item: TravelItem) => (
+                    <TravelItemCard
+                      key={item.id}
+                      item={item}
+                      allTravelItems={data.travelItems}
+                      documents={data.documents}
+                      declarationsOfTravel={data.declarationsOfTravel || []}
+                      token={token}
+                      onUpdate={(updates) =>
+                        updateMutation.mutate({ id: item.id, updates })
+                      }
+                      onDelete={() => {
+                        setDeleteConfirmItem(item);
+                        setDeleteWithDocuments(false);
+                      }}
+                      onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
+                      onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+                      onViewDocument={setViewingDocument}
+                      onUnlinkDocument={(docId) =>
+                        unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
+                      }
+                      onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
+                    />
+                  );
 
-                // Single-item "groups" render as a plain card (unchanged behaviour)
-                if (group.items.length < 2) {
-                  return renderCard(group.items[0]);
-                }
+                  // Single-item "groups" render as a plain card (unchanged behaviour)
+                  if (group.items.length < 2) {
+                    return { key: group.items[0].id, node: renderCard(group.items[0]) };
+                  }
 
-                // Multi-leg booking — wrap the legs together so it's clear they
-                // belong to one purchase (and the price is counted only once).
-                const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
-                return (
-                  <div key={group.key} className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
-                    <div className="flex items-center gap-2 mb-3 px-1">
-                      <Repeat className="w-4 h-4 text-purple-600" />
-                      <span className="text-sm font-semibold text-purple-800">
-                        {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
-                      </span>
-                      <span className="text-xs text-purple-500">
-                        · {group.items.length} legs on one purchase · price counted once
-                      </span>
-                    </div>
-                    <div className="space-y-4">
-                      {group.items.map((item) => renderCard(item))}
-                    </div>
-                  </div>
-                );
-              })}
+                  // Multi-leg booking — wrap the legs together so it's clear they
+                  // belong to one purchase (and the price is counted only once).
+                  const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
+                  return {
+                    key: group.key,
+                    node: (
+                      <div className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
+                        <div className="flex items-center gap-2 mb-3 px-1">
+                          <Repeat className="w-4 h-4 text-purple-600" />
+                          <span className="text-sm font-semibold text-purple-800">
+                            {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
+                          </span>
+                          <span className="text-xs text-purple-500">
+                            · {group.items.length} legs on one purchase · price counted once
+                          </span>
+                        </div>
+                        <div className="space-y-4">
+                          {group.items.map((item) => renderCard(item))}
+                        </div>
+                      </div>
+                    ),
+                  };
+                })}
+              />
             </div>
           ) : (
             <div className="text-center py-8">
@@ -1588,9 +1699,10 @@ function Step2CheckData({
                 </span>
               </div>
             )}
-            <div className="flex justify-between">
+            <div className="flex items-stretch gap-3">
               <Button
                 variant="secondary"
+                className="flex-shrink-0"
                 onClick={() => {
                   // Show warning if there are existing travel items
                   if (data.travelItems.length > 0) {
@@ -1600,9 +1712,11 @@ function Step2CheckData({
                   }
                 }}
               >
-                Back to Upload
+                <ChevronLeft className="w-4 h-4" />
+                <span className="hidden sm:inline ml-1">Back</span>
               </Button>
               <Button
+                className="flex-1"
                 onClick={() => {
                   if (data.travelItems.length > 0 && !data.travelItems.every(item => item.checked)) {
                     toast.error('Please confirm all travel items by checking the checkbox on each one.');
@@ -1612,7 +1726,9 @@ function Step2CheckData({
                 }}
                 disabled={data.travelItems.length === 0}
               >
-                Continue to Confirm
+                {data.travelItems.length > 0 && !data.travelItems.every((item) => item.checked)
+                  ? `Confirm all (${data.travelItems.filter((item) => item.checked).length}/${data.travelItems.length})`
+                  : 'Continue to bank details'}
                 <ChevronRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
@@ -3627,6 +3743,20 @@ function Step3Confirm({
           </p>
         </CardHeader>
         <CardContent>
+          {/* Amount to receive hero */}
+          <div className="rounded-3xl p-6 text-white bg-gradient-to-br from-primary-600 to-fuchsia-500 shadow-lg mb-6">
+            <p className="text-sm text-white/85 font-medium">Amount to receive</p>
+            <p className="text-4xl font-bold mt-1">
+              {formatCurrency(data.reimbursementSummary?.amountToReimburse || 0)}
+            </p>
+            {(data.reimbursementSummary?.totalEur || 0) !==
+              (data.reimbursementSummary?.amountToReimburse || 0) && (
+              <p className="text-white/75 text-xs mt-2">
+                Total travel costs {formatCurrency(data.reimbursementSummary?.totalEur || 0)} · capped at your country maximum
+              </p>
+            )}
+          </div>
+
           {/* Missing Items Warning — hide bank-related items until user tries to submit */}
           {!validation.isComplete && (() => {
             const visibleItems = validation.missingItems.filter(item => {
@@ -3710,9 +3840,9 @@ function Step3Confirm({
           )}
 
           {/* Bank Details */}
-          <div className="space-y-4">
+          <div className="rounded-2xl border border-gray-200 p-4 sm:p-5 space-y-4">
             <h3 className="font-semibold text-gray-900">Bank Account Details</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-4">
               <Input
                 label="IBAN"
                 value={bankDetails.bankAccountIban}
@@ -3776,10 +3906,10 @@ function Step3Confirm({
           </div>
 
           {/* Personal Address */}
-          <div className="space-y-4">
+          <div className="mt-4 rounded-2xl border border-gray-200 p-4 sm:p-5 space-y-4">
             <h3 className="font-semibold text-gray-900">Personal Address</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
+            <div className="space-y-4">
+              <div>
                 <Input
                   label="Street Address"
                   value={bankDetails.personalAddress}
@@ -3822,31 +3952,6 @@ function Step3Confirm({
             </div>
           </div>
 
-          {/* Summary */}
-          <div className="mt-8 p-6 bg-gradient-header rounded-2xl text-white">
-            <h3 className="font-semibold mb-4">Reimbursement Summary</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-white/70 text-sm">Total Travel Costs</p>
-                <p className="text-2xl font-bold">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(data.reimbursementSummary?.totalEur || 0)}
-                </p>
-              </div>
-              <div>
-                <p className="text-white/70 text-sm">Amount to Receive</p>
-                <p className="text-2xl font-bold">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(data.reimbursementSummary?.amountToReimburse || 0)}
-                </p>
-              </div>
-            </div>
-          </div>
-
           {/* Confirmations */}
           <div className="mt-8 space-y-4">
             {/* IBAN confirmation — shows their actual IBAN so they read it before ticking */}
@@ -3872,46 +3977,55 @@ function Step3Confirm({
                 )}
               </span>
             </label>
-            <label className="flex items-start gap-3 cursor-pointer">
+            <label className={clsx(
+              'flex items-start gap-3 cursor-pointer p-4 rounded-xl border transition-colors',
+              confirmations.dataCorrect ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-200'
+            )}>
               <input
                 type="checkbox"
                 checked={confirmations.dataCorrect}
                 onChange={(e) =>
                   setConfirmations({ ...confirmations, dataCorrect: e.target.checked })
                 }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                className="mt-0.5 h-5 w-5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               />
-              <span className="text-sm text-gray-700">
+              <span className="text-sm text-gray-800">
                 I confirm that the above information is correct to the best of my knowledge.
               </span>
             </label>
-            <label className="flex items-start gap-3 cursor-pointer">
+            <label className={clsx(
+              'flex items-start gap-3 cursor-pointer p-4 rounded-xl border transition-colors',
+              confirmations.erasmusRules ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-200'
+            )}>
               <input
                 type="checkbox"
                 checked={confirmations.erasmusRules}
                 onChange={(e) =>
                   setConfirmations({ ...confirmations, erasmusRules: e.target.checked })
                 }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                className="mt-0.5 h-5 w-5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               />
-              <span className="text-sm text-gray-700">
+              <span className="text-sm text-gray-800">
                 I understand that the reimbursement rules follow Erasmus+ guidelines.
               </span>
             </label>
           </div>
 
           {/* Navigation */}
-          <div className="mt-8 flex justify-between">
-            <Button variant="secondary" onClick={onBack}>
-              Back to Check Data
+          <div className="mt-8 flex items-stretch gap-3">
+            <Button variant="secondary" className="flex-shrink-0" onClick={onBack}>
+              <ChevronLeft className="w-4 h-4" />
+              <span className="hidden sm:inline ml-1">Back</span>
             </Button>
             <Button
+              className="flex-1"
+              size="lg"
               onClick={() => { setSubmitAttempted(true); markCompleteMutation.mutate(); }}
               loading={markCompleteMutation.isPending}
               disabled={!canSubmit}
             >
               <CheckCircle className="w-4 h-4 mr-2" />
-              Submit Reimbursement
+              Submit reimbursement
             </Button>
           </div>
 

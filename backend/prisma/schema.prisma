@@ -132,6 +132,10 @@ model Project {
   exchangeRateMode         String                  @default("PURCHASE_DATE")  // PURCHASE_DATE | PROJECT_END_DATE | MANUAL_DATE
   exchangeRateManualDate   DateTime?                                          // Used only when exchangeRateMode = MANUAL_DATE
 
+  // AI analysis ("Build my trips") is normally locked until the project end date passes.
+  // Set true to let participants run AI consolidation before the project has ended.
+  aiAnalysisUnlocked       Boolean                 @default(false)
+
   // Test project - automatically created for new organisations (max 10 participants)
   isTestProject            Boolean                 @default(false)
   maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects

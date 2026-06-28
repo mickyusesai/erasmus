@@ -157,6 +157,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
           countryLimits: true,
           disseminationEnabled: true,
           carRatePerKm: true,
+          aiAnalysisUnlocked: true,
           organisation: {
             select: {
               id: true,
@@ -356,6 +357,20 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
 
   if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
     throw new ForbiddenError('Cannot modify data after approval');
+  }
+
+  // AI analysis ("Build my trips") is locked until the project has ended,
+  // unless the organisation has opened it early. Participants upload before/
+  // during the project; trips are only built once the project is over.
+  const gateProject = await prisma.project.findUnique({
+    where: { id: participant.projectId },
+    select: { endDate: true, aiAnalysisUnlocked: true },
+  });
+  if (gateProject) {
+    const projectEnded = Date.now() >= gateProject.endDate.getTime();
+    if (!projectEnded && !gateProject.aiAnalysisUnlocked) {
+      throw new ForbiddenError('AI analysis opens when the project ends');
+    }
   }
 
   // Check if there are any documents to consolidate

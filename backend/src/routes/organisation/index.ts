@@ -312,6 +312,7 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       carRatePerKm: project.carRatePerKm,
       exchangeRateMode: project.exchangeRateMode,
       exchangeRateManualDate: project.exchangeRateManualDate,
+      aiAnalysisUnlocked: project.aiAnalysisUnlocked,
       creditSource: project.creditSource,
       countryLimits: project.countryLimits,
       participants: project.participants,
@@ -333,6 +334,7 @@ const updateProjectSchema = z.object({
   venueAddress: z.string().optional(),
   exchangeRateMode: exchangeRateModeEnum.optional(),
   exchangeRateManualDate: z.string().transform((s) => new Date(s)).nullish(),
+  aiAnalysisUnlocked: z.boolean().optional(),
 });
 
 /**
@@ -405,6 +407,7 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
       carRatePerKm: project.carRatePerKm,
       exchangeRateMode: project.exchangeRateMode,
       exchangeRateManualDate: project.exchangeRateManualDate,
+      aiAnalysisUnlocked: project.aiAnalysisUnlocked,
       creditSource: project.creditSource,
       participantCount: project._count.participants,
       createdAt: project.createdAt,

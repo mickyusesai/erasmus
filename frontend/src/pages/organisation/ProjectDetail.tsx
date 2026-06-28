@@ -1574,7 +1574,7 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
   const [carRate, setCarRate] = useState<string>(String(project.carRatePerKm || 0.22));
 
   const updateProjectMutation = useMutation({
-    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number }) =>
+    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number; aiAnalysisUnlocked?: boolean }) =>
       organisationApi.updateProject(projectId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
@@ -1584,6 +1584,10 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
       toast.error('Failed to update project settings');
     },
   });
+
+  // AI analysis is automatically open once the project end date has passed.
+  const projectEnded = !!project.endDate && new Date() >= new Date(project.endDate);
+  const aiOpen = projectEnded || !!project.aiAnalysisUnlocked;
 
   const handleCarRateBlur = () => {
     const rate = parseFloat(carRate);
@@ -1614,6 +1618,26 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
               }
               disabled={updateProjectMutation.isPending}
               className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
+            />
+          </label>
+
+          <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <div className="pr-4">
+              <p className="font-medium text-gray-900">Open AI analysis early</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {projectEnded
+                  ? 'The project has ended — participants can already build their trips with AI.'
+                  : 'By default participants can only build their trips after the project end date. Enable this to let them start the AI analysis now.'}
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={aiOpen}
+              onChange={(e) =>
+                updateProjectMutation.mutate({ aiAnalysisUnlocked: e.target.checked })
+              }
+              disabled={updateProjectMutation.isPending || projectEnded}
+              className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500 disabled:opacity-50"
             />
           </label>
 
