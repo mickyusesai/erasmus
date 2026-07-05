@@ -1589,6 +1589,16 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
   const projectEnded = !!project.endDate && new Date() >= new Date(project.endDate);
   const aiOpen = projectEnded || !!project.aiAnalysisUnlocked;
 
+  const notifyEndedMutation = useMutation({
+    mutationFn: () => organisationApi.notifyProjectEnded(projectId),
+    onSuccess: (data) => {
+      toast.success(`"Build your trips" email sent to ${data.sent} participant(s)`);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to send emails');
+    },
+  });
+
   const handleCarRateBlur = () => {
     const rate = parseFloat(carRate);
     if (!isNaN(rate) && rate >= 0 && rate !== project.carRatePerKm) {
@@ -1640,6 +1650,30 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
               className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500 disabled:opacity-50"
             />
           </label>
+
+          {aiOpen && (
+            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+              <div className="pr-4">
+                <p className="font-medium text-gray-900">"Build your trips" email</p>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  Sends every participant who hasn't submitted yet an email with their personal link to start the AI analysis.
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={notifyEndedMutation.isPending}
+                onClick={() => {
+                  if (window.confirm('Send the "build your trips" email to all participants who haven\'t submitted yet?')) {
+                    notifyEndedMutation.mutate();
+                  }
+                }}
+              >
+                <Send className="w-4 h-4 mr-1.5" />
+                Send
+              </Button>
+            </div>
+          )}
 
           <div className="p-3 bg-gray-50 rounded-xl">
             <div className="flex items-center justify-between">
