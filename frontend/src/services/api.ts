@@ -1189,7 +1189,6 @@ export interface OrgProject {
   carRatePerKm: number;
   exchangeRateMode?: ExchangeRateMode;
   exchangeRateManualDate?: string | null;
-  aiAnalysisUnlocked?: boolean;
   participantCount: number;
   creditSource?: string;
   isTestProject: boolean;
@@ -1279,7 +1278,6 @@ export interface CreateOrgProjectData {
   carRatePerKm?: number;
   exchangeRateMode?: ExchangeRateMode;
   exchangeRateManualDate?: string | null;
-  aiAnalysisUnlocked?: boolean;
 }
 
 export interface ProjectRecalcResult {
@@ -1721,7 +1719,6 @@ export interface ParticipantAuthResponse {
     endDate: string;
     disseminationEnabled?: boolean;
     carRatePerKm?: number;
-    aiAnalysisUnlocked?: boolean;
     organisation?: {
       id: string;
       name: string;
