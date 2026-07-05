@@ -109,6 +109,15 @@ export class ConsoleEmailService implements EmailService {
     });
   }
 
+  async sendProjectEnded(to: string, participantName: string, projectName: string, magicLink: string): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.projectEndedSubject(projectName),
+      text: templates.projectEndedText(participantName, projectName, magicLink),
+      html: templates.projectEndedHtml(participantName, projectName, magicLink),
+    });
+  }
+
   async sendCreditPurchase(to: string, organisationName: string, credits: number, totalCredits: number, dashboardUrl: string, invoiceUrl?: string | null): Promise<EmailResult> {
     return this.send({
       to,

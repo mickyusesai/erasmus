@@ -733,6 +733,15 @@ export const organisationApi = {
     return handleResponse<{ message: string; project: OrgProject; recalc?: ProjectRecalcResult }>(res);
   },
 
+  // (Re)send the "project ended — build your trips" email to unsubmitted participants
+  notifyProjectEnded: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}/notify-ended`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ sent: number }>(res);
+  },
+
   // Exchange-rate per-currency overrides
   getProjectCurrencyRates: async (id: string) => {
     const res = await fetch(`${API_BASE}/organisation/projects/${id}/currency-rates`, {

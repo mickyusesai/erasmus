@@ -492,3 +492,55 @@ export function analysisCompleteHtml(participantName: string, projectName: strin
     <p>If you have any questions, please contact your project team.</p>
   `);
 }
+
+// =============================================================================
+// PROJECT ENDED — BUILD YOUR TRIPS
+// =============================================================================
+
+export function projectEndedSubject(projectName: string): string {
+  return `Time to build your trips – ${projectName}`;
+}
+
+export function projectEndedText(participantName: string, projectName: string, magicLink: string): string {
+  return `Hello ${participantName},
+
+The Erasmus+ project "${projectName}" has ended — you can now claim your travel costs!
+
+All the documents you uploaded are safely stored. Click your personal link below and our AI will read them and build your travel items for you.
+
+Build your trips here:
+${magicLink}
+
+What happens next:
+- Our AI reads your documents and creates your travel items
+- You review the trips and correct anything if needed
+- Add your bank details and submit
+
+If you still have tickets or receipts you haven't uploaded, you can add them on the same page before starting.
+
+If you have any questions, please contact the project team.
+
+Best regards,
+The EasyReimburse Team
+
+--
+This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+}
+
+export function projectEndedHtml(participantName: string, projectName: string, magicLink: string): string {
+  return wrapInLayout(`
+    <p>Hello <strong>${participantName}</strong>,</p>
+    ${successBox('The project <strong>"' + projectName + '"</strong> has ended — you can now claim your travel costs! All the documents you uploaded are safely stored.')}
+    <p>Click your personal link below and our AI will read your documents and build your travel items for you.</p>
+    ${button(magicLink, 'Build my trips')}
+    ${warningBox('Keep this link safe! It is your personal access link — do not share it with anyone else.')}
+    <p><strong>What happens next:</strong></p>
+    <ul style="padding-left: 20px; color: #374151;">
+      <li>Our AI reads your documents and creates your travel items</li>
+      <li>You review the trips and correct anything if needed</li>
+      <li>Add your bank details and submit</li>
+    </ul>
+    <p>Still have tickets or receipts you haven't uploaded? You can add them on the same page before starting.</p>
+    <p>If you have any questions, please contact your project team.</p>
+  `);
+}

@@ -113,6 +113,17 @@ export interface EmailService {
   ): Promise<EmailResult>;
 
   /**
+   * Send a notification that the project has ended and the participant
+   * can now let AI build their trips and complete the reimbursement
+   */
+  sendProjectEnded(
+    to: string,
+    participantName: string,
+    projectName: string,
+    magicLink: string
+  ): Promise<EmailResult>;
+
+  /**
    * Send a credit purchase confirmation email to an organisation
    */
   sendCreditPurchase(

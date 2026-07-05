@@ -417,6 +417,49 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
 }));
 
 /**
+ * POST /api/organisation/projects/:id/notify-ended
+ * (Re)send the "project ended — build your trips" email to every participant
+ * who hasn't submitted yet. Only allowed once the project has ended (or the
+ * organisation opened AI analysis early).
+ */
+router.post('/projects/:id/notify-ended', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      participants: {
+        where: { status: 'DRAFT', magicLinkActive: true },
+        select: { email: true, firstName: true, magicLinkToken: true },
+      },
+    },
+  });
+  if (!project) throw new NotFoundError('Project not found');
+
+  const projectEnded = Date.now() >= project.endDate.getTime();
+  if (!projectEnded && !project.aiAnalysisUnlocked) {
+    throw new ValidationError('The project has not ended yet. Enable "Open AI analysis early" first, or wait until the end date.');
+  }
+
+  const emailService = getEmailService();
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  for (const p of project.participants) {
+    const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
+    emailService
+      .sendProjectEnded(p.email, p.firstName, project.name, magicLink)
+      .catch((err) => console.error(`[Project End] Failed to email ${p.email}:`, err));
+  }
+
+  // Mark as sent so the hourly job never double-sends after a manual trigger
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { endEmailSentAt: new Date() },
+  });
+
+  res.json({ sent: project.participants.length });
+}));
+
+/**
  * GET /api/organisation/projects/:id/currency-rates
  * Returns the project's exchange-rate mode, manual date, existing per-currency
  * overrides, and the currencies detected in its travel items (with current

@@ -112,19 +112,55 @@ app.use('/api/super-admin', superAdminRoutes);
 // Error handling
 app.use(errorHandler);
 
-// Cleanup cron: expire abandoned Stripe purchases older than 24 hours
-setInterval(async () => {
+// Project-end notifications: when a project's end date has passed, email every
+// participant who hasn't submitted yet that they can now build their trips.
+// Only projects that ended within the last 72h are picked up (no retroactive
+// blast for long-ended projects; tolerant of short downtime). endEmailSentAt
+// is set BEFORE sending so a mid-batch failure can never cause a double blast.
+async function notifyEndedProjects() {
   try {
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const { count } = await prisma.purchase.updateMany({
-      where: { status: 'PENDING', createdAt: { lt: cutoff } },
-      data: { status: 'EXPIRED' },
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - 72 * 60 * 60 * 1000);
+    const projects = await prisma.project.findMany({
+      where: {
+        endDate: { lte: now, gt: windowStart },
+        endEmailSentAt: null,
+        isTestProject: false,
+      },
+      include: {
+        participants: {
+          where: { status: 'DRAFT', magicLinkActive: true },
+          select: { email: true, firstName: true, magicLinkToken: true },
+        },
+      },
     });
-    if (count > 0) console.log(`[Cleanup] Expired ${count} abandoned purchase(s)`);
+
+    if (projects.length === 0) return;
+
+    const { getEmailService } = await import('./services/email/index.js');
+    const emailService = getEmailService();
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+    for (const project of projects) {
+      await prisma.project.update({
+        where: { id: project.id },
+        data: { endEmailSentAt: now },
+      });
+      for (const p of project.participants) {
+        const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
+        emailService
+          .sendProjectEnded(p.email, p.firstName, project.name, magicLink)
+          .catch((err) => console.error(`[Project End] Failed to email ${p.email}:`, err));
+      }
+      console.log(`[Project End] Notified ${project.participants.length} participant(s) of "${project.name}"`);
+    }
   } catch (err) {
-    console.error('[Cleanup] Failed to expire stale purchases:', err);
+    console.error('[Project End] Error notifying ended projects:', err);
   }
-}, 60 * 60 * 1000); // runs every hour
+}
+// Run on startup and then every hour
+notifyEndedProjects();
+setInterval(notifyEndedProjects, 60 * 60 * 1000);
 
 // Stripe cleanup: mark abandoned PENDING purchases as EXPIRED after 24h
 async function expireAbandonedPurchases() {
