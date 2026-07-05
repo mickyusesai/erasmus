@@ -31,7 +31,10 @@ import {
   Eye,
   ArrowRight,
   Repeat,
+  Lock,
+  ChevronLeft,
 } from 'lucide-react';
+import { motion, AnimatePresence, useDragControls, type PanInfo } from 'framer-motion';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -335,71 +338,83 @@ export default function ReimbursementPage() {
 
   const isComplete = data.participant.status !== 'DRAFT';
   const disseminationEnabled = data.project.disseminationEnabled;
+  // AI analysis ("Build my trips") is locked until the project ends, unless the
+  // organisation opened it early. Participants upload before/during the project.
+  const aiUnlocked =
+    !!data.project.aiAnalysisUnlocked || new Date() >= new Date(data.project.endDate);
 
   return (
     <div className="min-h-screen pb-12">
-      {/* Header */}
-      <div className="bg-gradient-header text-white">
-        <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
-          <h1 className="text-2xl sm:text-3xl font-bold">
-            Hello {data.participant.firstName}!
-          </h1>
-          <p className="text-white/80 mt-2">
-            Travel reimbursement for {data.project.name}
-          </p>
-
-          {/* Tabs (when dissemination is enabled) */}
-          {disseminationEnabled && (
-            <div className="mt-6 flex gap-2">
-              <button
-                onClick={() => setActiveTab('reimbursement')}
-                className={clsx(
-                  'px-4 py-2 rounded-lg text-sm font-medium transition-all',
-                  activeTab === 'reimbursement'
-                    ? 'bg-white text-primary-600'
-                    : 'bg-white/10 text-white/80 hover:bg-white/20'
-                )}
-              >
-                <Ticket className="w-4 h-4 inline-block mr-2" />
-                Reimbursement
-              </button>
-              <button
-                onClick={() => setActiveTab('dissemination')}
-                className={clsx(
-                  'px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2',
-                  activeTab === 'dissemination'
-                    ? 'bg-white text-primary-600'
-                    : 'bg-white/10 text-white/80 hover:bg-white/20'
-                )}
-              >
-                <Share2 className="w-4 h-4" />
-                Dissemination
-                {data.disseminationStatus && (
-                  <span
-                    className={clsx(
-                      'w-2 h-2 rounded-full',
-                      data.disseminationStatus.hasDisseminationActivity &&
-                        data.disseminationStatus.hasSocialMediaPost
-                        ? 'bg-green-400'
-                        : 'bg-amber-400'
-                    )}
-                  />
-                )}
-              </button>
-            </div>
-          )}
-
-          {/* Progress Steps (only for reimbursement tab) */}
+      {/* Header — compact mockup style: title, name chip, step pill, slim progress */}
+      <div className="max-w-4xl mx-auto px-4 pt-5">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold text-gray-900">Reimbursement</h1>
           {!isComplete && activeTab === 'reimbursement' && (
-            <div className="mt-8">
-              <ProgressSteps currentStep={currentStep} />
-            </div>
+            <span className="px-3 py-1 rounded-full bg-primary-100 text-primary-700 text-sm font-semibold whitespace-nowrap">
+              Step {currentStep} of 3
+            </span>
           )}
         </div>
+        <div className="flex items-center gap-2 mt-1.5">
+          <span className="w-6 h-6 rounded-full bg-gradient-to-br from-primary-600 to-fuchsia-500 text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0">
+            {(data.participant.firstName?.[0] || '') + (data.participant.lastName?.[0] || '')}
+          </span>
+          <span className="text-sm text-gray-500 font-medium truncate">
+            {data.participant.firstName} {data.participant.lastName}
+          </span>
+        </div>
+
+        {/* Tabs (when dissemination is enabled) */}
+        {disseminationEnabled && (
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={() => setActiveTab('reimbursement')}
+              className={clsx(
+                'px-4 py-2 rounded-full text-sm font-medium transition-all',
+                activeTab === 'reimbursement'
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              )}
+            >
+              <Ticket className="w-4 h-4 inline-block mr-2" />
+              Reimbursement
+            </button>
+            <button
+              onClick={() => setActiveTab('dissemination')}
+              className={clsx(
+                'px-4 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2',
+                activeTab === 'dissemination'
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              )}
+            >
+              <Share2 className="w-4 h-4" />
+              Dissemination
+              {data.disseminationStatus && (
+                <span
+                  className={clsx(
+                    'w-2 h-2 rounded-full',
+                    data.disseminationStatus.hasDisseminationActivity &&
+                      data.disseminationStatus.hasSocialMediaPost
+                      ? 'bg-green-400'
+                      : 'bg-amber-400'
+                  )}
+                />
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* Progress Steps (only for reimbursement tab) */}
+        {!isComplete && activeTab === 'reimbursement' && (
+          <div className="mt-4">
+            <ProgressSteps currentStep={currentStep} />
+          </div>
+        )}
       </div>
 
       {/* Content */}
-      <div className="max-w-4xl mx-auto px-4 -mt-6">
+      <div className="max-w-4xl mx-auto px-4 mt-4">
         {/* Reopen banner - shown when organisation reopened the reimbursement */}
         {data.participant.reopenMessage && data.participant.status === 'DRAFT' && (
           <div className="mb-4 mt-2 bg-amber-50 border border-amber-300 rounded-xl p-4">
@@ -434,6 +449,7 @@ export default function ReimbursementPage() {
               <Step1Upload
                 data={data}
                 token={token}
+                aiUnlocked={aiUnlocked}
                 onNext={async () => {
                   if (data.participant.noReimbursement) {
                     // Skip steps 2 & 3 — mark complete directly
@@ -483,50 +499,139 @@ export default function ReimbursementPage() {
 }
 
 function ProgressSteps({ currentStep }: { currentStep: Step }) {
-  const steps = [
-    { num: 1, label: 'Upload Documents' },
-    { num: 2, label: 'Check Data' },
-    { num: 3, label: 'Confirm & Submit' },
-  ];
+  return (
+    <div className="flex items-center gap-1.5">
+      {[1, 2, 3].map((num) => (
+        <div
+          key={num}
+          className={clsx(
+            'h-1.5 flex-1 rounded-full transition-all duration-300',
+            currentStep >= num ? 'bg-gradient-to-r from-primary-600 to-fuchsia-500' : 'bg-gray-200'
+          )}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Horizontal swipe carousel for reviewing travel items one at a time.
+// Drag is only started when the pointer doesn't land on an interactive control,
+// so the inline edit fields inside each card keep working normally.
+function TravelSwipeCarousel({
+  slides,
+  apiRef,
+  tripCount,
+}: {
+  slides: { key: string; node: React.ReactNode }[];
+  apiRef?: React.MutableRefObject<{ goTo: (i: number) => void } | null>;
+  /** Number of leading slides that are trips; any extra slides (e.g. the cost summary) get a different label */
+  tripCount?: number;
+}) {
+  const [index, setIndex] = useState(0);
+  const controls = useDragControls();
+  const count = slides.length;
+  const clamped = Math.min(index, Math.max(0, count - 1));
+
+  useEffect(() => {
+    if (index > count - 1) setIndex(Math.max(0, count - 1));
+  }, [count, index]);
+
+  // Expose an imperative jump so the parent can navigate (e.g. to the first
+  // unconfirmed trip when "Confirm all" is tapped).
+  useEffect(() => {
+    if (apiRef) apiRef.current = { goTo: (i: number) => setIndex(Math.max(0, Math.min(count - 1, i))) };
+    return () => {
+      if (apiRef) apiRef.current = null;
+    };
+  }, [apiRef, count]);
+
+  if (count === 0) return null;
+
+  const go = (delta: number) => setIndex((i) => Math.max(0, Math.min(count - 1, i + delta)));
+
+  const startDrag = (e: React.PointerEvent) => {
+    const el = e.target as HTMLElement;
+    if (el.closest('input,select,textarea,button,a,label,[role="button"],[contenteditable="true"]')) return;
+    controls.start(e);
+  };
+
+  const handleDragEnd = (_e: unknown, info: PanInfo) => {
+    if (info.offset.x < -70 && clamped < count - 1) go(1);
+    else if (info.offset.x > 70 && clamped > 0) go(-1);
+  };
 
   return (
-    <div className="flex items-center justify-between">
-      {steps.map((step, i) => (
-        <div key={step.num} className="flex items-center flex-1">
-          <div className="flex items-center gap-3">
-            <div
-              className={clsx(
-                'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
-                currentStep >= step.num
-                  ? 'bg-white text-primary-600'
-                  : 'bg-white/20 text-white/60'
-              )}
+    <div>
+      {/* Carousel header: position + arrows */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-medium text-gray-500">
+          {tripCount != null && clamped >= tripCount
+            ? 'Cost summary'
+            : `Trip ${clamped + 1} / ${tripCount ?? count}`}
+          {count > 1 ? ' · swipe →' : ''}
+        </span>
+        {count > 1 && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              disabled={clamped === 0}
+              className="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+              aria-label="Previous trip"
             >
-              {currentStep > step.num ? (
-                <CheckCircle className="w-5 h-5" />
-              ) : (
-                step.num
-              )}
-            </div>
-            <span
-              className={clsx(
-                'text-sm hidden sm:block',
-                currentStep >= step.num ? 'text-white' : 'text-white/60'
-              )}
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => go(1)}
+              disabled={clamped === count - 1}
+              className="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+              aria-label="Next trip"
             >
-              {step.label}
-            </span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
-          {i < steps.length - 1 && (
-            <div
+        )}
+      </div>
+
+      <div className="relative overflow-hidden touch-pan-y">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={slides[clamped].key}
+            drag={count > 1 ? 'x' : false}
+            dragListener={false}
+            dragControls={controls}
+            dragConstraints={{ left: 0, right: 0 }}
+            dragElastic={0.2}
+            onDragEnd={handleDragEnd}
+            onPointerDown={count > 1 ? startDrag : undefined}
+            initial={{ opacity: 0, x: 30 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -30 }}
+            transition={{ duration: 0.18 }}
+          >
+            {slides[clamped].node}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {/* Dots */}
+      {count > 1 && (
+        <div className="flex justify-center flex-wrap gap-1.5 mt-4">
+          {slides.map((s, i) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setIndex(i)}
+              aria-label={`Go to trip ${i + 1}`}
               className={clsx(
-                'flex-1 h-0.5 mx-4',
-                currentStep > step.num ? 'bg-white' : 'bg-white/20'
+                'h-1.5 rounded-full transition-all',
+                i === clamped ? 'w-6 bg-primary-600' : 'w-1.5 bg-gray-300 hover:bg-gray-400'
               )}
             />
-          )}
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -565,11 +670,13 @@ function CompletedView({ data }: { data: ParticipantAuthResponse }) {
 function Step1Upload({
   data,
   token,
+  aiUnlocked,
   onNext,
   onAiWarnings,
 }: {
   data: ParticipantAuthResponse;
   token: string;
+  aiUnlocked: boolean;
   onNext: () => void;
   onAiWarnings: (warnings: string[]) => void;
 }) {
@@ -659,9 +766,10 @@ function Step1Upload({
   }, [uploadMutation]);
 
   const atDocumentLimit = data.documents.length >= 15;
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, open } = useDropzone({
     onDrop,
     disabled: atDocumentLimit || uploading,
+    noClick: true,
     accept: {
       'application/pdf': ['.pdf'],
       'image/jpeg': ['.jpg', '.jpeg'],
@@ -695,45 +803,27 @@ function Step1Upload({
     }
   };
 
+  // Toggle the "no reimbursement" opt-out with an optimistic update
+  const setNoReimbursementValue = async (newValue: boolean) => {
+    queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+      if (!old) return old;
+      return { ...old, participant: { ...old.participant, noReimbursement: newValue } };
+    });
+    try {
+      await participantApi.setNoReimbursement(token, newValue);
+    } catch {
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return { ...old, participant: { ...old.participant, noReimbursement: !newValue } };
+      });
+      toast.error('Failed to update preference');
+    }
+  };
+
   return (
     <>
       {/* Show loading screen with Erasmus quotes during consolidation */}
       {consolidating && <ConsolidationLoading documentCount={data.documents.length} />}
-
-      {/* No-reimbursement option */}
-      <Card className="mb-4">
-        <CardContent className="py-4">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={data.participant.noReimbursement || false}
-              onChange={async (e) => {
-                const newValue = e.target.checked;
-                // Optimistic update so checkbox reacts instantly
-                queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
-                  if (!old) return old;
-                  return { ...old, participant: { ...old.participant, noReimbursement: newValue } };
-                });
-                try {
-                  await participantApi.setNoReimbursement(token, newValue);
-                } catch {
-                  // Revert on error
-                  queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
-                    if (!old) return old;
-                    return { ...old, participant: { ...old.participant, noReimbursement: !newValue } };
-                  });
-                  toast.error('Failed to update preference');
-                }
-              }}
-              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-5 w-5"
-            />
-            <div>
-              <p className="font-medium text-gray-900">I don't need travel reimbursement</p>
-              <p className="text-sm text-gray-500">Select this if you didn't travel or don't need to claim travel costs.</p>
-            </div>
-          </label>
-        </CardContent>
-      </Card>
 
       {data.participant.noReimbursement ? (
         <Card>
@@ -751,149 +841,163 @@ function Step1Upload({
             >
               Continue
             </button>
+            <div className="mt-4">
+              <button
+                onClick={() => setNoReimbursementValue(false)}
+                className="text-sm text-gray-400 hover:text-gray-600"
+              >
+                Actually, I do need reimbursement
+              </button>
+            </div>
           </CardContent>
         </Card>
       ) : (
-      <Card>
-        <CardHeader>
-          <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
-        <p className="text-gray-500 mt-1">
-          {isGreenTravel ? (
-            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). For best results, upload everything at once so our AI can understand your complete journey and link related documents together.</>
-          ) : (
-            'Upload all your travel tickets, invoices, and boarding passes. For best results, upload everything at once so our AI can understand your complete journey and link related documents together.'
-          )}
-        </p>
-        {isGreenTravel && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-            <p className="text-sm text-emerald-700">
-              <strong>Green Travel:</strong> Since you're traveling by train/bus (eco-friendly), you can also upload hotel invoices for overnight stays that were needed due to the longer travel time.
-            </p>
-          </div>
-        )}
-      </CardHeader>
-      <CardContent>
-        {/* Document count and hint */}
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm text-gray-500">
-            Only upload documents for trips you will claim reimbursement for. You can add extra items manually after AI consolidation.
-          </p>
-          <span className={clsx(
-            'text-sm font-medium ml-4 whitespace-nowrap',
-            atDocumentLimit ? 'text-red-600' : data.documents.length >= 12 ? 'text-amber-600' : 'text-gray-500'
-          )}>
-            {data.documents.length} / 15
+      <div className="space-y-4" {...getRootProps()}>
+        <input {...getInputProps()} />
+
+        {/* Status pill */}
+        <div className="flex items-center gap-2 bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
+          <span className={clsx('w-2.5 h-2.5 rounded-full', aiUnlocked ? 'bg-emerald-500' : 'bg-amber-500')} />
+          <span className="text-sm font-medium text-gray-700">
+            {aiUnlocked ? 'Project ended · ready to claim' : 'Project ongoing · keep uploading'}
           </span>
         </div>
 
-        {/* Dropzone */}
-        {atDocumentLimit ? (
-          <div className="p-6 border-2 border-dashed border-red-200 bg-red-50 rounded-xl text-center">
-            <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-2" />
-            <p className="text-sm font-medium text-red-700">Document limit reached (15/15)</p>
-            <p className="text-xs text-red-600 mt-1">
-              You can add any remaining travel items manually in Step 2 after AI consolidation.
+        {/* Gradient hero */}
+        <div className="rounded-3xl p-6 sm:p-7 text-white bg-gradient-to-br from-primary-600 via-primary-600 to-fuchsia-500 shadow-lg">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 text-sm font-medium backdrop-blur">
+            {aiUnlocked ? '✅ Project ended' : '⏳ Project in progress'}
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-bold mt-4 leading-tight">
+            {aiUnlocked ? 'Last check before we build your trips' : 'Collect now, claim later'}
+          </h2>
+          <p className="text-white/85 mt-3 leading-relaxed">
+            {aiUnlocked ? (
+              <><strong>{data.project.name}</strong> has ended. Make sure every document is here — when you continue, our AI reads them and creates your travel items.</>
+            ) : (
+              <><strong>{data.project.name}</strong> runs until <strong>{formatDate(data.project.endDate)}</strong>. Add every ticket, receipt &amp; boarding pass as you get them — we keep them safe so nothing is lost.</>
+            )}
+          </p>
+          {isGreenTravel && (
+            <p className="text-white/85 text-sm mt-3 bg-white/10 rounded-xl px-3 py-2">
+              <strong>Green travel:</strong> you can also upload hotel invoices for overnight stays needed due to longer eco-friendly travel.
             </p>
-          </div>
-        ) : (
-        <div
-          {...getRootProps()}
-          className={clsx('dropzone', isDragActive && 'active')}
-        >
-          <input {...getInputProps()} />
-          {uploading ? (
-            <div className="text-center">
-              <Loader2 className="w-12 h-12 text-primary-400 animate-spin mx-auto mb-4" />
-              {uploadProgress.total > 1 ? (
-                <>
-                  <p className="text-gray-600 font-medium">
-                    Uploading {uploadProgress.current} of {uploadProgress.total}
-                  </p>
-                  <p className="text-sm text-gray-500 mt-1 truncate max-w-xs mx-auto">
-                    {uploadProgress.filename}
-                  </p>
-                  <div className="w-48 h-2 bg-gray-200 rounded-full mx-auto mt-3">
-                    <div
-                      className="h-2 bg-primary-500 rounded-full transition-all duration-300"
-                      style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
-                    />
-                  </div>
-                </>
-              ) : (
-                <p className="text-gray-600">Uploading document...</p>
-              )}
-            </div>
-          ) : (
-            <>
-              <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">
-                {isDragActive
-                  ? 'Drop the files here'
-                  : 'Drag and drop files here, or click to select'}
-              </p>
-              <p className="text-sm text-gray-400 mt-2">
-                PDF, JPG, PNG up to 10MB
-              </p>
-            </>
+          )}
+          <button
+            type="button"
+            onClick={open}
+            disabled={atDocumentLimit || uploading}
+            className="mt-5 w-full bg-white text-primary-700 rounded-2xl py-4 font-semibold text-lg hover:bg-white/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+          >
+            {uploading ? (
+              <><Loader2 className="w-5 h-5 animate-spin" /> Uploading{uploadProgress.total > 1 ? ` ${uploadProgress.current}/${uploadProgress.total}` : '…'}</>
+            ) : (
+              <><Plus className="w-5 h-5" /> Add files</>
+            )}
+          </button>
+          {atDocumentLimit && (
+            <p className="text-white/80 text-xs mt-2 text-center">
+              Document limit reached (15/15). You can add items manually after building your trips.
+            </p>
+          )}
+          {!atDocumentLimit && (
+            <p className="text-white/70 text-xs mt-2 text-center">PDF, JPG, PNG up to 10MB · or drag &amp; drop here</p>
           )}
         </div>
-        )}
 
-        {/* Uploaded Documents */}
-        {data.documents.length > 0 && (
-          <div className="mt-6">
-            <h3 className="font-semibold text-gray-900 mb-4">Uploaded Documents</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {data.documents.map((doc) => {
-                return (
-                  <div key={doc.id} className="p-4 rounded-xl bg-gray-50">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0 bg-white border-gray-200">
-                        <FileText className="w-5 h-5 text-gray-400" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate text-sm">
-                          {doc.renamedFilename}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {docTypeLabels[doc.documentType] || 'Document'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex gap-3 mt-3">
-                      <button
-                        onClick={() => handleViewDocument(doc.id)}
-                        className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        View
-                      </button>
-                      <button
-                        onClick={() => deleteMutation.mutate(doc.id)}
-                        className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+        {/* Uploaded list */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-900">Uploaded</h3>
+            <span className="text-sm text-gray-500">{data.documents.length} file{data.documents.length === 1 ? '' : 's'}</span>
           </div>
-        )}
-
-        {/* Next Button */}
-        <div className="mt-8 flex justify-end">
-          <Button
-            onClick={() => setShowConfirmModal(true)}
-            disabled={data.documents.length === 0 || consolidating}
-            loading={consolidating}
-          >
-            {consolidating ? 'Analyzing your journey...' : 'Continue to Check Data'}
-            {!consolidating && <ChevronRight className="w-4 h-4 ml-2" />}
-          </Button>
+          {data.documents.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-gray-400">
+              No documents yet. Tap “Add files” to upload your tickets and receipts.
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {data.documents.map((doc) => (
+                <li key={doc.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-5 h-5 text-primary-500" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-900 truncate text-sm">{doc.renamedFilename}</p>
+                    <p className="text-xs mt-0.5">
+                      <span className="inline-block px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 font-medium mr-1">
+                        {docTypeLabels[doc.documentType] || 'Document'}
+                      </span>
+                      <span className="text-gray-400">detected type</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleViewDocument(doc.id)}
+                    className="p-2 text-gray-400 hover:text-primary-600 transition-colors"
+                    title="View document"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => deleteMutation.mutate(doc.id)}
+                    className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                    title="Remove document"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
+
+        {/* Slim no-reimbursement opt-out */}
+        <label className="flex items-center gap-3 cursor-pointer bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
+          <input
+            type="checkbox"
+            checked={false}
+            onChange={() => setNoReimbursementValue(true)}
+            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-4 w-4"
+          />
+          <span className="text-sm text-gray-500">I didn't travel / don't need reimbursement</span>
+        </label>
+
+        {/* Footer CTA — locked while project ongoing, "Build my trips" once ended/unlocked */}
+        {aiUnlocked ? (
+          <div className="pt-1">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm text-gray-500">Ready to build trips</p>
+                <p className="font-bold text-gray-900">
+                  {data.documents.length} document{data.documents.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowConfirmModal(true)}
+                disabled={data.documents.length === 0 || consolidating}
+                className="px-6 py-3.5 rounded-2xl font-semibold text-white bg-gradient-to-r from-primary-600 to-fuchsia-500 shadow-lg disabled:opacity-50 flex items-center gap-2 transition-opacity flex-shrink-0"
+              >
+                {consolidating ? 'Analyzing…' : (<>Build my trips <ArrowRight className="w-5 h-5" /></>)}
+              </button>
+            </div>
+            {data.documents.length === 0 && (
+              <p className="text-xs text-gray-400 mt-2">Upload at least one document to continue.</p>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-3 bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
+              <Lock className="w-4 h-4 text-amber-500 flex-shrink-0" />
+              <span className="text-sm text-gray-600">
+                Trips are built automatically once the project ends. Keep uploading until then.
+              </span>
+            </div>
+            <div className="rounded-2xl bg-gray-100 border border-gray-200 px-4 py-4 flex items-center justify-center gap-2 text-gray-400">
+              <Lock className="w-4 h-4" />
+              <span className="text-sm font-semibold">Available when project ends · {formatDate(data.project.endDate)}</span>
+            </div>
+          </>
+        )}
 
         {/* Confirmation Modal */}
         {showConfirmModal && (
@@ -914,8 +1018,7 @@ function Step1Upload({
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
       )}
     </>
   );
@@ -953,6 +1056,8 @@ function Step2CheckData({
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<TravelItem | null>(null);
   const [deleteWithDocuments, setDeleteWithDocuments] = useState(false);
   const [showReuploadWarning, setShowReuploadWarning] = useState(false);
+  // Imperative handle to jump the trips carousel (e.g. to the first unconfirmed trip)
+  const carouselApiRef = useRef<{ goTo: (i: number) => void } | null>(null);
 
   // Calculate unlinked documents (uploaded but not connected to any travel item)
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
@@ -1180,16 +1285,8 @@ function Step2CheckData({
   const warnings = useMemo((): PersistentWarning[] => {
     const w: PersistentWarning[] = [];
 
-    // Add confirmation guidance notification if there are unconfirmed items
-    const unconfirmedCount = data.travelItems.filter(item => !item.checked).length;
-    if (data.travelItems.length > 0 && unconfirmedCount > 0) {
-      w.push({
-        id: 'confirmation-guidance',
-        type: 'success',
-        message: `Please review each travel item below and click "Confirm" when the information is correct. (${data.travelItems.length - unconfirmedCount}/${data.travelItems.length} confirmed)`,
-        dismissible: true,
-      });
-    }
+    // (Per-trip confirmation progress is shown on the "Total to claim" card,
+    // so no separate "review each item" banner is pushed here.)
 
     // AI consolidation warnings are internal notes for reviewers, not shown to participants
 
@@ -1360,265 +1457,307 @@ function Step2CheckData({
         </div>
       )}
 
-      {/* Journey Visualization */}
-      {data.travelItems.length > 0 && (
-        <Card>
-          <CardHeader>
-            <h3 className="font-semibold text-gray-900">Your Journey</h3>
-          </CardHeader>
-          <CardContent>
-            <JourneyVisualization
-              items={data.travelItems}
-              projectStartDate={data.project.startDate}
-              projectEndDate={data.project.endDate}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Main Data Card */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-gray-900">Check Your Travel Data</h2>
-              <p className="text-gray-500 mt-1">
-                We've extracted the following information from your documents. Please verify and correct if needed.
+      {/* Gradient total card */}
+      {data.travelItems.length > 0 && (() => {
+        const confirmedCount = data.travelItems.filter((i) => i.checked).length;
+        const totalItems = data.travelItems.length;
+        const totalEur = data.travelItems.reduce(
+          (s, i) => s + (i.amountEur || 0) + (i.luggageAmountEur || 0),
+          0
+        );
+        // Route label: origin ⇄ turnaround for round trips, origin → destination otherwise
+        const sorted = [...data.travelItems].sort(
+          (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+        );
+        const origin = sorted[0]?.fromLocation;
+        const finalDest = sorted[sorted.length - 1]?.toLocation;
+        let turnaround = finalDest;
+        if (data.project.startDate && data.project.endDate) {
+          const mid = new Date(
+            (new Date(data.project.startDate).getTime() + new Date(data.project.endDate).getTime()) / 2
+          );
+          const outbound = sorted.filter((i) => new Date(i.departureDate) <= mid);
+          if (outbound.length) turnaround = outbound[outbound.length - 1].toLocation;
+        }
+        const isRound = !!origin && origin === finalDest;
+        const routeLabel = origin ? (isRound ? `${origin} ⇄ ${turnaround}` : `${origin} → ${finalDest}`) : '';
+        return (
+          <div className="rounded-3xl p-6 text-white bg-gradient-to-br from-primary-600 to-fuchsia-500 shadow-lg">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-white/85 font-medium truncate">
+                Total to claim{routeLabel && ` · ${routeLabel}`}
               </p>
+              <span className="px-2.5 py-1 rounded-full bg-white/15 text-xs font-semibold whitespace-nowrap">
+                {confirmedCount}/{totalItems} confirmed
+              </span>
             </div>
-            <Button
-              variant="primary"
-              size="lg"
-              onClick={() => setShowAddTravelModal(true)}
-              className={hasUnlinkedDocs ? "ring-2 ring-amber-400 ring-offset-2 animate-pulse" : ""}
-            >
-              <Plus className="w-5 h-5 mr-2" />
-              Add Travel or Link Documents
-              {hasUnlinkedDocs && (
-                <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full">
-                  {unlinkedDocs.length}
-                </span>
-              )}
-            </Button>
+            <p className="text-4xl font-bold mt-2">{formatCurrency(totalEur)}</p>
+            <div className="flex gap-1.5 mt-4">
+              {data.travelItems.map((it) => (
+                <div
+                  key={it.id}
+                  className={clsx('h-1.5 flex-1 rounded-full transition-colors', it.checked ? 'bg-emerald-400' : 'bg-white/30')}
+                />
+              ))}
+            </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          {/* Eligibility guidance */}
-          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-800">
-              <strong>Important:</strong> Please only add travel items that are eligible for Erasmus+ reimbursement. This includes travel from your home country to the project location and back, within the approved project and travel dates. Do not add trips to other destinations, extra days, or personal travel. If a travel item is not eligible for reimbursement, it should not be added here.
-            </p>
-          </div>
+        );
+      })()}
 
-          {data.travelItems.length > 0 ? (
-            <div className="space-y-6">
-              {groupTravelItemsByBooking(data.travelItems).map((group) => {
-                const renderCard = (item: TravelItem) => (
-                  <TravelItemCard
-                    key={item.id}
-                    item={item}
-                    allTravelItems={data.travelItems}
-                    documents={data.documents}
-                    declarationsOfTravel={data.declarationsOfTravel || []}
-                    token={token}
-                    onUpdate={(updates) =>
-                      updateMutation.mutate({ id: item.id, updates })
-                    }
-                    onDelete={() => {
-                      setDeleteConfirmItem(item);
-                      setDeleteWithDocuments(false);
-                    }}
-                    onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
-                    onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
-                    onViewDocument={setViewingDocument}
-                    onUnlinkDocument={(docId) =>
-                      unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
-                    }
-                    onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
-                  />
-                );
+      {/* Trips carousel — one trip per slide, cost summary as the final slide */}
+      {data.travelItems.length > 0 ? (
+        <div>
+          <p className="text-base font-bold text-gray-900 mb-2 px-1">AI-generated trips</p>
+          {(() => {
+            const groups = groupTravelItemsByBooking(data.travelItems);
+            const tripSlides = groups.map((group) => {
+              const renderCard = (item: TravelItem) => (
+                <TravelItemCard
+                  key={item.id}
+                  item={item}
+                  allTravelItems={data.travelItems}
+                  documents={data.documents}
+                  declarationsOfTravel={data.declarationsOfTravel || []}
+                  token={token}
+                  onUpdate={(updates) =>
+                    updateMutation.mutate({ id: item.id, updates })
+                  }
+                  onDelete={() => {
+                    setDeleteConfirmItem(item);
+                    setDeleteWithDocuments(false);
+                  }}
+                  onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
+                  onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+                  onViewDocument={setViewingDocument}
+                  onUnlinkDocument={(docId) =>
+                    unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
+                  }
+                  onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
+                />
+              );
 
-                // Single-item "groups" render as a plain card (unchanged behaviour)
-                if (group.items.length < 2) {
-                  return renderCard(group.items[0]);
-                }
+              // Single-item "groups" render as a plain card (unchanged behaviour)
+              if (group.items.length < 2) {
+                return { key: group.items[0].id, node: renderCard(group.items[0]) };
+              }
 
-                // Multi-leg booking — wrap the legs together so it's clear they
-                // belong to one purchase (and the price is counted only once).
-                const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
-                return (
-                  <div key={group.key} className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
+              // Multi-leg booking — wrap the legs together so it's clear they
+              // belong to one purchase (and the price is counted only once).
+              const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
+              return {
+                key: group.key,
+                node: (
+                  <div className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
                     <div className="flex items-center gap-2 mb-3 px-1">
                       <Repeat className="w-4 h-4 text-purple-600" />
                       <span className="text-sm font-semibold text-purple-800">
                         {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
                       </span>
                       <span className="text-xs text-purple-500">
-                        · {group.items.length} legs on one purchase · price counted once
+                        · {group.items.length} legs · price counted once
                       </span>
                     </div>
                     <div className="space-y-4">
                       {group.items.map((item) => renderCard(item))}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="text-center py-8">
-              <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
-              <p className="text-gray-600 mb-4">
-                No travel items detected. Please upload your travel documents or add them manually.
-              </p>
-              <Button onClick={() => setShowAddTravelModal(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Travel Manually
-              </Button>
-            </div>
-          )}
+                ),
+              };
+            });
 
-          {/* Participant Note */}
-          <div className="mt-8 p-4 border border-blue-200 bg-blue-50 rounded-xl">
-            <h4 className="font-semibold text-blue-800 mb-2 flex items-center gap-2">
-              <FileText className="w-4 h-4" />
-              Add a Note (Optional)
-            </h4>
-            <p className="text-sm text-blue-700 mb-3">
-              If you have any special circumstances to explain (e.g., missed a bus and had to rebook, lost a ticket,
-              had to take an alternative route), please add a note here. The project team will see this.
-            </p>
-            <textarea
-              className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              rows={3}
-              placeholder="Example: I missed the 08:00 bus due to train delay, so I had to book the 09:30 bus. Only submitting the second ticket as that's what I actually used."
-              value={participantNote}
-              onChange={(e) => {
-                setParticipantNote(e.target.value);
-                setNoteEdited(true);
-              }}
-              onBlur={() => {
-                if (noteEdited) {
-                  noteMutation.mutate(participantNote);
-                }
-              }}
-            />
-            {noteMutation.isPending && (
-              <p className="mt-1 text-xs text-blue-500">Saving...</p>
-            )}
-          </div>
-
-          {/* Summary with Itemized Breakdown */}
-          <div className="mt-8 p-6 bg-gray-50 rounded-2xl">
-            <h4 className="font-semibold text-gray-900 mb-4">Cost Breakdown</h4>
-
-            {/* Itemized List */}
-            <div className="space-y-2 mb-4">
-              {data.travelItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex justify-between text-sm"
-                >
-                  <span className="text-gray-600">
-                    {item.fromLocation} → {item.toLocation}
-                    <span className="text-gray-400 ml-2">({item.modeOfTransport.toLowerCase()})</span>
-                    {item.comment && <span className="text-gray-400 ml-1">*</span>}
-                  </span>
-                  <span className="font-medium text-gray-900">
-                    {item.amountIncludedInRoundTrip ? (
-                      <span className="text-gray-400 text-xs italic">— (incl. in outbound)</span>
-                    ) : (
-                      <>
-                        {formatCurrency((item.amountEur || 0) + (item.luggageAmountEur || 0))}
-                        {item.luggageAmountEur ? <span className="text-xs text-sky-600 ml-1">(incl. luggage)</span> : null}
-                      </>
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {/* Divider */}
-            <div className="border-t border-gray-300 my-4" />
-
-            {/* Total with max reimbursement inline */}
-            {(() => {
-              const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
-
-              return (
-                <div className="flex items-baseline justify-between">
-                  <div className="flex items-baseline gap-3">
-                    <div>
-                      <p className="text-sm text-gray-500">Total Travel Costs</p>
-                      <p className="text-2xl font-bold text-gray-900">
-                        {formatCurrency(total)}
-                      </p>
-                    </div>
-                    {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
-                      <span className="text-sm text-blue-600 font-medium">
-                        (max: {formatCurrency(data.maxReimbursementForCountry)})
-                      </span>
-                    )}
+            // Final slide: cost-breakdown "receipt"
+            const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
+            const max = data.maxReimbursementForCountry;
+            const willReceive = max != null && total > max ? max : total;
+            const receiptSlide = {
+              key: '__cost_breakdown__',
+              node: (
+                <div className="rounded-2xl bg-white border border-gray-100 shadow-sm p-5">
+                  <h4 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
+                    <Ticket className="w-4 h-4 text-primary-500" /> Cost breakdown
+                  </h4>
+                  <div className="space-y-1.5 mb-3">
+                    {data.travelItems.map((item) => (
+                      <div key={item.id} className="flex justify-between gap-3 text-sm">
+                        <span className="text-gray-600 truncate min-w-0">
+                          {item.fromLocation} → {item.toLocation}
+                          <span className="text-gray-400"> · {item.modeOfTransport.toLowerCase()}</span>
+                        </span>
+                        <span className="font-medium text-gray-900 whitespace-nowrap flex-shrink-0">
+                          {item.amountIncludedInRoundTrip ? (
+                            <span className="text-gray-400 text-xs italic">incl.</span>
+                          ) : (
+                            <>
+                              {formatCurrency((item.amountEur || 0) + (item.luggageAmountEur || 0))}
+                              {item.luggageAmountEur ? <span className="text-[11px] text-sky-600 ml-1">+lugg.</span> : null}
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                  {/* Show actual amount to receive if over limit */}
-                  {data.maxReimbursementForCountry && total > data.maxReimbursementForCountry && (
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">You will receive</p>
-                      <p className="text-lg font-bold text-emerald-600">
-                        {formatCurrency(data.maxReimbursementForCountry)}
-                      </p>
+                  <div className="border-t border-gray-200 my-3" />
+                  <div className="flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-xs text-gray-500">Total travel costs</p>
+                      <p className="text-xl font-bold text-gray-900">{formatCurrency(total)}</p>
+                      {max != null && (
+                        <p className="text-xs text-blue-600 font-medium mt-0.5">max {formatCurrency(max)}</p>
+                      )}
                     </div>
-                  )}
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">You'll receive</p>
+                      <p className="text-2xl font-bold text-emerald-600">{formatCurrency(willReceive)}</p>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-3">
+                    Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
+                  </p>
                 </div>
-              );
-            })()}
-            <p className="text-xs text-gray-400 mt-3">
-              Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
-            </p>
-          </div>
+              ),
+            };
 
-          {/* Navigation */}
-          <div className="mt-8">
-            {/* Check if all travel items are confirmed */}
-            {data.travelItems.length > 0 && !data.travelItems.every(item => item.checked) && (
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                <span className="text-sm text-amber-700">
-                  Please check all travel items to confirm they are correct before continuing.
-                  ({data.travelItems.filter(item => item.checked).length} of {data.travelItems.length} confirmed)
-                </span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <Button
-                variant="secondary"
+            return (
+              <TravelSwipeCarousel
+                slides={[...tripSlides, receiptSlide]}
+                tripCount={tripSlides.length}
+                apiRef={carouselApiRef}
+              />
+            );
+          })()}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="text-center py-8">
+            <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
+            <p className="text-gray-600 mb-4">
+              No travel items detected. Please upload your travel documents or add them manually.
+            </p>
+            <Button onClick={() => setShowAddTravelModal(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Add Travel Manually
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Add a trip manually (also links loose documents) */}
+      <button
+        type="button"
+        onClick={() => setShowAddTravelModal(true)}
+        className={clsx(
+          'w-full border-2 border-dashed border-primary-200 rounded-2xl py-3.5 text-primary-600 font-semibold text-sm hover:bg-primary-50 transition-colors flex items-center justify-center gap-1.5',
+          hasUnlinkedDocs && 'ring-2 ring-amber-400 ring-offset-2 animate-pulse'
+        )}
+      >
+        <Plus className="w-4 h-4" />
+        Add a trip manually
+        {hasUnlinkedDocs && (
+          <span className="ml-1 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full">
+            {unlinkedDocs.length} unlinked
+          </span>
+        )}
+      </button>
+
+      {/* Navigation — per-trip confirm only; Continue unlocks when all confirmed */}
+      {data.travelItems.length > 0 && (
+        <div className="flex items-stretch gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              if (data.travelItems.length > 0) {
+                setShowReuploadWarning(true);
+              } else {
+                onBack();
+              }
+            }}
+            className="w-14 rounded-2xl bg-white border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50 transition-colors flex-shrink-0"
+            aria-label="Back to upload"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          {(() => {
+            const allChecked = data.travelItems.every((item) => item.checked);
+            const confirmedCount = data.travelItems.filter((item) => item.checked).length;
+            return (
+              <button
+                type="button"
                 onClick={() => {
-                  // Show warning if there are existing travel items
-                  if (data.travelItems.length > 0) {
-                    setShowReuploadWarning(true);
-                  } else {
-                    onBack();
-                  }
-                }}
-              >
-                Back to Upload
-              </Button>
-              <Button
-                onClick={() => {
-                  if (data.travelItems.length > 0 && !data.travelItems.every(item => item.checked)) {
-                    toast.error('Please confirm all travel items by checking the checkbox on each one.');
+                  if (!allChecked) {
+                    // Jump the carousel to the first trip that still needs confirming
+                    const groups = groupTravelItemsByBooking(data.travelItems);
+                    const idx = groups.findIndex((g) => g.items.some((i) => !i.checked));
+                    if (idx >= 0) carouselApiRef.current?.goTo(idx);
+                    toast.error(`Please confirm each trip — ${data.travelItems.length - confirmedCount} to go.`);
                     return;
                   }
                   onNext();
                 }}
-                disabled={data.travelItems.length === 0}
+                className={clsx(
+                  'flex-1 rounded-2xl py-3.5 font-semibold text-white transition-colors flex items-center justify-center gap-2',
+                  allChecked
+                    ? 'bg-gradient-to-r from-primary-600 to-fuchsia-500 hover:opacity-95'
+                    : 'bg-gray-900 hover:bg-gray-800'
+                )}
               >
-                Continue to Confirm
-                <ChevronRight className="w-4 h-4 ml-2" />
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+                {allChecked ? 'Continue to bank details' : `Confirm all (${confirmedCount}/${data.travelItems.length})`}
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Eligibility guidance */}
+      <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+        <p className="text-sm text-blue-800">
+          <strong>Important:</strong> Please only add travel items that are eligible for Erasmus+ reimbursement. This includes travel from your home country to the project location and back, within the approved project and travel dates. Do not add trips to other destinations, extra days, or personal travel.
+        </p>
+      </div>
+
+      {/* Participant Note */}
+      <div className="p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
+        <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
+          <FileText className="w-4 h-4 text-gray-400" />
+          Add a note (optional)
+        </h4>
+        <p className="text-sm text-gray-500 mb-3">
+          Special circumstances to explain (missed a bus, lost a ticket, alternative route)? The project team will see this.
+        </p>
+        <textarea
+          className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+          rows={3}
+          placeholder="Example: I missed the 08:00 bus due to a train delay, so I had to book the 09:30 bus."
+          value={participantNote}
+          onChange={(e) => {
+            setParticipantNote(e.target.value);
+            setNoteEdited(true);
+          }}
+          onBlur={() => {
+            if (noteEdited) {
+              noteMutation.mutate(participantNote);
+            }
+          }}
+        />
+        {noteMutation.isPending && (
+          <p className="mt-1 text-xs text-primary-500">Saving...</p>
+        )}
+      </div>
+
+      {/* Journey overview */}
+      {data.travelItems.length > 0 && (
+        <div className="p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-gray-400" />
+            Journey overview
+          </h4>
+          <JourneyVisualization
+            items={data.travelItems}
+            projectStartDate={data.project.startDate}
+            projectEndDate={data.project.endDate}
+          />
+        </div>
+      )}
 
       {/* Add Travel Modal */}
       <AddTravelModal
@@ -1927,9 +2066,10 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
     if (sectionItems.length === 0) return null;
 
     return (
-      <div className={clsx("flex-1", isReturn && "border-l-2 border-gray-200 pl-4")}>
-        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">{label}</p>
-        <div className="flex items-center gap-2 flex-wrap">
+      <div>
+        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">{label}</p>
+        {/* One horizontal line per direction; scrolls sideways if the journey is long */}
+        <div className="flex items-center gap-1 flex-nowrap overflow-x-auto pb-1">
           {sectionItems.map((item, index) => {
             const Icon = transportIcons[item.modeOfTransport];
             const iconColor = transportIconColors[item.modeOfTransport];
@@ -1937,47 +2077,43 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
             const isLast = index === sectionItems.length - 1;
 
             return (
-              <div key={item.id} className="flex items-center gap-2">
-                <div className="flex flex-col items-center">
-                  {/* Subtle icon container - no heavy colored circle */}
+              <div key={item.id} className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex flex-col items-center w-16 flex-shrink-0">
                   <div className={clsx(
-                    'w-10 h-10 rounded-xl flex items-center justify-center border transition-all hover:scale-105',
+                    'w-8 h-8 rounded-lg flex items-center justify-center border',
                     bgColor,
-                    item.isReturnLeg && 'ring-2 ring-purple-300 ring-offset-1'  // Highlight return legs
+                    item.isReturnLeg && 'ring-2 ring-purple-300 ring-offset-1'
                   )}>
-                    <Icon className={clsx('w-5 h-5', iconColor)} />
+                    <Icon className={clsx('w-4 h-4', iconColor)} />
                   </div>
-                  <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
+                  <p className="text-[11px] text-gray-600 mt-1 font-medium max-w-[64px] truncate text-center">
                     {item.fromLocation}
                   </p>
-                  <p className="text-[10px] text-gray-400">
+                  <p className="text-[9px] text-gray-400 leading-tight">
                     {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
                   </p>
                 </div>
 
-                {/* Connector line with arrow */}
-                <div className="flex flex-col items-center px-1">
-                  <div className="flex items-center">
-                    <div className="w-6 h-0.5 bg-gray-300" />
-                    <div className="w-0 h-0 border-t-[3px] border-t-transparent border-b-[3px] border-b-transparent border-l-[5px] border-l-gray-300" />
-                  </div>
+                {/* Connector arrow */}
+                <div className="flex items-center flex-shrink-0">
+                  <div className="w-4 h-0.5 bg-gray-300" />
+                  <div className="w-0 h-0 border-t-[3px] border-t-transparent border-b-[3px] border-b-transparent border-l-[5px] border-l-gray-300" />
                 </div>
 
                 {isLast && (
-                  <div className="flex flex-col items-center">
-                    {/* Destination marker - subtle styling */}
+                  <div className="flex flex-col items-center w-16 flex-shrink-0">
                     <div className={clsx(
-                      'w-10 h-10 rounded-xl flex items-center justify-center border transition-all',
+                      'w-8 h-8 rounded-lg flex items-center justify-center border',
                       isReturn
                         ? 'bg-emerald-50 border-emerald-300 text-emerald-600'
                         : 'bg-gray-50 border-gray-300 text-gray-500'
                     )}>
-                      {isReturn ? <CheckCircle className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
+                      {isReturn ? <CheckCircle className="w-4 h-4" /> : <MapPin className="w-4 h-4" />}
                     </div>
-                    <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
+                    <p className="text-[11px] text-gray-600 mt-1 font-medium max-w-[64px] truncate text-center">
                       {item.toLocation}
                     </p>
-                    <p className="text-[10px] text-gray-400">
+                    <p className="text-[9px] text-gray-400 leading-tight">
                       {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
                     </p>
                   </div>
@@ -1991,9 +2127,9 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
   };
 
   return (
-    <div className="flex gap-6">
-      {renderJourneySection(outboundItems, "Outbound Journey", false)}
-      {renderJourneySection(returnItems, "Return Journey", true)}
+    <div className="flex flex-col gap-3">
+      {renderJourneySection(outboundItems, "Outbound", false)}
+      {renderJourneySection(returnItems, "Return", true)}
     </div>
   );
 }
@@ -2301,13 +2437,186 @@ function TravelItemCard({
     };
   }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, item.currencyOriginal, triggerConversionIfNeeded]);
 
+  // Read-only card by default; the full edit form lives in a full-screen sheet.
+  const [editOpen, setEditOpen] = useState(false);
+
+  const modeLabel =
+    item.modeOfTransport.charAt(0) + item.modeOfTransport.slice(1).toLowerCase();
+  const displayEur =
+    (item.currencyOriginal === 'EUR'
+      ? (parseFloat(localAmount) || item.amountEur || 0)
+      : (item.amountEur || 0)) + (item.luggageAmountEur || 0);
+
   return (
     <div className={clsx(
-      'rounded-2xl relative overflow-hidden',
-      item.excludedFromReimbursement ? 'bg-gray-100 opacity-60' : 'bg-gray-50',
-      item.checked && !item.excludedFromReimbursement && 'ring-2 ring-emerald-500'
+      'rounded-2xl relative overflow-hidden bg-white border shadow-sm',
+      item.excludedFromReimbursement ? 'border-gray-200 opacity-60' : 'border-gray-100',
+      item.checked && !item.excludedFromReimbursement && 'ring-2 ring-emerald-500 border-transparent'
     )}>
-      <div className="p-6">
+      <div className="p-4 sm:p-5">
+        {/* Summary header */}
+        <div className="flex items-start gap-3">
+          <div className={clsx(
+            'w-12 h-12 rounded-2xl border flex items-center justify-center flex-shrink-0',
+            transportBgColors[item.modeOfTransport]
+          )}>
+            <Icon className={clsx('w-6 h-6', transportIconColors[item.modeOfTransport])} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-gray-900 leading-snug">
+              {item.fromLocation} → {item.toLocation}
+            </p>
+            <p className="text-sm text-gray-400 mt-0.5">
+              {modeLabel} · {formatDate(item.departureDate)}
+            </p>
+          </div>
+          <div className="text-right flex-shrink-0">
+            {item.amountIncludedInRoundTrip ? (
+              <p className="text-xs text-purple-600 italic mt-1">incl. in outbound</p>
+            ) : (
+              <>
+                <p className="text-xl font-bold text-gray-900">{formatCurrency(displayEur)}</p>
+                {item.currencyOriginal !== 'EUR' && (
+                  <p className="text-xs text-gray-400">
+                    {formatCurrency(parseFloat(localAmount) || item.amountOriginal, item.currencyOriginal)}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Chips */}
+        {(item.excludedFromReimbursement || item.isRoundTrip || (item.luggageAmount != null && item.luggageAmount > 0) || (item.numberOfPassengers != null && item.numberOfPassengers > 1)) && (
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {item.excludedFromReimbursement && (
+              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[11px] font-medium rounded-full flex items-center gap-1">
+                <EyeOff className="w-3 h-3" /> Excluded
+              </span>
+            )}
+            {item.isRoundTrip && (
+              <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[11px] font-medium rounded-full">Round-trip</span>
+            )}
+            {item.luggageAmount != null && item.luggageAmount > 0 && (
+              <span className="px-2 py-0.5 bg-sky-100 text-sky-700 text-[11px] font-medium rounded-full">
+                Luggage incl. ({formatCurrency(item.luggageAmountEur || item.luggageAmount)})
+              </span>
+            )}
+            {item.numberOfPassengers != null && item.numberOfPassengers > 1 && (
+              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[11px] font-medium rounded-full">{item.numberOfPassengers} passengers</span>
+            )}
+          </div>
+        )}
+
+        {/* Labeled detail rows */}
+        <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 gap-x-4 gap-y-3">
+          <div className="col-span-2">
+            <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Carrier</p>
+            <p className="text-sm font-medium text-gray-900 mt-0.5 truncate">{item.companyName || '—'}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Reference</p>
+            <p className="text-sm font-medium text-gray-900 mt-0.5 truncate">{item.bookingReference || '—'}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Date</p>
+            <p className="text-sm font-medium text-gray-900 mt-0.5">{formatDate(item.departureDate)}</p>
+          </div>
+          {isPlane && (
+            <div className="col-span-2">
+              <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Flight no.</p>
+              <p className="text-sm font-medium text-gray-900 mt-0.5">{item.flightNumber || '—'}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Documents & declarations (compact) */}
+        <div className="mt-3 space-y-1.5">
+          {allLinkedDocuments.length > 0 ? (
+            allLinkedDocuments.map((doc) => (
+              <div key={doc.id} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-2.5 py-2">
+                <FileText className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                <span className="text-gray-600 truncate flex-1">{doc.renamedFilename}</span>
+                <button
+                  onClick={() => onViewDocument(doc)}
+                  className="text-primary-600 hover:text-primary-700 font-semibold flex-shrink-0"
+                >
+                  View
+                </button>
+              </div>
+            ))
+          ) : itemDeclarations.length === 0 ? (
+            <div className="flex items-center gap-2 text-xs bg-amber-50 rounded-lg px-2.5 py-2">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+              <span className="text-amber-700">No document linked — tap Edit to add one</span>
+            </div>
+          ) : null}
+          {itemDeclarations.map((dec) => (
+            <div key={dec.id} className="flex items-center gap-2 text-xs bg-emerald-50 rounded-lg px-2.5 py-2">
+              <FileCheck className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+              <span className="text-emerald-700 truncate">Declaration of travel · {formatDate(dec.travelDate)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Boarding pass missing (planes) */}
+        {isPlane && !hasBoardingPass && !hasDeclaration && (
+          <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200">
+            <div className="flex items-center gap-2">
+              <Ticket className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <span className="text-xs font-medium text-amber-700 flex-1">Boarding pass missing</span>
+            </div>
+            <div className="flex items-center gap-4 mt-1.5 pl-6">
+              <button onClick={onUploadBoardingPass} className="text-xs text-amber-700 font-semibold underline">
+                Upload now
+              </button>
+              <button onClick={onMissingBoardingPass} className="text-xs text-gray-500 hover:text-gray-700 underline">
+                I don't have it
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Verify hint while unconfirmed */}
+        {!item.checked && !item.excludedFromReimbursement && (
+          <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm font-medium flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            Check the amount &amp; details match your document
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="mt-4 flex items-stretch gap-2">
+          <button
+            type="button"
+            onClick={() => onToggleChecked()}
+            className={clsx(
+              'flex-1 rounded-2xl py-3 font-semibold text-sm transition-colors flex items-center justify-center gap-1.5',
+              item.checked
+                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                : 'text-white bg-gradient-to-r from-primary-600 to-fuchsia-500 hover:opacity-95'
+            )}
+          >
+            {item.checked ? (<><CheckCircle className="w-4 h-4" /> Confirmed</>) : 'Confirm trip ✓'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditOpen(true)}
+            className="px-5 rounded-2xl py-3 font-semibold text-sm bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors"
+          >
+            Edit
+          </button>
+        </div>
+      </div>
+
+      {/* Full-screen edit sheet — every field and document action lives here */}
+      <Modal
+        isOpen={editOpen}
+        onClose={() => setEditOpen(false)}
+        title={`Edit trip · ${item.fromLocation} → ${item.toLocation}`}
+        size="lg"
+      >
+      <div>
       {/* Boarding Pass / Declaration Status Bar for Flights */}
       {isPlane && (
         <div className={clsx(
@@ -2399,60 +2708,6 @@ function TravelItemCard({
           </span>
         </div>
       )}
-
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-4">
-        <div className={clsx(
-          'w-12 h-12 rounded-xl border flex items-center justify-center',
-          transportBgColors[item.modeOfTransport]
-        )}>
-          <Icon className={clsx('w-6 h-6', transportIconColors[item.modeOfTransport])} />
-        </div>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <p className="font-semibold text-gray-900">
-              {item.fromLocation} → {item.toLocation}
-            </p>
-            {item.excludedFromReimbursement && (
-              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-medium rounded-full flex items-center gap-1">
-                <EyeOff className="w-3 h-3" />
-                Excluded
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-gray-500">
-            {formatDate(item.departureDate)}
-            {item.flightNumber && ` • ${item.flightNumber}`}
-          </p>
-        </div>
-        <div className="text-right">
-          {item.amountIncludedInRoundTrip ? (
-            <p className="text-xs text-purple-600 italic">incl. in outbound</p>
-          ) : (
-            <>
-              <p className="font-semibold text-gray-900">
-                {formatCurrency(
-                  (item.currencyOriginal === 'EUR'
-                    ? (parseFloat(localAmount) || item.amountEur || 0)
-                    : (item.amountEur || 0)
-                  ) + (item.luggageAmountEur || 0)
-                )}
-              </p>
-              {item.currencyOriginal !== 'EUR' && (
-                <p className="text-xs text-gray-500">
-                  {formatCurrency(parseFloat(localAmount) || item.amountOriginal, item.currencyOriginal)}
-                </p>
-              )}
-            </>
-          )}
-        </div>
-        <button
-          onClick={onDelete}
-          className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-        >
-          <Trash2 className="w-5 h-5" />
-        </button>
-      </div>
 
       {/* Linked Documents */}
       {/* Hidden file input for replace */}
@@ -2772,49 +3027,22 @@ function TravelItemCard({
         </button>
       </div>
 
-      {/* Confirmation Bottom Bar */}
-      <div className={clsx(
-        'px-6 py-4 flex items-center justify-between border-t transition-colors',
-        item.excludedFromReimbursement
-          ? 'bg-gray-100 border-gray-200'
-          : item.checked
-            ? 'bg-emerald-50 border-emerald-200'
-            : 'bg-white border-gray-200'
-      )}>
-        <div className="flex items-center gap-3">
-          {item.checked ? (
-            <>
-              <CheckCircle className="w-5 h-5 text-emerald-600" />
-              <span className="text-sm font-medium text-emerald-700">
-                This travel item is confirmed
-              </span>
-            </>
-          ) : (
-            <>
-              <AlertCircle className="w-5 h-5 text-amber-500" />
-              <span className="text-sm text-gray-600">
-                Please verify the information above is correct
-              </span>
-            </>
-          )}
-        </div>
+      {/* Sheet actions: delete or done */}
+      <div className="mt-6 pt-4 border-t border-gray-200 flex items-center justify-between gap-3">
         <button
           type="button"
-          onClick={() => {
-            console.log('[Confirm] Button clicked for item:', item.id);
-            onToggleChecked();
-          }}
-          className={clsx(
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            item.checked
-              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-              : 'bg-emerald-600 text-white hover:bg-emerald-700'
-          )}
+          onClick={() => { setEditOpen(false); onDelete(); }}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-red-500 hover:bg-red-50 transition-colors"
         >
-          {item.checked ? 'Edit' : 'Confirm'}
+          <Trash2 className="w-4 h-4" />
+          Delete this trip
         </button>
+        <Button onClick={() => setEditOpen(false)}>
+          Done
+        </Button>
       </div>
       </div>
+      </Modal>
     </div>
   );
 }
@@ -3627,6 +3855,20 @@ function Step3Confirm({
           </p>
         </CardHeader>
         <CardContent>
+          {/* Amount to receive hero */}
+          <div className="rounded-3xl p-6 text-white bg-gradient-to-br from-primary-600 to-fuchsia-500 shadow-lg mb-6">
+            <p className="text-sm text-white/85 font-medium">Amount to receive</p>
+            <p className="text-4xl font-bold mt-1">
+              {formatCurrency(data.reimbursementSummary?.amountToReimburse || 0)}
+            </p>
+            {(data.reimbursementSummary?.totalEur || 0) !==
+              (data.reimbursementSummary?.amountToReimburse || 0) && (
+              <p className="text-white/75 text-xs mt-2">
+                Total travel costs {formatCurrency(data.reimbursementSummary?.totalEur || 0)} · capped at your country maximum
+              </p>
+            )}
+          </div>
+
           {/* Missing Items Warning — hide bank-related items until user tries to submit */}
           {!validation.isComplete && (() => {
             const visibleItems = validation.missingItems.filter(item => {
@@ -3710,11 +3952,11 @@ function Step3Confirm({
           )}
 
           {/* Bank Details */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Bank Account Details</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5 space-y-4">
+            <h3 className="font-bold text-gray-900">Bank details</h3>
+            <div className="space-y-4">
               <Input
-                label="IBAN"
+                label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">IBAN</span>}
                 value={bankDetails.bankAccountIban}
                 onChange={(e) =>
                   setBankDetails({ ...bankDetails, bankAccountIban: e.target.value })
@@ -3732,7 +3974,7 @@ function Step3Confirm({
                 placeholder="DE89 3704 0044 0532 0130 00"
               />
               <Input
-                label="Account Holder Name"
+                label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Account holder</span>}
                 value={bankDetails.bankAccountHolderName}
                 onChange={(e) =>
                   setBankDetails({ ...bankDetails, bankAccountHolderName: e.target.value })
@@ -3740,48 +3982,50 @@ function Step3Confirm({
                 onBlur={() => updateBankMutation.mutate()}
                 placeholder="John Doe"
               />
-              <div className="space-y-1">
-                <div className="flex items-center gap-1">
-                  <label className="block text-sm font-medium text-gray-700">
-                    BIC/SWIFT Code
-                  </label>
-                  <div className="relative group">
-                    <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
-                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
-                      The BIC (Bank Identifier Code) is an 8-11 character code. You can find it on your bank statement, in your banking app, or by searching &quot;[your bank name] BIC code&quot;.
-                      <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1">
+                    <label className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">
+                      BIC
+                    </label>
+                    <div className="relative group">
+                      <HelpCircle className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                      <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
+                        The BIC (Bank Identifier Code) is an 8-11 character code. You can find it on your bank statement, in your banking app, or by searching &quot;[your bank name] BIC code&quot;.
+                        <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+                      </div>
                     </div>
                   </div>
+                  <Input
+                    value={bankDetails.bankAccountBic}
+                    onChange={(e) =>
+                      setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
+                    }
+                    onBlur={() => updateBankMutation.mutate()}
+                    placeholder="COBADEFFXXX"
+                    required
+                  />
                 </div>
                 <Input
-                  value={bankDetails.bankAccountBic}
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Bank</span>}
+                  value={bankDetails.bankName}
                   onChange={(e) =>
-                    setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
+                    setBankDetails({ ...bankDetails, bankName: e.target.value })
                   }
                   onBlur={() => updateBankMutation.mutate()}
-                  placeholder="COBADEFFXXX"
-                  required
+                  placeholder="e.g., Commerzbank"
                 />
               </div>
-              <Input
-                label="Bank Name"
-                value={bankDetails.bankName}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, bankName: e.target.value })
-                }
-                onBlur={() => updateBankMutation.mutate()}
-                placeholder="e.g., Deutsche Bank"
-              />
             </div>
           </div>
 
           {/* Personal Address */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Personal Address</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5 space-y-4">
+            <h3 className="font-bold text-gray-900">Personal address</h3>
+            <div className="space-y-4">
+              <div>
                 <Input
-                  label="Street Address"
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Street address</span>}
                   value={bankDetails.personalAddress}
                   onChange={(e) =>
                     setBankDetails({ ...bankDetails, personalAddress: e.target.value })
@@ -3791,7 +4035,7 @@ function Step3Confirm({
                 />
               </div>
               <Input
-                label="City"
+                label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">City</span>}
                 value={bankDetails.personalCity}
                 onChange={(e) =>
                   setBankDetails({ ...bankDetails, personalCity: e.target.value })
@@ -3801,7 +4045,7 @@ function Step3Confirm({
               />
               <div className="grid grid-cols-2 gap-4">
                 <Input
-                  label="Postal Code"
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Postal code</span>}
                   value={bankDetails.personalPostalCode}
                   onChange={(e) =>
                     setBankDetails({ ...bankDetails, personalPostalCode: e.target.value })
@@ -3810,7 +4054,7 @@ function Step3Confirm({
                   placeholder="e.g., 10115"
                 />
                 <Input
-                  label="Country"
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Country</span>}
                   value={bankDetails.personalCountry}
                   onChange={(e) =>
                     setBankDetails({ ...bankDetails, personalCountry: e.target.value })
@@ -3822,46 +4066,13 @@ function Step3Confirm({
             </div>
           </div>
 
-          {/* Summary */}
-          <div className="mt-8 p-6 bg-gradient-header rounded-2xl text-white">
-            <h3 className="font-semibold mb-4">Reimbursement Summary</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-white/70 text-sm">Total Travel Costs</p>
-                <p className="text-2xl font-bold">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(data.reimbursementSummary?.totalEur || 0)}
-                </p>
-              </div>
-              <div>
-                <p className="text-white/70 text-sm">Amount to Receive</p>
-                <p className="text-2xl font-bold">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(data.reimbursementSummary?.amountToReimburse || 0)}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Confirmations */}
-          <div className="mt-8 space-y-4">
-            {/* IBAN confirmation — shows their actual IBAN so they read it before ticking */}
-            <label className={`flex items-start gap-3 cursor-pointer p-4 rounded-xl border ${confirmations.ibanCorrect ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
-              <input
-                type="checkbox"
-                checked={confirmations.ibanCorrect}
-                disabled={!bankDetails.bankAccountIban}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, ibanCorrect: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-40"
-              />
-              <span className="text-sm text-gray-800">
-                {bankDetails.bankAccountIban ? (
+          {/* Confirmations — tappable card rows with gradient check tiles */}
+          <div className="mt-6 space-y-3">
+            {([
+              {
+                key: 'ibanCorrect' as const,
+                disabled: !bankDetails.bankAccountIban,
+                content: bankDetails.bankAccountIban ? (
                   <>
                     I confirm my bank account IBAN{' '}
                     <span className="font-mono font-semibold tracking-wide">{formattedIban}</span>{' '}
@@ -3869,50 +4080,71 @@ function Step3Confirm({
                   </>
                 ) : (
                   <span className="text-gray-500">Enter your IBAN above to confirm it.</span>
+                ),
+              },
+              {
+                key: 'dataCorrect' as const,
+                disabled: false,
+                content: <>Information is correct to the best of my knowledge.</>,
+              },
+              {
+                key: 'erasmusRules' as const,
+                disabled: false,
+                content: <>I understand the Erasmus+ reimbursement rules.</>,
+              },
+            ]).map(({ key, disabled, content }) => (
+              <label
+                key={key}
+                className={clsx(
+                  'flex items-start gap-3 p-4 rounded-2xl border bg-white shadow-sm transition-colors',
+                  disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
+                  confirmations[key] ? 'border-primary-200' : 'border-gray-200'
                 )}
-              </span>
-            </label>
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={confirmations.dataCorrect}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, dataCorrect: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <span className="text-sm text-gray-700">
-                I confirm that the above information is correct to the best of my knowledge.
-              </span>
-            </label>
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={confirmations.erasmusRules}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, erasmusRules: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <span className="text-sm text-gray-700">
-                I understand that the reimbursement rules follow Erasmus+ guidelines.
-              </span>
-            </label>
+              >
+                <input
+                  type="checkbox"
+                  checked={confirmations[key]}
+                  disabled={disabled}
+                  onChange={(e) => setConfirmations({ ...confirmations, [key]: e.target.checked })}
+                  className="sr-only"
+                />
+                <span
+                  className={clsx(
+                    'w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 transition-all',
+                    confirmations[key]
+                      ? 'bg-gradient-to-br from-primary-600 to-fuchsia-500 text-white'
+                      : 'border-2 border-gray-300 bg-white'
+                  )}
+                >
+                  {confirmations[key] && <CheckCircle className="w-4 h-4" />}
+                </span>
+                <span className="text-sm text-gray-800">{content}</span>
+              </label>
+            ))}
           </div>
 
           {/* Navigation */}
-          <div className="mt-8 flex justify-between">
-            <Button variant="secondary" onClick={onBack}>
-              Back to Check Data
-            </Button>
-            <Button
-              onClick={() => { setSubmitAttempted(true); markCompleteMutation.mutate(); }}
-              loading={markCompleteMutation.isPending}
-              disabled={!canSubmit}
+          <div className="mt-8 flex items-stretch gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="w-14 rounded-2xl bg-white border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50 transition-colors flex-shrink-0"
+              aria-label="Back to travel items"
             >
-              <CheckCircle className="w-4 h-4 mr-2" />
-              Submit Reimbursement
-            </Button>
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSubmitAttempted(true); markCompleteMutation.mutate(); }}
+              disabled={!canSubmit || markCompleteMutation.isPending}
+              className="flex-1 rounded-2xl py-3.5 font-semibold text-white text-lg bg-gradient-to-r from-primary-600 to-fuchsia-500 shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 transition-opacity"
+            >
+              {markCompleteMutation.isPending ? (
+                <><Loader2 className="w-5 h-5 animate-spin" /> Submitting…</>
+              ) : (
+                'Submit reimbursement'
+              )}
+            </button>
           </div>
 
           {/* GDPR Notice */}
