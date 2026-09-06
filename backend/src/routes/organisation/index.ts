@@ -702,7 +702,7 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
     invoice_creation: {
       enabled: true,
       invoice_data: {
-        footer: 'VAT exempt under the Dutch Small Business Scheme (KOR), Article 25 Dutch VAT Act 1968, and the EU Small Business Scheme (EU-KOR), EU Directive 2020/285. VAT rate: 0%.',
+        footer: 'VAT reverse charged — Article 196 Council Directive 2006/112/EC. VAT to be accounted for by the recipient. VAT ID: NL002317662B92.',
       },
     },
     success_url: `${frontendUrl}/org/billing?success=1`,
