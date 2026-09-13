@@ -66,12 +66,14 @@ export default function AdminLogin() {
               </Button>
             </form>
 
-            <div className="mt-6 p-4 bg-gray-50 rounded-xl">
-              <p className="text-xs text-gray-500 text-center">
-                For development, use the password configured in your environment variables.
-                Default is <code className="bg-gray-200 px-1 rounded">admin123</code>
-              </p>
-            </div>
+            {/* Dev-only hint; never expose credentials on the production login page */}
+            {import.meta.env.DEV && (
+              <div className="mt-6 p-4 bg-gray-50 rounded-xl">
+                <p className="text-xs text-gray-500 text-center">
+                  Local development: use the ADMIN_PASSWORD from your backend .env file.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
