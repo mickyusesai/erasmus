@@ -9,6 +9,7 @@ import {
   TransportMode,
 } from './types.js';
 import prisma from '../../utils/prisma.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
 /**
@@ -496,11 +497,8 @@ Other important notes:
       }
     }
 
-    // Get max reimbursement for participant's country
-    const countryLimit = participant.project.countryLimits.find(
-      (limit: { country: string; maxReimbursementAmount: number }) => limit.country === participant.country
-    );
-    const maxReimbursementAllowed = countryLimit?.maxReimbursementAmount || 0;
+    // Applicable maximum: individual override, else the participant's country limit
+    const maxReimbursementAllowed = getEffectiveLimit(participant, participant.project.countryLimits).maxReimbursement;
 
     // If any travel item is a multi-person booking, do not apply the per-person cap
     const hasMultiPersonBooking = participant.travelItems.some(

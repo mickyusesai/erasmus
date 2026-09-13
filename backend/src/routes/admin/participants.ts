@@ -4,6 +4,7 @@ import multer from 'multer';
 import { parse } from 'csv-parse/sync';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { NotFoundError, ValidationError } from '../../middleware/errorHandler.js';
 import { getEmailService } from '../../services/email/index.js';
 import { getAiService } from '../../services/ai/index.js';
@@ -150,10 +151,8 @@ router.get('/:id', async (req: Request, res: Response) => {
     throw new NotFoundError('Participant not found');
   }
 
-  // Get country limit for this participant
-  const countryLimit = participant.project.countryLimits.find(
-    (limit: { country: string }) => limit.country === participant.country
-  );
+  // Applicable limit: individual override, else the country limit
+  const effectiveLimit = getEffectiveLimit(participant, participant.project.countryLimits);
 
   // Get dissemination status
   let disseminationStatus = {
@@ -180,7 +179,8 @@ router.get('/:id', async (req: Request, res: Response) => {
   res.json({
     ...participant,
     travelItems: sortTravelItemsByJourney(participant.travelItems),
-    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
+    maxReimbursementForCountry: effectiveLimit.maxReimbursement || null,
+    greenTravel: effectiveLimit.greenTravel,
     disseminationStatus,
   });
 });

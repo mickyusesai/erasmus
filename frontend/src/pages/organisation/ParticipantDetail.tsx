@@ -43,7 +43,7 @@ import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData , type OrgParticipantDetail as OrgParticipantDetailData } from '../../services/api';
 import { clsx } from 'clsx';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -269,6 +269,20 @@ export default function OrgParticipantDetail() {
     mutationFn: (notes: string) => organisationApi.updateParticipant(id!, { notesInternal: notes }),
     onSuccess: () => toast.success('Notes saved'),
     onError: () => toast.error('Failed to save notes'),
+  });
+
+  // Individual limit overrides — the server recalculates the payable amount
+  const updateLimitOverrideMutation = useMutation({
+    mutationFn: (data: { maxReimbursementOverride?: number | null; greenTravelOverride?: boolean | null }) =>
+      organisationApi.updateParticipant(id!, data),
+    onSuccess: () => {
+      toast.success('Limit updated');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      if (participant?.project?.id) {
+        queryClient.invalidateQueries({ queryKey: ['org-participants', participant.project.id] });
+      }
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update limit'),
   });
 
   const deleteParticipantMutation = useMutation({
@@ -538,7 +552,12 @@ export default function OrgParticipantDetail() {
                   <p className="text-2xl font-bold text-white">{formatCurrency(summary?.totalEur || 0)}</p>
                 </div>
                 <div>
-                  <p className="text-white/70 text-sm">Max Allowed</p>
+                  <p className="text-white/70 text-sm">
+                    Max Allowed
+                    {participant.maxReimbursementOverride != null && (
+                      <span className="ml-2 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-semibold uppercase tracking-wide">Individual</span>
+                    )}
+                  </p>
                   <p className="text-2xl font-bold text-white">{participant.maxReimbursementForCountry ? formatCurrency(participant.maxReimbursementForCountry) : 'Not set'}</p>
                 </div>
                 <div>
@@ -561,6 +580,13 @@ export default function OrgParticipantDetail() {
               </div>
             </CardContent>
           </Card>
+
+          {/* ── Individual limit (overrides the country default) ── */}
+          <IndividualLimitCard
+            participant={participant}
+            saving={updateLimitOverrideMutation.isPending}
+            onSave={(data) => updateLimitOverrideMutation.mutate(data)}
+          />
 
           {/* ── Two Column Layout ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1796,5 +1822,92 @@ function DetailField({ label, value, highlight }: { label: string; value: string
         highlight === 'orange' ? 'text-orange-600' : highlight === 'red' ? 'text-red-600' : 'text-gray-900',
       )}>{value}</p>
     </div>
+  );
+}
+
+/**
+ * Lets the organisation give one participant their own maximum and/or
+ * green-travel status. Blank / "country default" clears the override.
+ */
+function IndividualLimitCard({
+  participant,
+  saving,
+  onSave,
+}: {
+  participant: OrgParticipantDetailData;
+  saving: boolean;
+  onSave: (data: { maxReimbursementOverride?: number | null; greenTravelOverride?: boolean | null }) => void;
+}) {
+  const serverMax = participant.maxReimbursementOverride != null ? String(participant.maxReimbursementOverride) : '';
+  const [maxValue, setMaxValue] = useState(serverMax);
+  useEffect(() => setMaxValue(serverMax), [serverMax]);
+
+  const countryMax = participant.countryMaxReimbursement || 0;
+  const countryGreen = participant.countryGreenTravel || false;
+  const greenValue =
+    participant.greenTravelOverride == null ? 'default' : participant.greenTravelOverride ? 'yes' : 'no';
+
+  const commitMax = () => {
+    const trimmed = maxValue.trim();
+    if (trimmed === '') {
+      if (participant.maxReimbursementOverride != null) onSave({ maxReimbursementOverride: null });
+      return;
+    }
+    const amount = parseFloat(trimmed);
+    if (isNaN(amount) || amount < 0) {
+      setMaxValue(serverMax);
+      return;
+    }
+    if (amount !== participant.maxReimbursementOverride) onSave({ maxReimbursementOverride: amount });
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex flex-col md:flex-row md:items-end gap-4">
+          <div className="flex-1">
+            <p className="font-semibold text-gray-900">Individual limit</p>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Overrides the {participant.country} country limit for this participant only. Leave blank to use the country default.
+            </p>
+          </div>
+          <div className="flex items-end gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Maximum (EUR)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={maxValue}
+                placeholder={countryMax > 0 ? `Country: ${countryMax}` : 'Country: not set'}
+                onChange={(e) => setMaxValue(e.target.value)}
+                onBlur={commitMax}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                }}
+                disabled={saving}
+                className="w-36 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-primary-400 focus:ring-2 focus:ring-primary-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Green travel</label>
+              <select
+                value={greenValue}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  onSave({ greenTravelOverride: v === 'default' ? null : v === 'yes' });
+                }}
+                disabled={saving}
+                className="px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="default">Country default ({countryGreen ? 'yes' : 'no'})</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

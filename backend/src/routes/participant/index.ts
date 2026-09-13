@@ -15,6 +15,7 @@ import { getEmailService } from '../../services/email/index.js';
 import { generateDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import disseminationRoutes from './dissemination.js';
 
 // Initialize the consolidation service
@@ -183,10 +184,8 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
     },
   });
 
-  // Get country limit
-  const countryLimit = data?.project.countryLimits.find(
-    (limit: { country: string }) => limit.country === participant.country
-  );
+  // Applicable limit: individual override, else the country limit
+  const effectiveLimit = data ? getEffectiveLimit(data, data.project.countryLimits) : null;
 
   // Calculate completion status
   const aiService = getAiService();
@@ -249,8 +248,8 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
     reimbursementSummary: data?.reimbursementSummary,
     declarationsOnHonor: data?.declarationsOnHonor,
     declarationsOfTravel: data?.declarationsOfTravel,
-    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
-    greenTravel: countryLimit?.greenTravel || false,
+    maxReimbursementForCountry: effectiveLimit?.maxReimbursement || null,
+    greenTravel: effectiveLimit?.greenTravel || false,
     validation,
     disseminationStatus,
   });
@@ -1512,6 +1511,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
       const countryLimit = await prisma.projectCountryLimit.findFirst({
         where: { projectId: fullParticipant.projectId, country: fullParticipant.country },
       });
+      const effectiveLimit = getEffectiveLimit(fullParticipant, countryLimit);
 
       const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
       const findings = await generateParticipantReview({
@@ -1524,7 +1524,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         projectCountry: fullParticipant.project.country,
         projectStartDate: fullParticipant.project.startDate.toISOString().split('T')[0],
         projectEndDate: fullParticipant.project.endDate.toISOString().split('T')[0],
-        maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+        maxReimbursementForCountry: effectiveLimit.maxReimbursement,
         travelItems: fullParticipant.travelItems.map((item) => ({
           id: item.id,
           modeOfTransport: item.modeOfTransport,

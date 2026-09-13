@@ -847,7 +847,7 @@ export const organisationApi = {
     return handleResponse<{ participant: OrgParticipantDetail }>(res);
   },
 
-  updateParticipant: async (id: string, data: Partial<{ firstName: string; lastName: string; email: string; country: string; notesInternal: string }>) => {
+  updateParticipant: async (id: string, data: Partial<{ firstName: string; lastName: string; email: string; country: string; notesInternal: string; maxReimbursementOverride: number | null; greenTravelOverride: boolean | null }>) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${id}`, {
       method: 'PATCH',
       headers: getOrgAuthHeaders(),
@@ -1345,8 +1345,14 @@ export interface OrgParticipantDetail extends OrgParticipant {
   declarationsOnHonor: Declaration[];
   declarationsOfTravel: DeclarationOfTravel[];
   changeLogEntries: ChangeLogEntry[];
+  /** Effective values (individual override if set, else the country limit) */
   maxReimbursementForCountry?: number;
   greenTravel?: boolean;
+  /** Raw overrides (null = country default) and the country defaults themselves */
+  maxReimbursementOverride?: number | null;
+  greenTravelOverride?: boolean | null;
+  countryMaxReimbursement?: number;
+  countryGreenTravel?: boolean;
   project: {
     id: string;
     name: string;

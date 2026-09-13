@@ -8,6 +8,7 @@ import {
   TransportMode,
 } from './types.js';
 import prisma from '../../utils/prisma.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 
 /**
  * Mock AI Service for development
@@ -296,17 +297,22 @@ export class MockAiService implements TravelDocumentAiService {
     for (const item of participant.travelItems) {
       if (!item.excludedFromReimbursement && item.amountEur !== null) {
         totalEur += item.amountEur;
+        if (item.luggageAmountEur !== null && item.luggageAmountEur !== undefined) {
+          totalEur += item.luggageAmountEur;
+        }
       }
     }
 
-    // Get max reimbursement for participant's country
-    const countryLimit = participant.project.countryLimits.find(
-      (limit: { country: string; maxReimbursementAmount: number }) => limit.country === participant.country
-    );
-    const maxReimbursementAllowed = countryLimit?.maxReimbursementAmount || 0;
+    // Applicable maximum: individual override, else the participant's country limit
+    const maxReimbursementAllowed = getEffectiveLimit(participant, participant.project.countryLimits).maxReimbursement;
 
-    // Calculate amount to reimburse (capped at max)
-    const amountToReimburse = Math.min(totalEur, maxReimbursementAllowed);
+    // Same cap rule as the real service: no cap when none is configured or for multi-person bookings
+    const hasMultiPersonBooking = participant.travelItems.some(
+      (item) => item.numberOfPassengers !== null && item.numberOfPassengers > 1
+    );
+    const amountToReimburse = (maxReimbursementAllowed > 0 && !hasMultiPersonBooking)
+      ? Math.min(totalEur, maxReimbursementAllowed)
+      : totalEur;
 
     // Validate
     const validation = await this.validateReimbursement(participantId);

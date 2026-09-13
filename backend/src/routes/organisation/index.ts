@@ -10,6 +10,7 @@ import { getEmailService } from '../../services/email/index.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { generateAuditPdf } from '../../services/pdf/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import archiver from 'archiver';
 import multer from 'multer';
 
@@ -1090,20 +1091,23 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
     throw new ForbiddenError('Access denied');
   }
 
-  // Get country limit
+  // Applicable limit: individual override, else the country limit
   const countryLimit = await prisma.projectCountryLimit.findFirst({
     where: {
       projectId: participant.projectId,
       country: participant.country,
     },
   });
+  const effectiveLimit = getEffectiveLimit(participant, countryLimit);
 
   res.json({
     participant: {
       ...participant,
       travelItems: sortTravelItemsByJourney(participant.travelItems),
-      maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
-      greenTravel: countryLimit?.greenTravel || false,
+      maxReimbursementForCountry: effectiveLimit.maxReimbursement,
+      greenTravel: effectiveLimit.greenTravel,
+      countryMaxReimbursement: effectiveLimit.countryMax,
+      countryGreenTravel: effectiveLimit.countryGreen,
     },
   });
 }));
@@ -1257,10 +1261,10 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
 
   participant.travelItems = sortTravelItemsByJourney(participant.travelItems);
 
-  // Get country limit
   const countryLimit = await prisma.projectCountryLimit.findFirst({
     where: { projectId: participant.projectId, country: participant.country },
   });
+  const effectiveLimit = getEffectiveLimit(participant, countryLimit);
 
   const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
   const findings = await generateParticipantReview({
@@ -1273,7 +1277,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     projectCountry: participant.project.country,
     projectStartDate: participant.project.startDate.toISOString().split('T')[0],
     projectEndDate: participant.project.endDate.toISOString().split('T')[0],
-    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+    maxReimbursementForCountry: effectiveLimit.maxReimbursement,
     travelItems: participant.travelItems.map((item) => ({
       id: item.id,
       modeOfTransport: item.modeOfTransport,
@@ -1386,6 +1390,9 @@ const updateParticipantSchema = z.object({
   email: z.string().email().optional(),
   country: z.string().min(1).optional(),
   notesInternal: z.string().optional(),
+  // Individual limit overrides (null = back to the country default)
+  maxReimbursementOverride: z.number().min(0).nullable().optional(),
+  greenTravelOverride: z.boolean().nullable().optional(),
 });
 
 router.patch('/participants/:id', asyncHandler(async (req: Request, res: Response) => {
@@ -1414,6 +1421,28 @@ router.patch('/participants/:id', asyncHandler(async (req: Request, res: Respons
     where: { id: participantId },
     data: result.data,
   });
+
+  // Anything that changes the applicable limit must recompute the payable
+  // amount and leave a trace in the change log.
+  const limitFields = ['country', 'maxReimbursementOverride', 'greenTravelOverride'] as const;
+  const changedLimitFields = limitFields.filter(
+    (f) => f in result.data && (result.data as Record<string, unknown>)[f] !== (participant as Record<string, unknown>)[f]
+  );
+  if (changedLimitFields.length > 0) {
+    for (const field of changedLimitFields) {
+      await prisma.changeLogEntry.create({
+        data: {
+          participantId,
+          userType: 'ORGANISATION',
+          fieldName: `participant.${field}`,
+          previousValue: String((participant as Record<string, unknown>)[field] ?? ''),
+          newValue: String((result.data as Record<string, unknown>)[field] ?? ''),
+        },
+      });
+    }
+    const { getAiService } = await import('../../services/ai/index.js');
+    await getAiService().recalculateParticipantSummary(participantId);
+  }
 
   res.json({ participant: updated });
 }));

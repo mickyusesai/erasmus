@@ -247,7 +247,8 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
       ['Total Travel Items',           String(participant.travelItems.length)],
       ['Total Declared Travel Amount', formatEur(summary?.totalEur)],
       ['Maximum Eligible Reimbursement', summary?.maxReimbursementAllowed
-        ? formatEur(summary.maxReimbursementAllowed)
+        ? formatEur(summary.maxReimbursementAllowed) +
+          (participant.maxReimbursementOverride != null ? ' (individual limit)' : '')
         : 'Not configured'],
       ['Final Reimbursed Amount',      formatEur(summary?.amountToReimburse)],
     ];
