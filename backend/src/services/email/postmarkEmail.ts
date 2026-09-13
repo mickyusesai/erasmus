@@ -1,6 +1,12 @@
 import { ServerClient } from 'postmark';
-import { EmailService, EmailOptions, EmailResult } from './types.js';
+import { EmailService, EmailOptions, EmailResult, ProjectEmailContext } from './types.js';
+
 import * as templates from './templates.js';
+/** Sender display name + Reply-To derived from the project's organisation */
+function senderFor(ctx?: ProjectEmailContext): Pick<EmailOptions, 'fromName' | 'replyTo'> {
+  if (!ctx) return {};
+  return { fromName: `${ctx.organisationName} via EasyReimburse`, replyTo: ctx.replyTo };
+}
 
 /**
  * Postmark email service for production
@@ -17,9 +23,14 @@ export class PostmarkEmailService implements EmailService {
 
   async send(options: EmailOptions): Promise<EmailResult> {
     try {
+      // The address must stay the verified sender; only the display name varies
+      const from = options.fromName
+        ? `"${options.fromName.replace(/"/g, '')}" <${this.from}>`
+        : this.from;
       const result = await this.client.sendEmail({
-        From: this.from,
+        From: from,
         To: options.to,
+        ReplyTo: options.replyTo || undefined,
         Subject: options.subject,
         TextBody: options.text,
         HtmlBody: options.html || undefined,
@@ -39,12 +50,13 @@ export class PostmarkEmailService implements EmailService {
     }
   }
 
-  async sendMagicLink(to: string, participantName: string, projectName: string, magicLink: string): Promise<EmailResult> {
+  async sendMagicLink(to: string, participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.magicLinkSubject(projectName),
-      text: templates.magicLinkText(participantName, projectName, magicLink),
-      html: templates.magicLinkHtml(participantName, projectName, magicLink),
+      text: templates.magicLinkText(participantName, projectName, magicLink, ctx),
+      html: templates.magicLinkHtml(participantName, projectName, magicLink, ctx),
+      ...senderFor(ctx),
     });
   }
 
@@ -75,12 +87,13 @@ export class PostmarkEmailService implements EmailService {
     });
   }
 
-  async sendReminder(to: string, participantName: string, projectName: string, magicLink: string, organisationName: string): Promise<EmailResult> {
+  async sendReminder(to: string, participantName: string, projectName: string, magicLink: string, organisationName: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.reminderSubject(projectName),
-      text: templates.reminderText(participantName, projectName, magicLink, organisationName),
-      html: templates.reminderHtml(participantName, projectName, magicLink, organisationName),
+      text: templates.reminderText(participantName, projectName, magicLink, organisationName, ctx),
+      html: templates.reminderHtml(participantName, projectName, magicLink, organisationName, ctx),
+      ...senderFor(ctx),
     });
   }
 
@@ -120,12 +133,13 @@ export class PostmarkEmailService implements EmailService {
     });
   }
 
-  async sendProjectEnded(to: string, participantName: string, projectName: string, magicLink: string): Promise<EmailResult> {
+  async sendProjectEnded(to: string, participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.projectEndedSubject(projectName),
-      text: templates.projectEndedText(participantName, projectName, magicLink),
-      html: templates.projectEndedHtml(participantName, projectName, magicLink),
+      text: templates.projectEndedText(participantName, projectName, magicLink, ctx),
+      html: templates.projectEndedHtml(participantName, projectName, magicLink, ctx),
+      ...senderFor(ctx),
     });
   }
 

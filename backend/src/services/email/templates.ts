@@ -2,7 +2,65 @@
  * Shared email templates used by all email service providers
  */
 
-function wrapInLayout(content: string): string {
+import type { ProjectEmailContext } from './context.js';
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatDeadline(d: Date): string {
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+/** Contact line for the footer, e.g. "Questions? Contact Org: mail · phone" */
+function contactLine(ctx?: ProjectEmailContext): string | null {
+  if (!ctx) return null;
+  const parts = [ctx.contactEmail, ctx.contactPhone].filter((p): p is string => !!p && p.trim() !== '');
+  if (parts.length === 0) return null;
+  return `Questions? Contact ${ctx.organisationName}: ${parts.join(' · ')}`;
+}
+
+/** Organisation notes (instructions + document deadline) — HTML block, empty string if nothing is set */
+function projectNotesHtml(ctx?: ProjectEmailContext): string {
+  if (!ctx) return '';
+  const lines: string[] = [];
+  if (ctx.deadline) {
+    lines.push(`<p style="margin: 0 0 8px 0;"><strong>Please upload your documents by ${formatDeadline(ctx.deadline)}.</strong></p>`);
+  }
+  if (ctx.instructions && ctx.instructions.trim() !== '') {
+    lines.push(`<p style="margin: 0; white-space: pre-wrap;">${escapeHtml(ctx.instructions.trim())}</p>`);
+  }
+  if (lines.length === 0) return '';
+  return `<div style="background: #f5f3ff; border-left: 4px solid #8b5cf6; padding: 15px; margin: 20px 0; border-radius: 0 8px 8px 0;">
+      <p style="margin: 0 0 8px 0; font-size: 13px; color: #6b21a8; font-weight: 600;">Notes from ${escapeHtml(ctx.organisationName)}</p>
+      ${lines.join('\n      ')}
+    </div>`;
+}
+
+/** Organisation notes — plain-text block, empty string if nothing is set */
+function projectNotesText(ctx?: ProjectEmailContext): string {
+  if (!ctx) return '';
+  const lines: string[] = [];
+  if (ctx.deadline) lines.push(`Please upload your documents by ${formatDeadline(ctx.deadline)}.`);
+  if (ctx.instructions && ctx.instructions.trim() !== '') lines.push(ctx.instructions.trim());
+  if (lines.length === 0) return '';
+  return `\nNotes from ${ctx.organisationName}:\n${lines.join('\n')}\n`;
+}
+
+/** Plain-text footer matching the HTML layout's footer */
+function textFooter(ctx?: ProjectEmailContext): string {
+  const contact = contactLine(ctx);
+  const reply = ctx?.replyTo
+    ? `You can reply to this email to reach ${ctx.organisationName}.`
+    : 'Please do not reply directly to this email.';
+  return `${contact ? contact + '\n' : ''}This email was sent automatically by EasyReimburse${ctx ? ` on behalf of ${ctx.organisationName}` : ''}. ${reply}`;
+}
+
+function wrapInLayout(content: string, ctx?: ProjectEmailContext): string {
+  const contact = contactLine(ctx);
+  const reply = ctx?.replyTo
+    ? `You can reply to this email to reach ${escapeHtml(ctx.organisationName)}.`
+    : 'Please do not reply directly to this email.';
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -16,8 +74,9 @@ function wrapInLayout(content: string): string {
   <div style="background: white; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 16px 16px;">
     ${content}
     <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+    ${contact ? `<p style="color: #6b7280; font-size: 13px; text-align: center; margin: 0 0 8px 0;">${escapeHtml(contact)}</p>` : ''}
     <p style="color: #9ca3af; font-size: 12px; text-align: center;">
-      This email was sent automatically by EasyReimburse. Please do not reply directly to this email.
+      This email was sent automatically by EasyReimburse${ctx ? ` on behalf of ${escapeHtml(ctx.organisationName)}` : ''}. ${reply}
     </p>
   </div>
 </body>
@@ -64,7 +123,7 @@ export function magicLinkSubject(projectName: string): string {
   return `Your Reimbursement Link for ${projectName}`;
 }
 
-export function magicLinkText(participantName: string, projectName: string, magicLink: string): string {
+export function magicLinkText(participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): string {
   return `Hello ${participantName},
 
 You have been invited to submit your travel reimbursement for the Erasmus+ project "${projectName}".
@@ -75,7 +134,7 @@ ${magicLink}
 
 IMPORTANT: Keep this link safe! This is your personal link - do not share it with anyone else.
 You can use this link multiple times to return to your reimbursement page.
-
+${projectNotesText(ctx)}
 What you'll need:
 - Your travel documents (tickets, invoices, boarding passes)
 - Your bank account details (IBAN)
@@ -86,15 +145,16 @@ Best regards,
 The ${projectName} Team
 
 ---
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+${textFooter(ctx)}`;
 }
 
-export function magicLinkHtml(participantName: string, projectName: string, magicLink: string): string {
+export function magicLinkHtml(participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): string {
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
     <p>You have been invited to submit your travel reimbursement for the Erasmus+ project "${projectName}".</p>
     ${button(magicLink, 'Access Your Reimbursement Page')}
     ${warningBox('Keep this link safe! This is your personal link - do not share it with anyone else.')}
+    ${projectNotesHtml(ctx)}
     <h3 style="color: #6b21a8; margin-top: 25px;">What you'll need:</h3>
     <ul style="padding-left: 20px;">
       <li>Your travel documents (tickets, invoices, boarding passes)</li>
@@ -103,7 +163,7 @@ export function magicLinkHtml(participantName: string, projectName: string, magi
     <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
       If you have any questions, please contact the project organizers.
     </p>
-  `);
+  `, ctx);
 }
 
 // =============================================================================
@@ -287,7 +347,8 @@ export function reminderText(
   participantName: string,
   projectName: string,
   magicLink: string,
-  organisationName: string
+  organisationName: string,
+  ctx?: ProjectEmailContext
 ): string {
   return `Hello ${participantName},
 
@@ -296,7 +357,7 @@ This is a friendly reminder from ${organisationName} that your travel reimbursem
 Please use the following link to access your reimbursement page and complete your submission:
 
 ${magicLink}
-
+${projectNotesText(ctx)}
 What you'll need:
 - Your travel documents (tickets, invoices, boarding passes)
 - Your bank account details (IBAN)
@@ -307,19 +368,21 @@ Best regards,
 The ${projectName} Team
 
 ---
-This email was sent automatically by EasyReimburse on behalf of ${organisationName}. Please do not reply directly to this email.`;
+${textFooter(ctx ?? { organisationName })}`;
 }
 
 export function reminderHtml(
   participantName: string,
   projectName: string,
   magicLink: string,
-  organisationName: string
+  organisationName: string,
+  ctx?: ProjectEmailContext
 ): string {
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
     <p>This is a friendly reminder from <strong>${organisationName}</strong> that your travel reimbursement for "${projectName}" hasn't been submitted yet.</p>
     ${button(magicLink, 'Complete Your Reimbursement')}
+    ${projectNotesHtml(ctx)}
     <h3 style="color: #6b21a8; margin-top: 25px;">What you'll need:</h3>
     <ul style="padding-left: 20px;">
       <li>Your travel documents (tickets, invoices, boarding passes)</li>
@@ -328,7 +391,7 @@ export function reminderHtml(
     <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
       If you have already submitted or have any questions, please contact the project organizers.
     </p>
-  `);
+  `, ctx ?? { organisationName });
 }
 
 // =============================================================================
@@ -501,7 +564,7 @@ export function projectEndedSubject(projectName: string): string {
   return `Time to build your trips – ${projectName}`;
 }
 
-export function projectEndedText(participantName: string, projectName: string, magicLink: string): string {
+export function projectEndedText(participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): string {
   return `Hello ${participantName},
 
 The Erasmus+ project "${projectName}" has ended — you can now claim your travel costs!
@@ -517,17 +580,17 @@ What happens next:
 - Add your bank details and submit
 
 If you still have tickets or receipts you haven't uploaded, you can add them on the same page before starting.
-
+${projectNotesText(ctx)}
 If you have any questions, please contact the project team.
 
 Best regards,
 The EasyReimburse Team
 
 --
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+${textFooter(ctx)}`;
 }
 
-export function projectEndedHtml(participantName: string, projectName: string, magicLink: string): string {
+export function projectEndedHtml(participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): string {
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
     ${successBox('The project <strong>"' + projectName + '"</strong> has ended — you can now claim your travel costs! All the documents you uploaded are safely stored.')}
@@ -541,6 +604,7 @@ export function projectEndedHtml(participantName: string, projectName: string, m
       <li>Add your bank details and submit</li>
     </ul>
     <p>Still have tickets or receipts you haven't uploaded? You can add them on the same page before starting.</p>
+    ${projectNotesHtml(ctx)}
     <p>If you have any questions, please contact your project team.</p>
-  `);
+  `, ctx);
 }

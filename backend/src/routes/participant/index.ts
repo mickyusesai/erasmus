@@ -160,6 +160,10 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
           disseminationEnabled: true,
           carRatePerKm: true,
           aiAnalysisUnlocked: true,
+          participantInstructions: true,
+          documentDeadline: true,
+          contactEmail: true,
+          contactPhone: true,
           organisation: {
             select: {
               id: true,

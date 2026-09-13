@@ -31,7 +31,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult } from '../../services/api';
+import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult , CreateOrgProjectData } from '../../services/api';
 import { clsx } from 'clsx';
 
 // Helper function to format dates as DD-MM-YYYY (European format)
@@ -1493,6 +1493,9 @@ function SettingsTab({
       {/* Feature Settings */}
       <FeatureSettingsCard project={project} projectId={projectId} />
 
+      {/* Communication with participants (emails + participant page) */}
+      <ParticipantCommunicationCard project={project} projectId={projectId} />
+
       {/* Exchange Rate Settings */}
       <ExchangeRateSettingsCard project={project} projectId={projectId} />
 
@@ -1543,6 +1546,94 @@ function SettingsTab({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Instructions, document deadline and contact details that are shown in the
+ * invitation / reminder / project-ended emails and on the participant page.
+ * Each field saves on blur (same pattern as the car travel rate).
+ */
+function ParticipantCommunicationCard({ project, projectId }: { project: any; projectId: string }) {
+  const queryClient = useQueryClient();
+  const [instructions, setInstructions] = useState<string>(project.participantInstructions || '');
+  const [deadline, setDeadline] = useState<string>(project.documentDeadline ? String(project.documentDeadline).slice(0, 10) : '');
+  const [contactEmail, setContactEmail] = useState<string>(project.contactEmail || '');
+  const [contactPhone, setContactPhone] = useState<string>(project.contactPhone || '');
+
+  const saveMutation = useMutation({
+    mutationFn: (data: Partial<CreateOrgProjectData>) => organisationApi.updateProject(projectId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      toast.success('Participant communication updated');
+    },
+    onError: () => toast.error('Failed to save'),
+  });
+
+  const saveIfChanged = (field: 'participantInstructions' | 'documentDeadline' | 'contactEmail' | 'contactPhone', value: string) => {
+    const current = field === 'documentDeadline'
+      ? (project.documentDeadline ? String(project.documentDeadline).slice(0, 10) : '')
+      : (project[field] || '');
+    if (value.trim() === current) return;
+    saveMutation.mutate({ [field]: value.trim() === '' ? null : value.trim() });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <h3 className="font-semibold text-gray-900">Communication with participants</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Shown in the invitation, reminder and project-ended emails and on the participant page. Emails are sent as
+            "{'{'}your organisation{'}'} via EasyReimburse" and replies go to your organisation email.
+          </p>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Instructions for participants</label>
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              onBlur={() => saveIfChanged('participantInstructions', instructions)}
+              rows={4}
+              placeholder="e.g. Please upload your boarding passes as separate files. Only travel between your home and the venue is reimbursed."
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all text-sm"
+              disabled={saveMutation.isPending}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Input
+              label="Document deadline"
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              onBlur={() => saveIfChanged('documentDeadline', deadline)}
+              disabled={saveMutation.isPending}
+            />
+            <Input
+              label="Contact email"
+              type="email"
+              value={contactEmail}
+              onChange={(e) => setContactEmail(e.target.value)}
+              onBlur={() => saveIfChanged('contactEmail', contactEmail)}
+              placeholder="questions@your-org.eu"
+              disabled={saveMutation.isPending}
+            />
+            <Input
+              label="Contact phone"
+              type="tel"
+              value={contactPhone}
+              onChange={(e) => setContactPhone(e.target.value)}
+              onBlur={() => saveIfChanged('contactPhone', contactPhone)}
+              placeholder="+31 6 1234 5678"
+              disabled={saveMutation.isPending}
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

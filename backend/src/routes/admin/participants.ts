@@ -7,6 +7,7 @@ import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { NotFoundError, ValidationError } from '../../middleware/errorHandler.js';
 import { getEmailService } from '../../services/email/index.js';
+import { projectEmailContext } from '../../services/email/context.js';
 import { getAiService } from '../../services/ai/index.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { ParticipantStatus, DocumentType, TransportMode } from '@prisma/client';
@@ -492,7 +493,8 @@ router.post('/:id/send-magic-link', async (req: Request, res: Response) => {
     participant.email,
     participant.firstName,
     participant.project.name,
-    magicLink
+    magicLink,
+    await projectEmailContext(participant.project)
   );
 
   // Update last sent timestamp
@@ -532,7 +534,8 @@ router.post('/send-magic-links-bulk', async (req: Request, res: Response) => {
         participant.email,
         participant.firstName,
         participant.project.name,
-        magicLink
+        magicLink,
+        await projectEmailContext(participant.project)
       );
 
       await prisma.participant.update({

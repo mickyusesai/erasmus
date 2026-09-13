@@ -4,11 +4,19 @@
  * (console logging, Postmark, SMTP, SendGrid, AWS SES, etc.)
  */
 
+import type { ProjectEmailContext } from './context.js';
+
+export type { ProjectEmailContext };
+
 export interface EmailOptions {
   to: string;
   subject: string;
   text: string;
   html?: string;
+  /** Display name shown as the sender (the address stays the verified EMAIL_FROM) */
+  fromName?: string;
+  /** Where replies should go (e.g. the organisation's email) */
+  replyTo?: string;
 }
 
 export interface EmailResult {
@@ -30,7 +38,8 @@ export interface EmailService {
     to: string,
     participantName: string,
     projectName: string,
-    magicLink: string
+    magicLink: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -68,7 +77,8 @@ export interface EmailService {
     participantName: string,
     projectName: string,
     magicLink: string,
-    organisationName: string
+    organisationName: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -120,7 +130,8 @@ export interface EmailService {
     to: string,
     participantName: string,
     projectName: string,
-    magicLink: string
+    magicLink: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**

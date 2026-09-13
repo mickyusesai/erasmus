@@ -1199,6 +1199,10 @@ export interface OrgProject {
   exchangeRateMode?: ExchangeRateMode;
   exchangeRateManualDate?: string | null;
   aiAnalysisUnlocked?: boolean;
+  participantInstructions?: string | null;
+  documentDeadline?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
   participantCount: number;
   creditSource?: string;
   isTestProject: boolean;
@@ -1289,6 +1293,10 @@ export interface CreateOrgProjectData {
   exchangeRateMode?: ExchangeRateMode;
   exchangeRateManualDate?: string | null;
   aiAnalysisUnlocked?: boolean;
+  participantInstructions?: string | null;
+  documentDeadline?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
 }
 
 export interface ProjectRecalcResult {
@@ -1738,6 +1746,10 @@ export interface ParticipantAuthResponse {
     disseminationEnabled?: boolean;
     carRatePerKm?: number;
     aiAnalysisUnlocked?: boolean;
+    participantInstructions?: string | null;
+    documentDeadline?: string | null;
+    contactEmail?: string | null;
+    contactPhone?: string | null;
     organisation?: {
       id: string;
       name: string;

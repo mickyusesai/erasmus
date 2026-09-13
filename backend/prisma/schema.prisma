@@ -139,6 +139,12 @@ model Project {
   // When the automatic "project ended — build your trips" email batch was sent (null = not yet)
   endEmailSentAt           DateTime?
 
+  // Communication with participants (shown in invitation/reminder/project-ended emails and on their page)
+  participantInstructions  String?                 // Free-text instructions from the organisation
+  documentDeadline         DateTime?               // By when participants should have uploaded their documents
+  contactEmail             String?                 // Where participants can ask questions
+  contactPhone             String?
+
   // Test project - automatically created for new organisations (max 10 participants)
   isTestProject            Boolean                 @default(false)
   maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects

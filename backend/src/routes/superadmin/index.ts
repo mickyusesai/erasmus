@@ -6,6 +6,7 @@ import { asyncHandler } from '../../middleware/errorHandler.js';
 import { ValidationError, NotFoundError } from '../../middleware/errorHandler.js';
 import { superAdminAuth } from '../../middleware/auth.js';
 import { getEmailService } from '../../services/email/index.js';
+import { projectEmailContext } from '../../services/email/context.js';
 
 const router = Router();
 
@@ -409,7 +410,8 @@ router.post('/participants/:participantId/regenerate-token', asyncHandler(async 
         participant.email,
         participant.firstName,
         participant.project.name,
-        magicLink
+        magicLink,
+        await projectEmailContext(participant.project)
       );
     } catch (err) {
       console.error('[SuperAdmin] Failed to send magic link email:', err);

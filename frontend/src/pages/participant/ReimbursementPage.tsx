@@ -872,6 +872,38 @@ function Step1Upload({
           </span>
         </div>
 
+        {/* Notes from the organisation (instructions, deadline, contact) */}
+        {(data.project.participantInstructions || data.project.documentDeadline || data.project.contactEmail || data.project.contactPhone) && (
+          <div className="bg-primary-50 border border-primary-100 rounded-2xl px-4 py-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Info className="w-4 h-4 text-primary-600 flex-shrink-0" />
+              <p className="text-sm font-semibold text-primary-800">
+                Notes from {data.project.organisation?.name || 'the organisation'}
+              </p>
+            </div>
+            {data.project.documentDeadline && (
+              <p className="text-sm text-primary-900 font-medium">
+                Please upload your documents by {formatDate(data.project.documentDeadline)}.
+              </p>
+            )}
+            {data.project.participantInstructions && (
+              <p className="text-sm text-primary-900/80 whitespace-pre-wrap mt-1">{data.project.participantInstructions}</p>
+            )}
+            {(data.project.contactEmail || data.project.contactPhone) && (
+              <p className="text-xs text-primary-700 mt-2">
+                Questions?{' '}
+                {data.project.contactEmail && (
+                  <a href={`mailto:${data.project.contactEmail}`} className="underline">{data.project.contactEmail}</a>
+                )}
+                {data.project.contactEmail && data.project.contactPhone && ' · '}
+                {data.project.contactPhone && (
+                  <a href={`tel:${data.project.contactPhone}`} className="underline">{data.project.contactPhone}</a>
+                )}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Gradient hero */}
         <div className="rounded-3xl p-6 sm:p-7 text-white bg-gradient-to-br from-primary-600 via-primary-600 to-fuchsia-500 shadow-lg">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 text-sm font-medium backdrop-blur">

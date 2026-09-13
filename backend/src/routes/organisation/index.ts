@@ -7,6 +7,7 @@ import { organisationAuth, ensureOwnProject } from '../../middleware/auth.js';
 import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { getEmailService } from '../../services/email/index.js';
+import { projectEmailContext } from '../../services/email/context.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { generateAuditPdf } from '../../services/pdf/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
@@ -314,6 +315,10 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       exchangeRateMode: project.exchangeRateMode,
       exchangeRateManualDate: project.exchangeRateManualDate,
       aiAnalysisUnlocked: project.aiAnalysisUnlocked,
+      participantInstructions: project.participantInstructions,
+      documentDeadline: project.documentDeadline,
+      contactEmail: project.contactEmail,
+      contactPhone: project.contactPhone,
       creditSource: project.creditSource,
       countryLimits: project.countryLimits,
       participants: project.participants,
@@ -336,6 +341,11 @@ const updateProjectSchema = z.object({
   exchangeRateMode: exchangeRateModeEnum.optional(),
   exchangeRateManualDate: z.string().transform((s) => new Date(s)).nullish(),
   aiAnalysisUnlocked: z.boolean().optional(),
+  // Communication with participants
+  participantInstructions: z.string().nullish(),
+  documentDeadline: z.string().transform((s) => new Date(s)).nullish(),
+  contactEmail: z.string().nullish(),
+  contactPhone: z.string().nullish(),
 });
 
 /**
@@ -409,6 +419,10 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
       exchangeRateMode: project.exchangeRateMode,
       exchangeRateManualDate: project.exchangeRateManualDate,
       aiAnalysisUnlocked: project.aiAnalysisUnlocked,
+      participantInstructions: project.participantInstructions,
+      documentDeadline: project.documentDeadline,
+      contactEmail: project.contactEmail,
+      contactPhone: project.contactPhone,
       creditSource: project.creditSource,
       participantCount: project._count.participants,
       createdAt: project.createdAt,
@@ -444,10 +458,11 @@ router.post('/projects/:id/notify-ended', ensureOwnProject, asyncHandler(async (
 
   const emailService = getEmailService();
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const emailCtx = await projectEmailContext(project);
   for (const p of project.participants) {
     const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
     emailService
-      .sendProjectEnded(p.email, p.firstName, project.name, magicLink)
+      .sendProjectEnded(p.email, p.firstName, project.name, magicLink, emailCtx)
       .catch((err) => console.error(`[Project End] Failed to email ${p.email}:`, err));
   }
 
@@ -1556,7 +1571,8 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
     participant.email,
     participant.firstName,
     participant.project.name,
-    magicLink
+    magicLink,
+    await projectEmailContext(participant.project)
   );
 
   // Update last sent timestamp and refresh token expiry (180 days from project end, or 180 days from now if past end)
@@ -1646,7 +1662,8 @@ router.post('/participants/:id/reset', asyncHandler(async (req: Request, res: Re
     participant.email,
     participant.firstName,
     participant.project.name,
-    magicLink
+    magicLink,
+    await projectEmailContext(participant.project)
   );
   await prisma.participant.update({
     where: { id: participantId },
@@ -1690,7 +1707,8 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
         participant.email,
         participant.firstName,
         participant.project.name,
-        magicLink
+        magicLink,
+        await projectEmailContext(participant.project)
       );
 
       const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
@@ -1743,7 +1761,8 @@ router.post('/participants/:id/send-reminder', asyncHandler(async (req: Request,
     participant.firstName,
     participant.project.name,
     magicLink,
-    participant.project.organisation.name
+    participant.project.organisation.name,
+    await projectEmailContext(participant.project)
   );
 
   res.json({ success: true });
@@ -1783,7 +1802,8 @@ router.post('/participants/send-reminders-bulk', asyncHandler(async (req: Reques
         participant.firstName,
         participant.project.name,
         magicLink,
-        participant.project.organisation.name
+        participant.project.organisation.name,
+        await projectEmailContext(participant.project)
       );
 
       results.push({ id, success: true });

@@ -138,6 +138,7 @@ async function notifyEndedProjects() {
     if (projects.length === 0) return;
 
     const { getEmailService } = await import('./services/email/index.js');
+    const { projectEmailContext } = await import('./services/email/context.js');
     const emailService = getEmailService();
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
@@ -146,10 +147,11 @@ async function notifyEndedProjects() {
         where: { id: project.id },
         data: { endEmailSentAt: now },
       });
+      const emailCtx = await projectEmailContext(project);
       for (const p of project.participants) {
         const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
         emailService
-          .sendProjectEnded(p.email, p.firstName, project.name, magicLink)
+          .sendProjectEnded(p.email, p.firstName, project.name, magicLink, emailCtx)
           .catch((err) => console.error(`[Project End] Failed to email ${p.email}:`, err));
       }
       console.log(`[Project End] Notified ${project.participants.length} participant(s) of "${project.name}"`);
