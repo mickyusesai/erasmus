@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Info,
 } from 'lucide-react';
+import { CountryLimitRow } from '../../components/organisation/CountryLimitRow';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -316,6 +317,10 @@ export default function OrgProjectDetail() {
               project={project}
               projectId={id!}
               countryLimits={countryLimits || []}
+              participantCountByCountry={participants.reduce<Record<string, number>>((acc, p) => {
+                acc[p.country] = (acc[p.country] || 0) + 1;
+                return acc;
+              }, {})}
               hasParticipants={participants.length > 0}
               approvedCount={participants.filter(p => p.status === 'ADMIN_APPROVED' || p.status === 'PAID').length}
               onDelete={() => {
@@ -416,6 +421,16 @@ function OverviewTab({
     paid: participants.filter((p) => p.status === 'PAID').length,
     totalAmount: participants.reduce(
       (sum, p) => sum + (p.reimbursementSummary?.amountToReimburse || 0),
+      0
+    ),
+    // What participants claim before country/individual limits are applied
+    requestedTotal: participants.reduce(
+      (sum, p) => sum + (p.reimbursementSummary?.totalEur || 0),
+      0
+    ),
+    // Budget ceiling if every participant received their maximum
+    maximumTotal: participants.reduce(
+      (sum, p) => sum + (p.reimbursementSummary?.maxReimbursementAllowed || 0),
       0
     ),
   };
@@ -643,6 +658,20 @@ function OverviewTab({
                   currency: 'EUR',
                 }).format(stats.totalAmount)}
               </p>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-500">
+                <span title="Sum of all travel costs claimed, before any limits">
+                  Requested (before limits):{' '}
+                  <span className="font-medium text-gray-700">
+                    {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(stats.requestedTotal)}
+                  </span>
+                </span>
+                <span title="If every participant received their maximum">
+                  Maximum possible:{' '}
+                  <span className="font-medium text-gray-700">
+                    {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(stats.maximumTotal)}
+                  </span>
+                </span>
+              </div>
             </div>
             <div className="text-right">
               <div className="h-2 w-32 bg-gray-200 rounded-full overflow-hidden">
@@ -1268,6 +1297,7 @@ function SettingsTab({
   project,
   projectId,
   countryLimits,
+  participantCountByCountry,
   hasParticipants,
   approvedCount,
   onDelete,
@@ -1276,6 +1306,7 @@ function SettingsTab({
   project: any;
   projectId: string;
   countryLimits: any[];
+  participantCountByCountry: Record<string, number>;
   hasParticipants: boolean;
   approvedCount: number;
   onDelete: () => void;
@@ -1325,10 +1356,23 @@ function SettingsTab({
     mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
       organisationApi.setCountryLimit(projectId, { country, maxReimbursementAmount: amount, greenTravel }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['org-country-limits'] });
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits', projectId] });
+      // Payable amounts are recalculated server-side, so refresh the totals too
+      queryClient.invalidateQueries({ queryKey: ['org-participants', projectId] });
     },
     onError: () => {
       toast.error('Failed to update country limit');
+    },
+  });
+
+  const deleteLimitMutation = useMutation({
+    mutationFn: (country: string) => organisationApi.deleteCountryLimit(projectId, country),
+    onSuccess: () => {
+      toast.success('Country removed');
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits', projectId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to remove country');
     },
   });
 
@@ -1421,93 +1465,26 @@ function SettingsTab({
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {countryLimits.map((limit) => {
-                const needsAmount = limit.maxReimbursementAmount === 0;
-                return (
-                  <div
-                    key={limit.id}
-                    className={clsx(
-                      'flex items-center justify-between p-3 rounded-xl',
-                      needsAmount ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50'
-                    )}
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-gray-900">{limit.country}</span>
-                        {limit.greenTravel && (
-                          <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
-                            Green travel
-                          </span>
-                        )}
-                        {needsAmount && (
-                          <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                            Set amount
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <label className="flex items-center gap-1.5 text-xs text-gray-500">
-                        <input
-                          type="checkbox"
-                          checked={limit.greenTravel || false}
-                          onChange={() => toggleGreenTravel(limit)}
-                          className="rounded border-gray-300 w-3.5 h-3.5"
-                        />
-                        Green
-                      </label>
-                      {needsAmount ? (
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type="number"
-                            placeholder="Amount"
-                            className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                            onBlur={(e) => {
-                              const amount = parseFloat(e.target.value);
-                              if (amount > 0) {
-                                updateLimitMutation.mutate({
-                                  country: limit.country,
-                                  amount,
-                                  greenTravel: limit.greenTravel || false,
-                                });
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const amount = parseFloat((e.target as HTMLInputElement).value);
-                                if (amount > 0) {
-                                  updateLimitMutation.mutate({
-                                    country: limit.country,
-                                    amount,
-                                    greenTravel: limit.greenTravel || false,
-                                  });
-                                }
-                              }
-                            }}
-                          />
-                          <span className="text-xs text-gray-400">EUR</span>
-                        </div>
-                      ) : (
-                        <Input
-                          type="number"
-                          value={limit.maxReimbursementAmount}
-                          className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          onChange={(e) => {
-                            const amount = parseFloat(e.target.value);
-                            if (amount >= 0) {
-                              updateLimitMutation.mutate({
-                                country: limit.country,
-                                amount,
-                                greenTravel: limit.greenTravel || false,
-                              });
-                            }
-                          }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {countryLimits.map((limit) => (
+                <CountryLimitRow
+                  key={limit.id}
+                  limit={limit}
+                  participantCount={participantCountByCountry[limit.country] || 0}
+                  onSaveAmount={(amount) =>
+                    updateLimitMutation.mutate({
+                      country: limit.country,
+                      amount,
+                      greenTravel: limit.greenTravel || false,
+                    })
+                  }
+                  onToggleGreen={() => toggleGreenTravel(limit)}
+                  onDelete={() => {
+                    if (confirm(`Remove ${limit.country} from this project's country limits?`)) {
+                      deleteLimitMutation.mutate(limit.country);
+                    }
+                  }}
+                />
+              ))}
             </div>
           </CardContent>
         </Card>

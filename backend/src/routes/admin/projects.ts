@@ -348,6 +348,19 @@ router.post('/:id/country-limits', async (req: Request, res: Response) => {
     update: data,
   });
 
+  // Recompute affected participants' max + payable amount via the canonical calculator
+  const participants = await prisma.participant.findMany({
+    where: { projectId, country: data.country },
+    select: { id: true },
+  });
+  if (participants.length > 0) {
+    const { getAiService } = await import('../../services/ai/index.js');
+    const aiService = getAiService();
+    for (const p of participants) {
+      await aiService.recalculateParticipantSummary(p.id);
+    }
+  }
+
   res.json(limit);
 });
 
@@ -356,14 +369,22 @@ router.post('/:id/country-limits', async (req: Request, res: Response) => {
  * Delete a country limit
  */
 router.delete('/:id/country-limits/:country', async (req: Request, res: Response) => {
-  await prisma.projectCountryLimit.delete({
-    where: {
-      projectId_country: {
-        projectId: req.params.id,
-        country: req.params.country,
-      },
-    },
+  const projectId = req.params.id;
+  const country = req.params.country;
+
+  const inUse = await prisma.participant.count({ where: { projectId, country } });
+  if (inUse > 0) {
+    throw new ValidationError(
+      `${inUse} participant(s) still use "${country}" — change their country first, then remove it`
+    );
+  }
+
+  const existing = await prisma.projectCountryLimit.findUnique({
+    where: { projectId_country: { projectId, country } },
   });
+  if (!existing) throw new NotFoundError('Country limit not found');
+
+  await prisma.projectCountryLimit.delete({ where: { id: existing.id } });
 
   res.json({ success: true });
 });

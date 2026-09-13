@@ -2409,16 +2409,19 @@ router.post('/projects/:id/country-limits', ensureOwnProject, asyncHandler(async
     },
   });
 
-  // Update reimbursement summaries for participants from this country
+  // The cap changed: recompute each affected participant's max AND payable
+  // amount through the canonical calculator (participants with an individual
+  // override are unaffected by design).
   const participants = await prisma.participant.findMany({
     where: { projectId, country },
+    select: { id: true },
   });
-
-  for (const p of participants) {
-    await prisma.reimbursementSummary.updateMany({
-      where: { participantId: p.id },
-      data: { maxReimbursementAllowed: maxReimbursementAmount },
-    });
+  if (participants.length > 0) {
+    const { getAiService } = await import('../../services/ai/index.js');
+    const aiService = getAiService();
+    for (const p of participants) {
+      await aiService.recalculateParticipantSummary(p.id);
+    }
   }
 
   res.json(limit);
@@ -2431,11 +2434,20 @@ router.post('/projects/:id/country-limits', ensureOwnProject, asyncHandler(async
 router.delete('/projects/:id/country-limits/:country', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
   const { id: projectId, country } = req.params;
 
-  await prisma.projectCountryLimit.delete({
-    where: {
-      projectId_country: { projectId, country },
-    },
+  // Never orphan participants: their cap/green-travel status comes from this row
+  const inUse = await prisma.participant.count({ where: { projectId, country } });
+  if (inUse > 0) {
+    throw new ValidationError(
+      `${inUse} participant(s) still use "${country}" — change their country first, then remove it`
+    );
+  }
+
+  const existing = await prisma.projectCountryLimit.findUnique({
+    where: { projectId_country: { projectId, country } },
   });
+  if (!existing) throw new NotFoundError('Country limit not found');
+
+  await prisma.projectCountryLimit.delete({ where: { id: existing.id } });
 
   res.json({ success: true });
 }));

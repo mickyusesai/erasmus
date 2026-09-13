@@ -139,7 +139,7 @@ export const adminApi = {
   },
 
   deleteCountryLimit: async (projectId: string, country: string) => {
-    const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits/${country}`, {
+    const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits/${encodeURIComponent(country)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
@@ -1092,7 +1092,7 @@ export const organisationApi = {
   },
 
   deleteCountryLimit: async (projectId: string, country: string) => {
-    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits/${country}`, {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits/${encodeURIComponent(country)}`, {
       method: 'DELETE',
       headers: getOrgAuthHeaders(),
     });
