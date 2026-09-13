@@ -1295,6 +1295,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       priceMissing: item.priceMissing,
       routeMatchesCountry: item.routeMatchesCountry,
       excludedFromReimbursement: item.excludedFromReimbursement,
+      exclusionReason: item.exclusionReason,
       numberOfPassengers: item.numberOfPassengers,
       participantPortion: item.participantPortion,
       distanceKm: item.distanceKm,
@@ -1974,6 +1975,7 @@ const orgUpdateTravelItemSchema = z.object({
   amountEur: z.number().optional(),
   comment: z.string().nullable().optional(),
   excludedFromReimbursement: z.boolean().optional(),
+  exclusionReason: z.enum(['HOSTING_ORG_PAID', 'OTHER']).nullable().optional(),
   exchangeRateOverride: z.number().nullable().optional(),
   companyName: z.string().nullable().optional(),
 });

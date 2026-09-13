@@ -598,6 +598,7 @@ export async function generateParticipantReview(data: {
     priceMissing: boolean;
     routeMatchesCountry: boolean | null;
     excludedFromReimbursement: boolean;
+    exclusionReason: string | null;
     numberOfPassengers: number | null;
     participantPortion: number | null;
     distanceKm: number | null;
@@ -685,7 +686,13 @@ ${data.travelItems.map((item, i) => {
     if (item.modeOfTransport === 'PLANE' && !item.flightNumber) flags.push('FLIGHT NUMBER NOT FILLED IN');
     if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`MULTI-PERSON BOOKING: ${item.numberOfPassengers} passengers on this booking (full amount claimed by this participant)`);
     if (item.routeMatchesCountry === false) flags.push('ROUTE MAY NOT MATCH expected home↔project travel pattern');
-    if (item.excludedFromReimbursement) flags.push('Participant excluded this from reimbursement');
+    if (item.excludedFromReimbursement) {
+      flags.push(
+        item.exclusionReason === 'HOSTING_ORG_PAID'
+          ? 'Participant excluded this from reimbursement: the hosting organisation paid for it'
+          : 'Participant excluded this from reimbursement'
+      );
+    }
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
     if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
     if (item.purchaseDateAutoFilled) flags.push('Purchase date was AUTO-FILLED from flight date (no purchase date found in documents)');

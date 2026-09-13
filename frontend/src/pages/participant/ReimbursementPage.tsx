@@ -2513,7 +2513,8 @@ function TravelItemCard({
           <div className="flex flex-wrap gap-1.5 mt-3">
             {item.excludedFromReimbursement && (
               <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[11px] font-medium rounded-full flex items-center gap-1">
-                <EyeOff className="w-3 h-3" /> Excluded
+                <EyeOff className="w-3 h-3" />
+                {item.exclusionReason === 'HOSTING_ORG_PAID' ? 'Hosting org paid' : 'Excluded'}
               </span>
             )}
             {item.isRoundTrip && (
@@ -3027,7 +3028,13 @@ function TravelItemCard({
       <div className="mt-4 pt-4 border-t border-gray-200">
         <button
           type="button"
-          onClick={() => onUpdate({ excludedFromReimbursement: !item.excludedFromReimbursement })}
+          onClick={() =>
+            onUpdate(
+              item.excludedFromReimbursement
+                ? { excludedFromReimbursement: false, exclusionReason: null }
+                : { excludedFromReimbursement: true }
+            )
+          }
           className={clsx(
             'flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg transition-colors',
             item.excludedFromReimbursement
@@ -3047,6 +3054,33 @@ function TravelItemCard({
             </>
           )}
         </button>
+
+        {/* Why is it excluded? Helps the organisation understand the claim */}
+        {item.excludedFromReimbursement && (
+          <div className="mt-3 ml-1 space-y-2 p-3 bg-gray-50 rounded-xl">
+            <p className="text-xs font-medium text-gray-500">Why is this trip not claimed?</p>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name={`exclusion-reason-${item.id}`}
+                checked={item.exclusionReason === 'HOSTING_ORG_PAID'}
+                onChange={() => onUpdate({ exclusionReason: 'HOSTING_ORG_PAID' })}
+                className="text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">The hosting organisation paid this trip</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name={`exclusion-reason-${item.id}`}
+                checked={item.exclusionReason === 'OTHER' || !item.exclusionReason}
+                onChange={() => onUpdate({ exclusionReason: 'OTHER' })}
+                className="text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">Other reason (e.g. personal trip)</span>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Sheet actions: delete or done */}

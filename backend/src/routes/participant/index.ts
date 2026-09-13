@@ -77,6 +77,7 @@ const updateTravelItemSchema = z.object({
   companyName: z.string().nullable().optional(),
   // Exclude from reimbursement
   excludedFromReimbursement: z.boolean().optional(),
+  exclusionReason: z.enum(['HOSTING_ORG_PAID', 'OTHER']).nullable().optional(),
 });
 
 const declarationOnHonorSchema = z.object({
@@ -1515,6 +1516,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
           priceMissing: item.priceMissing,
           routeMatchesCountry: item.routeMatchesCountry,
           excludedFromReimbursement: item.excludedFromReimbursement,
+          exclusionReason: item.exclusionReason,
           numberOfPassengers: item.numberOfPassengers,
           participantPortion: item.participantPortion,
           distanceKm: item.distanceKm,

@@ -421,6 +421,7 @@ model TravelItem {
 
   // Exclusion from reimbursement
   excludedFromReimbursement Boolean           @default(false)  // User marked this item to be excluded from reimbursement (e.g., personal trip)
+  exclusionReason           String?                            // Why it was excluded: HOSTING_ORG_PAID | OTHER (null = unspecified)
 
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt

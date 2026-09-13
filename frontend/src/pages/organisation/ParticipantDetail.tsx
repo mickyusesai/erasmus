@@ -1440,7 +1440,9 @@ function TravelItemCard({
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Route mismatch</span>
             )}
             {item.excludedFromReimbursement && (
-              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">Excluded</span>
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">
+                {item.exclusionReason === 'HOSTING_ORG_PAID' ? 'Excluded · hosting org paid' : 'Excluded'}
+              </span>
             )}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">

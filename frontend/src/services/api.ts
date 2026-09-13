@@ -1585,6 +1585,7 @@ export interface TravelItem {
   checked?: boolean;
   // Exclusion from reimbursement
   excludedFromReimbursement?: boolean;
+  exclusionReason?: 'HOSTING_ORG_PAID' | 'OTHER' | null;
   // Currency and company info
   originalCurrencyFromAi?: string | null;
   exchangeRateOverride?: number | null;
