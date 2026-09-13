@@ -1,4 +1,4 @@
-import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useRef, forwardRef, useImperativeHandle } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
 import { Eraser } from 'lucide-react';
 import { Button } from '../ui/Button';
@@ -38,22 +38,15 @@ export const SignaturePad = forwardRef<SignaturePadRef, SignaturePadProps>(
       onSignatureChange?.(null);
     };
 
-    // Handle window resize
-    useEffect(() => {
-      const handleResize = () => {
-        // The canvas needs to be cleared and resized properly
-        // This is a limitation of react-signature-canvas
-      };
-
-      window.addEventListener('resize', handleResize);
-      return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
     return (
       <div className={className}>
         <div className="border-2 border-gray-200 rounded-xl overflow-hidden bg-white">
+          {/* clearOnResize must stay off: mobile browsers fire window resize when
+              the URL bar collapses while scrolling, which would silently wipe the
+              drawn signature mid-form. */}
           <SignatureCanvas
             ref={signatureRef}
+            clearOnResize={false}
             canvasProps={{
               className: 'w-full h-40 cursor-crosshair',
               style: { width: '100%', height: '160px' },

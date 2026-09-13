@@ -1170,7 +1170,7 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
   }
 
   // Generate PDF
-  const { filePath, fileName } = await generateDeclarationPdf(participant.id, {
+  const { filePath, fileName, fileSize } = await generateDeclarationPdf(participant.id, {
     name: data.name,
     modeOfTransport: data.modeOfTransport,
     fromPlace: data.fromPlace,
@@ -1224,7 +1224,7 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
       originalFilename: fileName,
       renamedFilename: fileName,
       mimeType: 'application/pdf',
-      fileSize: 0, // We don't have the exact size here, it's not critical
+      fileSize,
       documentType: DocumentType.OTHER, // Declaration of travel
     },
   });
@@ -1294,13 +1294,40 @@ router.delete('/declarations-of-travel/:id', participantAuth, asyncHandler(async
       console.error('[Declaration] Failed to delete PDF from storage:', error);
     }
 
-    // Also delete the document record
-    await prisma.document.deleteMany({
+    // Delete the document record (travelItem.documentId is cleared via FK SetNull),
+    // and strip the id from any travel item's additionalDocumentIds JSON list,
+    // where the PDF may have been auto-linked on creation.
+    const pdfDocs = await prisma.document.findMany({
       where: {
         participantId: participant.id,
         storedFilePath: declaration.generatedPdfPath,
       },
+      select: { id: true },
     });
+    const pdfDocIds = pdfDocs.map((d) => d.id);
+
+    if (pdfDocIds.length > 0) {
+      const itemsWithExtras = await prisma.travelItem.findMany({
+        where: { participantId: participant.id, additionalDocumentIds: { not: null } },
+        select: { id: true, additionalDocumentIds: true },
+      });
+      for (const item of itemsWithExtras) {
+        try {
+          const ids = JSON.parse(item.additionalDocumentIds!) as string[];
+          const remaining = ids.filter((id) => !pdfDocIds.includes(id));
+          if (remaining.length !== ids.length) {
+            await prisma.travelItem.update({
+              where: { id: item.id },
+              data: { additionalDocumentIds: remaining.length > 0 ? JSON.stringify(remaining) : null },
+            });
+          }
+        } catch {
+          // Malformed JSON — leave as-is
+        }
+      }
+
+      await prisma.document.deleteMany({ where: { id: { in: pdfDocIds } } });
+    }
   }
 
   // Delete the declaration

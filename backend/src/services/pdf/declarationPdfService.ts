@@ -70,7 +70,7 @@ function getTransportModeDisplay(mode: string): string {
 export async function generateDeclarationPdf(
   participantId: string,
   data: DeclarationData
-): Promise<{ filePath: string; fileName: string }> {
+): Promise<{ filePath: string; fileName: string; fileSize: number }> {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -100,7 +100,7 @@ export async function generateDeclarationPdf(
             storagePath
           );
 
-          resolve({ filePath: storagePath, fileName });
+          resolve({ filePath: storagePath, fileName, fileSize: pdfBuffer.length });
         } catch (error) {
           reject(error);
         }
