@@ -367,6 +367,13 @@ Other important notes:
 
     // Check travel items have required data
     for (const item of participant.travelItems) {
+      // Excluded items (e.g. paid by the hosting organisation) are not claimed,
+      // so they must not block submission.
+      if (item.excludedFromReimbursement) continue;
+
+      const route =
+        item.fromLocation && item.toLocation ? ` (${item.fromLocation} → ${item.toLocation})` : '';
+
       if (!item.fromLocation || !item.toLocation) {
         missingItems.push({
           type: 'data',
@@ -378,7 +385,7 @@ Other important notes:
       if (!item.departureDate) {
         missingItems.push({
           type: 'data',
-          description: `Travel item missing departure date`,
+          description: `Travel item missing departure date${route}`,
           travelItemId: item.id,
         });
       }
@@ -386,7 +393,7 @@ Other important notes:
       if (item.amountOriginal === null || item.amountOriginal === undefined) {
         missingItems.push({
           type: 'data',
-          description: `Travel item missing amount`,
+          description: `Travel item missing amount${route}`,
           travelItemId: item.id,
         });
       }

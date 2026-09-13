@@ -273,6 +273,8 @@ export default function ReimbursementPage() {
   const queryClient = useQueryClient();
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
+  // Set when Step 3's "Fix" jump sends the user back to a specific trip in Step 2
+  const [focusItemId, setFocusItemId] = useState<string | null>(null);
   const [hasSetInitialStep, setHasSetInitialStep] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('reimbursement');
   const [aiConsolidationWarnings, setAiConsolidationWarnings] = useState<string[]>([]);
@@ -477,6 +479,8 @@ export default function ReimbursementPage() {
                 onBack={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(1); }}
                 onNext={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(3); }}
                 aiWarnings={aiConsolidationWarnings}
+                focusItemId={focusItemId}
+                onFocusHandled={() => setFocusItemId(null)}
               />
             )}
             {currentStep === 3 && (
@@ -484,6 +488,11 @@ export default function ReimbursementPage() {
                 data={data}
                 token={token}
                 onBack={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(2); }}
+                onFixItem={(travelItemId) => {
+                  setFocusItemId(travelItemId);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  setCurrentStep(2);
+                }}
               />
             )}
           </>
@@ -1038,12 +1047,16 @@ function Step2CheckData({
   onBack,
   onNext,
   aiWarnings = [],
+  focusItemId = null,
+  onFocusHandled,
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onBack: () => void;
   onNext: () => void;
   aiWarnings?: string[];
+  focusItemId?: string | null;
+  onFocusHandled?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [showAddTravelModal, setShowAddTravelModal] = useState(false);
@@ -1058,6 +1071,15 @@ function Step2CheckData({
   const [showReuploadWarning, setShowReuploadWarning] = useState(false);
   // Imperative handle to jump the trips carousel (e.g. to the first unconfirmed trip)
   const carouselApiRef = useRef<{ goTo: (i: number) => void } | null>(null);
+
+  // When Step 3's "Fix" link sends the user here, open the slide with that trip
+  useEffect(() => {
+    if (!focusItemId) return;
+    const groups = groupTravelItemsByBooking(data.travelItems);
+    const idx = groups.findIndex((g) => g.items.some((i) => i.id === focusItemId));
+    if (idx >= 0) carouselApiRef.current?.goTo(idx);
+    onFocusHandled?.();
+  }, [focusItemId, data.travelItems, onFocusHandled]);
 
   // Calculate unlinked documents (uploaded but not connected to any travel item)
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
@@ -3751,10 +3773,12 @@ function Step3Confirm({
   data,
   token,
   onBack,
+  onFixItem,
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onBack: () => void;
+  onFixItem?: (travelItemId: string) => void;
 }) {
   const queryClient = useQueryClient();
   const [bankDetails, setBankDetails] = useState({
@@ -3819,7 +3843,8 @@ function Step3Confirm({
         queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
         toast.success('Reimbursement submitted successfully!');
       } else if ('missingItems' in result) {
-        toast.error('Please complete all required items');
+        const first = result.missingItems[0];
+        toast.error(first ? `Missing: ${first.description}` : 'Please complete all required items');
       }
     },
     onError: () => {
@@ -3886,22 +3911,41 @@ function Step3Confirm({
                 <div>
                   <h4 className="font-semibold text-amber-800">Missing Items</h4>
                   <ul className="mt-2 space-y-1">
-                    {visibleItems.map((item, i) => (
-                      <li key={i} className="text-sm text-amber-700 flex items-center gap-2">
-                        <span>• {item.description}</span>
-                        {item.type === 'document' && item.documentType && (
-                          <button
-                            onClick={() => {
-                              setSelectedMissingDoc(item.documentType!);
-                              setShowDeclarationModal(true);
-                            }}
-                            className="text-xs text-amber-600 hover:text-amber-800 underline"
-                          >
-                            Sign declaration
-                          </button>
-                        )}
-                      </li>
-                    ))}
+                    {visibleItems.map((item, i) => {
+                      // Show the trip's route so the participant knows which item to fix
+                      const linkedItem = item.travelItemId
+                        ? data.travelItems.find((t) => t.id === item.travelItemId)
+                        : undefined;
+                      return (
+                        <li key={i} className="text-sm text-amber-700 flex items-center gap-2 flex-wrap">
+                          <span>
+                            • {item.description}
+                            {linkedItem && !item.description.includes('→') && (
+                              <span className="font-medium"> ({linkedItem.fromLocation} → {linkedItem.toLocation})</span>
+                            )}
+                          </span>
+                          {item.travelItemId && onFixItem && (
+                            <button
+                              onClick={() => onFixItem(item.travelItemId!)}
+                              className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline"
+                            >
+                              Fix this trip
+                            </button>
+                          )}
+                          {item.type === 'document' && item.documentType && (
+                            <button
+                              onClick={() => {
+                                setSelectedMissingDoc(item.documentType!);
+                                setShowDeclarationModal(true);
+                              }}
+                              className="text-xs text-amber-600 hover:text-amber-800 underline"
+                            >
+                              Sign declaration
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               </div>
