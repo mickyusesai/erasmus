@@ -1,2 +1,2 @@
-export { generateDeclarationPdf } from './declarationPdfService.js';
+export { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from './declarationPdfService.js';
 export { generateAuditPdf } from './auditPdfService.js';

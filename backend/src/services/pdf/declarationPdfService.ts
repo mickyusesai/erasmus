@@ -253,3 +253,161 @@ export async function generateDeclarationPdf(
     }
   });
 }
+
+// =============================================================================
+// GREEN TRAVEL DECLARATION (one per participant, signed at submission)
+// =============================================================================
+
+export interface GreenTravelTrip {
+  modeOfTransport: string;
+  fromLocation: string;
+  toLocation: string;
+  departureDate: Date | null;
+  companyName?: string | null;
+  bookingReference?: string | null;
+  flightNumber?: string | null;
+  amountEur?: number | null;
+}
+
+export interface GreenTravelDeclarationData {
+  name: string;
+  country: string;
+  projectName: string;
+  projectStartDate: Date;
+  projectEndDate: Date;
+  organisationName: string;
+  trips: GreenTravelTrip[];
+  travelDaysClaimed?: number | null;
+  signatureDataUrl: string;
+}
+
+/**
+ * Generate the signed green-travel declaration on honour: the participant
+ * confirms that low-emission transport was used for the main part of the
+ * round trip, lists every leg with its references, and keeps the tickets.
+ */
+export async function generateGreenTravelDeclarationPdf(
+  participantId: string,
+  data: GreenTravelDeclarationData
+): Promise<{ filePath: string; fileName: string; fileSize: number }> {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks: Buffer[] = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', async () => {
+        try {
+          const pdfBuffer = Buffer.concat(chunks);
+          const fileName = `Green_Travel_Declaration_${data.name.replace(/\s+/g, '_')}.pdf`;
+          const storagePath = `participants/${participantId}/declarations/green-${uuidv4()}.pdf`;
+          await getStorageService().store(
+            { buffer: pdfBuffer, originalname: fileName, mimetype: 'application/pdf', size: pdfBuffer.length },
+            storagePath
+          );
+          resolve({ filePath: storagePath, fileName, fileSize: pdfBuffer.length });
+        } catch (error) {
+          reject(error);
+        }
+      });
+      doc.on('error', reject);
+
+      doc.registerFont('MainFont', FONT_REGULAR);
+      doc.registerFont('MainFont-Bold', FONT_BOLD);
+      doc.registerFont('MainFont-Italic', FONT_ITALIC);
+
+      // Title
+      doc.fontSize(18).font('MainFont-Bold').text('GREEN TRAVEL DECLARATION ON HONOUR', { align: 'center' });
+      doc.moveDown(0.3);
+      doc.fontSize(10).font('MainFont').fillColor('#666666')
+        .text('Erasmus+ — sustainable means of transport', { align: 'center' });
+      doc.fillColor('#000000');
+      doc.moveDown(1.5);
+
+      // Statement
+      doc.fontSize(11).font('MainFont');
+      doc.text(
+        `I, ${data.name} (${data.country}), hereby declare on my honour that for my participation in the ` +
+        `Erasmus+ project "${data.projectName}" (${formatDate(data.projectStartDate)} – ${formatDate(data.projectEndDate)}), ` +
+        `organised by ${data.organisationName}, I used low-emission means of transport (such as train, bus, ` +
+        `car-pooling or bicycle) for the main part of my round trip, i.e. for at least half of the distance travelled ` +
+        `or for one full direction of the journey.`,
+        { align: 'justify', lineGap: 3 }
+      );
+      doc.moveDown(0.8);
+      doc.text('My journey consisted of the following legs:', { lineGap: 3 });
+      doc.moveDown(0.5);
+
+      // Trip table (simple rows)
+      const colX = [50, 110, 300, 380, 470];
+      const header = ['Date', 'Route', 'Transport', 'Reference', 'Amount'];
+      doc.fontSize(9).font('MainFont-Bold');
+      header.forEach((h, i) => doc.text(h, colX[i], doc.y, { continued: i < header.length - 1, width: (colX[i + 1] ?? 545) - colX[i] }));
+      doc.moveDown(0.3);
+      doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#999999').lineWidth(0.5).stroke();
+      doc.moveDown(0.3);
+      doc.font('MainFont');
+      for (const trip of data.trips) {
+        const y = doc.y;
+        if (y > 700) { doc.addPage(); }
+        const rowY = doc.y;
+        const cells = [
+          trip.departureDate ? formatDate(trip.departureDate) : '—',
+          `${trip.fromLocation} → ${trip.toLocation}`,
+          getTransportModeDisplay(trip.modeOfTransport) + (trip.companyName ? ` (${trip.companyName})` : ''),
+          [trip.bookingReference, trip.flightNumber].filter(Boolean).join(' / ') || '—',
+          trip.amountEur != null ? `€${trip.amountEur.toFixed(2)}` : '—',
+        ];
+        let maxH = 0;
+        cells.forEach((c, i) => {
+          const w = (colX[i + 1] ?? 545) - colX[i] - 6;
+          const h = doc.heightOfString(c, { width: w });
+          doc.text(c, colX[i], rowY, { width: w });
+          maxH = Math.max(maxH, h);
+        });
+        doc.y = rowY + maxH + 6;
+      }
+      if (data.trips.length === 0) doc.text('No travel items recorded.', 50, doc.y);
+
+      doc.moveDown(1);
+      doc.fontSize(11);
+      if (data.travelDaysClaimed != null) {
+        doc.text(`Extra travel days claimed due to the longer, low-emission journey: ${data.travelDaysClaimed}.`, 50, doc.y, { lineGap: 3 });
+        doc.moveDown(0.5);
+      }
+      doc.text(
+        'I confirm that the information above is true and accurate, that I keep the original tickets and receipts ' +
+        'for at least five years, and that I will provide them to the organisation or the National Agency on request.',
+        50, doc.y, { align: 'justify', lineGap: 3 }
+      );
+
+      // Signature
+      doc.moveDown(2);
+      doc.font('MainFont-Bold').text('Signature:', 50, doc.y);
+      doc.moveDown(0.3);
+      if (data.signatureDataUrl && data.signatureDataUrl.startsWith('data:image')) {
+        try {
+          const base64Data = data.signatureDataUrl.split(',')[1];
+          const signatureBuffer = Buffer.from(base64Data, 'base64');
+          doc.image(signatureBuffer, 50, doc.y, { width: 200, height: 80 });
+          doc.y += 90;
+        } catch (err) {
+          console.error('[Green declaration] Could not embed signature:', err);
+          doc.font('MainFont-Italic').text('[Signature could not be embedded]', 50, doc.y);
+        }
+      }
+      doc.font('MainFont').fontSize(10).text(`Signed on ${formatDate(new Date())} by ${data.name}`, 50, doc.y);
+
+      doc.moveDown(3);
+      doc.fontSize(9).font('MainFont-Italic').fillColor('#666666');
+      doc.text(
+        'This declaration on honour serves as supporting documentation for the Erasmus+ green travel top-up and ' +
+        'additional travel days, in line with the Erasmus+ Programme Guide.',
+        50, doc.y, { align: 'center', lineGap: 2 }
+      );
+
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}

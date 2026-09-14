@@ -12,7 +12,7 @@ import { JourneyConsolidationService } from '../../services/ai/journeyConsolidat
 import { ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { getEmailService } from '../../services/email/index.js';
-import { generateDeclarationPdf } from '../../services/pdf/index.js';
+import { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
@@ -1667,6 +1667,100 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
       warnings: validation.warnings,
     });
     return;
+  }
+
+  // Green travel declaration: required at submission for green-travel
+  // participants when the project asks for it (off for pre-existing projects).
+  const bodySchema = z.object({ greenTravelSignature: z.string().min(1).optional() });
+  const body = bodySchema.safeParse(req.body ?? {});
+  const greenTravelSignature = body.success ? body.data.greenTravelSignature : undefined;
+
+  const declarationContext = await prisma.participant.findUnique({
+    where: { id: participant.id },
+    include: {
+      project: { include: { countryLimits: true, organisation: { select: { name: true } } } },
+      greenTravelDeclaration: true,
+      travelItems: { orderBy: { departureDate: 'asc' } },
+      allowances: { include: { rule: { select: { mode: true, active: true } } } },
+    },
+  });
+  if (declarationContext) {
+    const effective = getEffectiveLimit(declarationContext, declarationContext.project.countryLimits);
+    const needsDeclaration =
+      declarationContext.project.requireGreenTravelDeclaration &&
+      effective.greenTravel &&
+      !declarationContext.greenTravelDeclaration;
+
+    if (needsDeclaration && !greenTravelSignature) {
+      res.status(400).json({
+        success: false,
+        message: 'Cannot mark as complete - green travel declaration must be signed',
+        missingItems: [{ type: 'document', description: 'Green travel declaration must be signed', documentType: DocumentType.GREEN_TRAVEL_DECLARATION }],
+        warnings: validation.warnings,
+      });
+      return;
+    }
+
+    if (needsDeclaration && greenTravelSignature) {
+      const trips = sortTravelItemsByJourney(declarationContext.travelItems)
+        .filter((t) => !t.excludedFromReimbursement)
+        .map((t) => ({
+          modeOfTransport: t.modeOfTransport,
+          fromLocation: t.fromLocation,
+          toLocation: t.toLocation,
+          departureDate: t.departureDate,
+          companyName: t.companyName,
+          bookingReference: t.bookingReference,
+          flightNumber: t.flightNumber,
+          amountEur: t.amountIncludedInRoundTrip ? null : t.amountEur,
+        }));
+      const travelDaysClaimed = declarationContext.allowances
+        .filter((a) => a.rule.active && a.rule.mode === 'PER_TRAVEL_DAY')
+        .reduce((max, a) => Math.max(max, a.days ?? 0), 0) || null;
+
+      const { filePath, fileName, fileSize } = await generateGreenTravelDeclarationPdf(participant.id, {
+        name: `${declarationContext.firstName} ${declarationContext.lastName}`,
+        country: declarationContext.country,
+        projectName: declarationContext.project.name,
+        projectStartDate: declarationContext.project.startDate,
+        projectEndDate: declarationContext.project.endDate,
+        organisationName: declarationContext.project.organisation.name,
+        trips,
+        travelDaysClaimed,
+        signatureDataUrl: greenTravelSignature,
+      });
+
+      const declarationDoc = await prisma.document.create({
+        data: {
+          participantId: participant.id,
+          storedFilePath: filePath,
+          originalFilename: fileName,
+          renamedFilename: fileName,
+          mimeType: 'application/pdf',
+          fileSize,
+          documentType: DocumentType.GREEN_TRAVEL_DECLARATION,
+        },
+      });
+      await prisma.greenTravelDeclaration.create({
+        data: {
+          participantId: participant.id,
+          signatureDataUrl: greenTravelSignature,
+          generatedPdfPath: filePath,
+          documentId: declarationDoc.id,
+          travelDaysClaimed,
+          summaryJson: JSON.stringify(trips),
+        },
+      });
+      await prisma.changeLogEntry.create({
+        data: {
+          participantId: participant.id,
+          userType: 'PARTICIPANT',
+          fieldName: 'greenTravelDeclaration',
+          previousValue: '',
+          newValue: `Signed green travel declaration (${trips.length} legs)`,
+        },
+      });
+    }
   }
 
   // Update status

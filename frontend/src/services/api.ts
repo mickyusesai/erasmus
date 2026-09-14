@@ -470,9 +470,11 @@ export const participantApi = {
     return handleResponse<{ allowance: ParticipantAllowance }>(res);
   },
 
-  markComplete: async (token: string) => {
+  markComplete: async (token: string, body?: { greenTravelSignature?: string }) => {
     const res = await fetch(`${API_BASE}/participant/mark-complete?token=${token}`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
     });
     return handleResponse<{ success: boolean } | { success: false; missingItems: MissingItem[] }>(res);
   },
