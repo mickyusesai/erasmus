@@ -1664,31 +1664,53 @@ function AllowanceRulesCard({ projectId }: { projectId: string }) {
                   </button>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
-                  <select
-                    value={r.mode}
-                    onChange={(e) => update(idx, { mode: e.target.value as AllowanceMode })}
-                    className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-sm"
-                  >
-                    <option value="PER_TRAVEL_DAY">Per travel day</option>
-                    <option value="PER_RECEIPT">Per receipt</option>
-                  </select>
-                  <select
-                    value={r.audience}
-                    onChange={(e) => update(idx, { audience: e.target.value as AllowanceAudience })}
-                    className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-sm"
-                  >
-                    <option value="GREEN_TRAVEL">Green travel only</option>
-                    <option value="ALL">All participants</option>
-                  </select>
+                  <div>
+                    <label className="block text-[10px] font-semibold tracking-wider text-gray-400 uppercase mb-1">How</label>
+                    <select
+                      value={r.mode}
+                      onChange={(e) => update(idx, { mode: e.target.value as AllowanceMode })}
+                      className="w-full px-2 py-2 rounded-lg border border-gray-200 bg-white text-sm"
+                    >
+                      <option value="PER_TRAVEL_DAY">Fixed amount per travel day</option>
+                      <option value="PER_RECEIPT">Actual receipts</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold tracking-wider text-gray-400 uppercase mb-1">Who</label>
+                    <select
+                      value={r.audience}
+                      onChange={(e) => update(idx, { audience: e.target.value as AllowanceAudience })}
+                      className="w-full px-2 py-2 rounded-lg border border-gray-200 bg-white text-sm"
+                    >
+                      <option value="GREEN_TRAVEL">Green travellers</option>
+                      <option value="ALL">Everyone</option>
+                    </select>
+                  </div>
                   {r.mode === 'PER_TRAVEL_DAY' ? (
                     <>
-                      <Input type="number" min="0" step="0.01" value={r.amountPerDay ?? ''} onChange={(e) => update(idx, { amountPerDay: num(e.target.value) })} placeholder="€ per day" className="text-sm" />
-                      <Input type="number" min="0" step="1" value={r.maxDays ?? ''} onChange={(e) => update(idx, { maxDays: num(e.target.value) })} placeholder="Max days" className="text-sm" />
+                      <Input
+                        label={<span className="text-[10px] font-semibold tracking-wider text-gray-400 uppercase">€ per travel day</span>}
+                        type="number" min="0" step="0.01" value={r.amountPerDay ?? ''}
+                        onChange={(e) => update(idx, { amountPerDay: num(e.target.value) })} placeholder="e.g. 20" className="text-sm"
+                      />
+                      <Input
+                        label={<span className="text-[10px] font-semibold tracking-wider text-gray-400 uppercase">Max travel days</span>}
+                        type="number" min="0" step="1" value={r.maxDays ?? ''}
+                        onChange={(e) => update(idx, { maxDays: num(e.target.value) })} placeholder="e.g. 4" className="text-sm"
+                      />
                     </>
                   ) : (
                     <>
-                      <Input type="number" min="0" step="0.01" value={r.capPerDay ?? ''} onChange={(e) => update(idx, { capPerDay: num(e.target.value) })} placeholder="Max €/day (optional)" className="text-sm" />
-                      <Input type="number" min="0" step="0.01" value={r.capTotal ?? ''} onChange={(e) => update(idx, { capTotal: num(e.target.value) })} placeholder="Max € total (optional)" className="text-sm" />
+                      <Input
+                        label={<span className="text-[10px] font-semibold tracking-wider text-gray-400 uppercase">Max € per day</span>}
+                        type="number" min="0" step="0.01" value={r.capPerDay ?? ''}
+                        onChange={(e) => update(idx, { capPerDay: num(e.target.value) })} placeholder="no limit" className="text-sm"
+                      />
+                      <Input
+                        label={<span className="text-[10px] font-semibold tracking-wider text-gray-400 uppercase">Max € in total</span>}
+                        type="number" min="0" step="0.01" value={r.capTotal ?? ''}
+                        onChange={(e) => update(idx, { capTotal: num(e.target.value) })} placeholder="no limit" className="text-sm"
+                      />
                     </>
                   )}
                 </div>
