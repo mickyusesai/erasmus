@@ -31,7 +31,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult , CreateOrgProjectData } from '../../services/api';
+import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult, CreateOrgProjectData, AllowanceRuleInput, AllowanceMode, AllowanceAudience } from '../../services/api';
 import { clsx } from 'clsx';
 
 // Helper function to format dates as DD-MM-YYYY (European format)
@@ -423,9 +423,9 @@ function OverviewTab({
       (sum, p) => sum + (p.reimbursementSummary?.amountToReimburse || 0),
       0
     ),
-    // What participants claim before country/individual limits are applied
+    // What participants claim before country/individual limits are applied (travel + allowances)
     requestedTotal: participants.reduce(
-      (sum, p) => sum + (p.reimbursementSummary?.totalEur || 0),
+      (sum, p) => sum + (p.reimbursementSummary?.totalEur || 0) + (p.reimbursementSummary?.allowancesEur || 0),
       0
     ),
     // Budget ceiling if every participant received their maximum
@@ -1496,6 +1496,9 @@ function SettingsTab({
       {/* Communication with participants (emails + participant page) */}
       <ParticipantCommunicationCard project={project} projectId={projectId} />
 
+      {/* Organisation-defined allowances (green-travel per diems, receipts) */}
+      <AllowanceRulesCard projectId={projectId} />
+
       {/* Exchange Rate Settings */}
       <ExchangeRateSettingsCard project={project} projectId={projectId} />
 
@@ -1546,6 +1549,184 @@ function SettingsTab({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+type RuleRow = AllowanceRuleInput & { claimCount?: number };
+
+const ALLOWANCE_PRESETS: { label: string; rule: Omit<RuleRow, 'id'> }[] = [
+  { label: 'Green travel per diem — food', rule: { name: 'Food during travel', mode: 'PER_TRAVEL_DAY', audience: 'GREEN_TRAVEL', amountPerDay: 20, maxDays: 4, countsTowardMax: false, receiptsRequired: false, active: true } },
+  { label: 'Green travel per diem — accommodation', rule: { name: 'Accommodation during travel', mode: 'PER_TRAVEL_DAY', audience: 'GREEN_TRAVEL', amountPerDay: 20, maxDays: 4, countsTowardMax: false, receiptsRequired: false, active: true } },
+  { label: 'Reimburse hotel receipts', rule: { name: 'Accommodation (receipts)', mode: 'PER_RECEIPT', audience: 'GREEN_TRAVEL', capPerDay: null, capTotal: null, maxDays: 4, countsTowardMax: false, receiptsRequired: true, active: true } },
+  { label: 'Reimburse meal receipts', rule: { name: 'Meals (receipts)', mode: 'PER_RECEIPT', audience: 'GREEN_TRAVEL', capPerDay: null, capTotal: null, maxDays: 4, countsTowardMax: false, receiptsRequired: true, active: true } },
+  { label: 'Custom rule', rule: { name: '', mode: 'PER_TRAVEL_DAY', audience: 'ALL', amountPerDay: null, maxDays: 4, countsTowardMax: false, receiptsRequired: false, active: true } },
+];
+
+/**
+ * Organisation-defined allowances: extras on top of transport (per diems for
+ * extra travel days, hotel/meal receipts). Presets prefill the common
+ * Erasmus+ green-travel setups; everything stays editable. Explicit Save with
+ * confirmation, same pattern as the exchange-rate settings.
+ */
+function AllowanceRulesCard({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const [rows, setRows] = useState<RuleRow[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [preset, setPreset] = useState('');
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['org-allowance-rules', projectId],
+    queryFn: () => organisationApi.getAllowanceRules(projectId),
+  });
+
+  useEffect(() => {
+    if (data && !dirty) {
+      setRows(data.rules.filter((r) => r.active).map((r) => ({
+        id: r.id, name: r.name, mode: r.mode, audience: r.audience, amountPerDay: r.amountPerDay ?? null,
+        maxDays: r.maxDays ?? 4, capPerDay: r.capPerDay ?? null, capTotal: r.capTotal ?? null,
+        countsTowardMax: r.countsTowardMax, receiptsRequired: r.receiptsRequired, active: true, claimCount: r.claimCount,
+      })));
+    }
+  }, [data, dirty]);
+
+  const saveMutation = useMutation({
+    mutationFn: () => organisationApi.updateAllowanceRules(projectId, rows.map(({ claimCount: _c, ...r }) => r)),
+    onSuccess: (res) => {
+      setDirty(false);
+      toast.success(`Allowance rules saved — ${res.recalc.participantsUpdated} participant(s) recalculated`);
+      queryClient.invalidateQueries({ queryKey: ['org-allowance-rules', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-participants', projectId] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to save allowance rules'),
+  });
+
+  const update = (idx: number, patch: Partial<RuleRow>) => {
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+    setDirty(true);
+  };
+  const remove = (idx: number) => {
+    setRows((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+  };
+  const addPreset = (label: string) => {
+    const p = ALLOWANCE_PRESETS.find((x) => x.label === label);
+    if (!p) return;
+    setRows((prev) => [...prev, { ...p.rule }]);
+    setDirty(true);
+    setPreset('');
+  };
+  const handleSave = () => {
+    for (const r of rows) {
+      if (!r.name.trim()) { toast.error('Every rule needs a name'); return; }
+      if (r.mode === 'PER_TRAVEL_DAY' && !(r.amountPerDay && r.amountPerDay > 0)) { toast.error(`"${r.name}" needs an amount per day`); return; }
+    }
+    if (window.confirm('Save allowance rules? Participants who have not been approved yet will be recalculated.')) {
+      saveMutation.mutate();
+    }
+  };
+  const num = (v: string): number | null => (v.trim() === '' ? null : Math.max(0, parseFloat(v)));
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <h3 className="font-semibold text-gray-900">Allowances</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Extras next to the travel costs, e.g. a per diem for extra green-travel days or hotel/meal receipts. Erasmus+
+            funds up to 4 extra travel days for green travel; how you pass it on is your choice.
+          </p>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-gray-400">Loading…</p>
+        ) : (
+          <div className="space-y-3">
+            {rows.length === 0 && (
+              <p className="text-sm text-gray-400">No allowances yet — add one from the presets below.</p>
+            )}
+            {rows.map((r, idx) => (
+              <div key={r.id ?? `new-${idx}`} className="p-3 bg-gray-50 rounded-xl space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={r.name}
+                    onChange={(e) => update(idx, { name: e.target.value })}
+                    placeholder="Name shown to participants"
+                    className="flex-1 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => remove(idx)}
+                    className="p-2 text-gray-400 hover:text-red-500"
+                    title={r.claimCount ? `${r.claimCount} participant(s) claimed this — it will be deactivated, claims are kept` : 'Remove rule'}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                  <select
+                    value={r.mode}
+                    onChange={(e) => update(idx, { mode: e.target.value as AllowanceMode })}
+                    className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-sm"
+                  >
+                    <option value="PER_TRAVEL_DAY">Per travel day</option>
+                    <option value="PER_RECEIPT">Per receipt</option>
+                  </select>
+                  <select
+                    value={r.audience}
+                    onChange={(e) => update(idx, { audience: e.target.value as AllowanceAudience })}
+                    className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-sm"
+                  >
+                    <option value="GREEN_TRAVEL">Green travel only</option>
+                    <option value="ALL">All participants</option>
+                  </select>
+                  {r.mode === 'PER_TRAVEL_DAY' ? (
+                    <>
+                      <Input type="number" min="0" step="0.01" value={r.amountPerDay ?? ''} onChange={(e) => update(idx, { amountPerDay: num(e.target.value) })} placeholder="€ per day" className="text-sm" />
+                      <Input type="number" min="0" step="1" value={r.maxDays ?? ''} onChange={(e) => update(idx, { maxDays: num(e.target.value) })} placeholder="Max days" className="text-sm" />
+                    </>
+                  ) : (
+                    <>
+                      <Input type="number" min="0" step="0.01" value={r.capPerDay ?? ''} onChange={(e) => update(idx, { capPerDay: num(e.target.value) })} placeholder="Max €/day (optional)" className="text-sm" />
+                      <Input type="number" min="0" step="0.01" value={r.capTotal ?? ''} onChange={(e) => update(idx, { capTotal: num(e.target.value) })} placeholder="Max € total (optional)" className="text-sm" />
+                    </>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-4 text-xs text-gray-600">
+                  <label className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={!r.countsTowardMax} onChange={(e) => update(idx, { countsTowardMax: !e.target.checked })} className="rounded border-gray-300 w-3.5 h-3.5" />
+                    Paid on top of the country/individual maximum
+                  </label>
+                  {r.mode === 'PER_TRAVEL_DAY' && (
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={r.receiptsRequired} onChange={(e) => update(idx, { receiptsRequired: e.target.checked })} className="rounded border-gray-300 w-3.5 h-3.5" />
+                      Ask for receipts as evidence
+                    </label>
+                  )}
+                  {r.claimCount ? <span className="text-gray-400">{r.claimCount} claim(s)</span> : null}
+                </div>
+              </div>
+            ))}
+
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between pt-1">
+              <select
+                value={preset}
+                onChange={(e) => addPreset(e.target.value)}
+                className="px-3 py-2 rounded-lg border border-dashed border-primary-300 bg-primary-50 text-sm text-primary-700"
+              >
+                <option value="">+ Add allowance…</option>
+                {ALLOWANCE_PRESETS.map((p) => (
+                  <option key={p.label} value={p.label}>{p.label}</option>
+                ))}
+              </select>
+              <Button onClick={handleSave} loading={saveMutation.isPending} disabled={!dirty}>
+                Save allowances
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1642,7 +1823,7 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
   const [carRate, setCarRate] = useState<string>(String(project.carRatePerKm || 0.22));
 
   const updateProjectMutation = useMutation({
-    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number; aiAnalysisUnlocked?: boolean }) =>
+    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number; aiAnalysisUnlocked?: boolean; requireGreenTravelDeclaration?: boolean }) =>
       organisationApi.updateProject(projectId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
@@ -1716,6 +1897,23 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
               }
               disabled={updateProjectMutation.isPending || projectEnded}
               className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <div className="pr-4">
+              <p className="font-medium text-gray-900">Green travel declaration</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Green-travel participants sign a declaration on honour (with their trip list) when they submit. The
+                signed PDF is added to their documents and the audit file.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={project.requireGreenTravelDeclaration || false}
+              onChange={(e) => updateProjectMutation.mutate({ requireGreenTravelDeclaration: e.target.checked })}
+              disabled={updateProjectMutation.isPending}
+              className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
             />
           </label>
 

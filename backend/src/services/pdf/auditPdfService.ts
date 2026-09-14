@@ -79,11 +79,24 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
       declarationsOnHonor: true,
       declarationsOfTravel: true,
       reimbursementSummary: true,
+      allowances: { include: { rule: true, receipts: { include: { document: true } } } },
+      greenTravelDeclaration: true,
     },
   });
 
   if (!participant) throw new Error('Participant not found');
   participant.travelItems = sortTravelItemsByJourney(participant.travelItems);
+
+  // Allowance lines (organisation-defined extras) and a lookup for receipt amounts
+  const allowanceLines = participant.allowances.filter((a) => a.rule.active && a.amountEur > 0);
+  const allowancesInside = allowanceLines.filter((a) => a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0);
+  const allowancesOnTop = allowanceLines.filter((a) => !a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0);
+  const receiptByDocId = new Map<string, { amountOriginal: number | null; currencyOriginal: string; amountEur: number | null; ruleName: string }>();
+  for (const a of participant.allowances) {
+    for (const r of a.receipts) {
+      receiptByDocId.set(r.documentId, { amountOriginal: r.amountOriginal, currencyOriginal: r.currencyOriginal, amountEur: r.amountEur, ruleName: a.rule.name });
+    }
+  }
 
   const exportTimestamp = new Date().toLocaleString('en-GB', {
     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -247,11 +260,16 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
       ['Simplified Travel Route',      simplifiedRoute],
       ['Total Travel Items',           String(participant.travelItems.length)],
       ['Total Declared Travel Amount', formatEur(summary?.totalEur)],
+      ...(allowancesInside > 0 ? [['Allowances (within maximum)', formatEur(allowancesInside)] as [string, string]] : []),
       ['Maximum Eligible Reimbursement', summary?.maxReimbursementAllowed
         ? formatEur(summary.maxReimbursementAllowed) +
           (participant.maxReimbursementOverride != null ? ' (individual limit)' : '')
         : 'Not configured'],
+      ...(allowancesOnTop > 0 ? [['Allowances (on top of maximum)', formatEur(allowancesOnTop)] as [string, string]] : []),
       ['Final Reimbursed Amount',      formatEur(summary?.amountToReimburse)],
+      ...(participant.greenTravelDeclaration
+        ? [['Green Travel Declaration', `Signed on ${formatDate(participant.greenTravelDeclaration.signedAt)}`] as [string, string]]
+        : []),
     ];
 
     drawTable(doc, summaryRows, doc.y + 8);
@@ -393,6 +411,33 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
       doc.y = doc.y + 12;
     }
 
+    // ── SECTION 3b: Allowances (organisation-defined extras) ────────────────
+    if (allowanceLines.length > 0) {
+      if (doc.y > 620) doc.addPage();
+      else doc.moveDown(1.5);
+      sectionHeading(doc, 'Allowances');
+      doc.moveDown(0.5);
+      for (const a of allowanceLines) {
+        if (doc.y > 700) doc.addPage();
+        drawItemHeader(doc, `${a.rule.name}  —  ${formatEur(a.amountEur)}`, doc.y);
+        const rows: [string, string][] = [
+          ['Type', a.rule.mode === 'PER_TRAVEL_DAY'
+            ? `${formatEur(a.rule.amountPerDay ?? 0)} per extra travel day (max ${a.rule.maxDays ?? '—'} days)`
+            : `Receipts${a.rule.capPerDay != null ? `, max ${formatEur(a.rule.capPerDay)} per day` : ''}${a.rule.capTotal != null ? `, max ${formatEur(a.rule.capTotal)} total` : ''}`],
+          ['Applies To', a.rule.audience === 'GREEN_TRAVEL' ? 'Green-travel participants' : 'All participants'],
+          ['Counted', a.rule.countsTowardMax ? 'Within the maximum eligible reimbursement' : 'On top of the maximum eligible reimbursement'],
+        ];
+        if (a.days != null) rows.push(['Days Claimed', String(a.days)]);
+        if (a.receipts.length > 0) {
+          rows.push(['Receipts', a.receipts.map((r) =>
+            `${r.document.renamedFilename}: ${r.amountOriginal != null ? `${r.amountOriginal.toFixed(2)} ${r.currencyOriginal}` : '—'}${r.amountEur != null && r.currencyOriginal !== 'EUR' ? ` (${formatEur(r.amountEur)})` : ''}`
+          ).join('\n')]);
+        }
+        drawKvRows(doc, rows);
+        doc.y = doc.y + 8;
+      }
+    }
+
     // ── SECTION 4: Document Index ────────────────────────────────────────────
     if (doc.y > 620) doc.addPage();
     else doc.moveDown(1.5);
@@ -411,8 +456,12 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
         const size = formatFileSize(d.fileSize);
         doc.font('B').fontSize(9.5).fillColor('#111111')
           .text(`${i + 1}.  ${d.renamedFilename}`, MARGIN_H, doc.y);
+        const receipt = receiptByDocId.get(d.id);
+        const receiptNote = receipt
+          ? `  ·  ${receipt.ruleName}: ${receipt.amountOriginal != null ? `${receipt.amountOriginal.toFixed(2)} ${receipt.currencyOriginal}` : 'amount not set'}`
+          : '';
         doc.font('R').fontSize(8.5).fillColor('#666666')
-          .text(`     ${typeLabel}  ·  ${size}  ·  Uploaded ${formatDate(d.uploadDate)}`, MARGIN_H, doc.y + 1);
+          .text(`     ${typeLabel}  ·  ${size}  ·  Uploaded ${formatDate(d.uploadDate)}${receiptNote}`, MARGIN_H, doc.y + 1);
         doc.y = doc.y + 6;
       }
     }

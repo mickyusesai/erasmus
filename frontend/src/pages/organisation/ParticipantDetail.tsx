@@ -43,7 +43,7 @@ import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData , type OrgParticipantDetail as OrgParticipantDetailData } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, ParticipantAllowance, type OrgParticipantDetail as OrgParticipantDetailData } from '../../services/api';
 import { clsx } from 'clsx';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -565,6 +565,9 @@ export default function OrgParticipantDetail() {
                 <div>
                   <p className="text-white/70 text-sm">To Reimburse</p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(summary?.amountToReimburse || 0)}</p>
+                  {(summary?.allowancesEur || 0) > 0 && (
+                    <p className="text-white/70 text-xs">incl. {formatCurrency(summary?.allowancesEur || 0)} allowances</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-white/70 text-sm">Status</p>
@@ -589,6 +592,15 @@ export default function OrgParticipantDetail() {
             saving={updateLimitOverrideMutation.isPending}
             onSave={(data) => updateLimitOverrideMutation.mutate(data)}
           />
+
+          {/* ── Allowances claimed (organisation-defined extras) ── */}
+          {(participant.allowances?.length ?? 0) > 0 && (
+            <OrgAllowancesCard
+              participantId={participant.id}
+              allowances={participant.allowances ?? []}
+              greenDeclarationSignedAt={participant.greenTravelDeclaration?.signedAt ?? null}
+            />
+          )}
 
           {/* ── Two Column Layout ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1909,6 +1921,108 @@ function IndividualLimitCard({
             </div>
           </div>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The participant's allowance lines with organisation corrections (days,
+ * receipt amounts). Every change is logged and recalculates the summary.
+ */
+function OrgAllowancesCard({
+  participantId,
+  allowances,
+  greenDeclarationSignedAt,
+}: {
+  participantId: string;
+  allowances: ParticipantAllowance[];
+  greenDeclarationSignedAt: string | null;
+}) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: ({ ruleId, data }: { ruleId: string; data: { days?: number | null; receipts?: { id: string; amountOriginal: number | null }[] } }) =>
+      organisationApi.updateParticipantAllowance(participantId, ruleId, data),
+    onSuccess: () => {
+      toast.success('Allowance updated');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', participantId] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update allowance'),
+  });
+
+  const active = allowances.filter((a) => a.rule.active);
+  if (active.length === 0 && !greenDeclarationSignedAt) return null;
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="font-semibold text-gray-900">Allowances</p>
+          {greenDeclarationSignedAt && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+              Green travel declaration signed {formatDate(greenDeclarationSignedAt)}
+            </span>
+          )}
+        </div>
+        {active.map((a) => (
+          <div key={a.id} className="p-3 bg-gray-50 rounded-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium text-gray-900">{a.rule.name}</p>
+                <p className="text-xs text-gray-500">
+                  {a.rule.mode === 'PER_TRAVEL_DAY'
+                    ? `${formatCurrency(a.rule.amountPerDay ?? 0)} per day · max ${a.rule.maxDays ?? '—'} days`
+                    : 'Receipts'}
+                  {' · '}{a.rule.countsTowardMax ? 'within max' : 'on top of max'}
+                </p>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {(a.rule.mode === 'PER_TRAVEL_DAY' || a.rule.capPerDay != null) && (
+                  <label className="text-xs text-gray-500 flex items-center gap-1">
+                    Days
+                    <input
+                      type="number"
+                      min="0"
+                      defaultValue={a.days ?? 0}
+                      onBlur={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        if (!isNaN(v) && v !== (a.days ?? 0)) mutation.mutate({ ruleId: a.ruleId, data: { days: v } });
+                      }}
+                      disabled={mutation.isPending}
+                      className="w-14 px-2 py-1 rounded border border-gray-200 text-sm text-right"
+                    />
+                  </label>
+                )}
+                <p className="font-bold text-gray-900">{formatCurrency(a.amountEur)}</p>
+              </div>
+            </div>
+            {a.receipts.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {a.receipts.map((r) => (
+                  <li key={r.id} className="flex items-center gap-2 text-xs text-gray-600">
+                    <span className="truncate flex-1">{r.document.renamedFilename}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      defaultValue={r.amountOriginal ?? ''}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim() === '' ? null : parseFloat(e.target.value);
+                        if (v !== r.amountOriginal && !(v != null && isNaN(v))) {
+                          mutation.mutate({ ruleId: a.ruleId, data: { receipts: [{ id: r.id, amountOriginal: v }] } });
+                        }
+                      }}
+                      disabled={mutation.isPending}
+                      className="w-20 px-2 py-1 rounded border border-gray-200 text-right"
+                    />
+                    <span className="w-10">{r.currencyOriginal}</span>
+                    {r.amountEur != null && r.currencyOriginal !== 'EUR' && <span className="text-gray-400">= {formatCurrency(r.amountEur)}</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
