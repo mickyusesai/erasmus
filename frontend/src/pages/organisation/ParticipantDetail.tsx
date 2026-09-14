@@ -86,8 +86,10 @@ const docTypeLabels: Record<string, string> = {
   FUEL_RECEIPT: 'Fuel Receipt',
   GREEN_TRAVEL_DECLARATION: 'Green Travel',
   HOTEL_INVOICE: 'Hotel Invoice',
+  MEAL_RECEIPT: 'Meal Receipt',
   LUGGAGE_INVOICE: 'Luggage Invoice',
   BANK_TRANSACTION: 'Bank Transaction',
+  INTERRAIL_PASS: 'Interrail Pass',
   OTHER: 'Other',
 };
 

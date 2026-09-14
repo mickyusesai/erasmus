@@ -82,7 +82,7 @@ Analyze this travel document and extract all relevant information. This could be
 
 Please respond with a JSON object (and ONLY a JSON object, no other text) with the following structure:
 {
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "OTHER",
   "confidence": 0.0-1.0,
   "ocrText": "The key text extracted from the document",
   "isRoundTrip": true/false,
@@ -271,6 +271,7 @@ Other important notes:
       FUEL_RECEIPT: DocumentType.FUEL_RECEIPT,
       GREEN_TRAVEL_DECLARATION: DocumentType.GREEN_TRAVEL_DECLARATION,
       HOTEL_INVOICE: DocumentType.HOTEL_INVOICE,
+      MEAL_RECEIPT: DocumentType.MEAL_RECEIPT,
       OTHER: DocumentType.OTHER,
     };
     return mapping[type] || DocumentType.OTHER;
@@ -308,6 +309,7 @@ Other important notes:
       FUEL_RECEIPT: 'fuel receipt',
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
       HOTEL_INVOICE: 'hotel invoice',
+      MEAL_RECEIPT: 'meal receipt',
       BANK_TRANSACTION: 'bank transaction',
       LUGGAGE_INVOICE: 'luggage invoice',
       INTERRAIL_PASS: 'interrail pass',

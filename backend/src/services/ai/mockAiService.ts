@@ -128,6 +128,7 @@ export class MockAiService implements TravelDocumentAiService {
       FUEL_RECEIPT: 'fuel receipt',
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
       HOTEL_INVOICE: 'hotel invoice',
+      MEAL_RECEIPT: 'meal receipt',
       BANK_TRANSACTION: 'bank transaction',
       LUGGAGE_INVOICE: 'luggage invoice',
       INTERRAIL_PASS: 'interrail pass',

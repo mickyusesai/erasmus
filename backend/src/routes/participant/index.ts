@@ -446,6 +446,51 @@ router.get('/documents/:id/url', participantAuth, ensureOwnParticipant, asyncHan
 }));
 
 /**
+ * PATCH /api/participant/documents/:id
+ * Correct a document's detected type (e.g. a hotel invoice detected as "Other")
+ */
+const updateDocumentSchema = z.object({
+  documentType: z.nativeEnum(DocumentType),
+});
+
+router.patch('/documents/:id', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot change documents after approval');
+  }
+
+  const result = updateDocumentSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const document = await prisma.document.findFirst({
+    where: { id: req.params.id, participantId: participant.id },
+  });
+  if (!document) {
+    throw new NotFoundError('Document not found');
+  }
+
+  const updated = await prisma.document.update({
+    where: { id: document.id },
+    data: { documentType: result.data.documentType },
+  });
+
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId: participant.id,
+      userType: 'PARTICIPANT',
+      fieldName: 'document.documentType',
+      previousValue: document.documentType,
+      newValue: updated.documentType,
+    },
+  });
+
+  res.json(updated);
+}));
+
+/**
  * DELETE /api/participant/documents/:id
  * Delete a document
  */

@@ -339,6 +339,16 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  // Correct a mis-detected document type (e.g. a hotel invoice detected as "Other")
+  updateDocumentType: async (token: string, documentId: string, documentType: DocumentType) => {
+    const res = await fetch(`${API_BASE}/participant/documents/${documentId}?token=${token}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentType }),
+    });
+    return handleResponse<Document>(res);
+  },
+
   getDocumentUrl: async (token: string, documentId: string) => {
     const res = await fetch(`${API_BASE}/participant/documents/${documentId}/url?token=${token}`);
     return handleResponse<{ url: string }>(res);
@@ -1550,6 +1560,10 @@ export type DocumentType =
   | 'FUEL_RECEIPT'
   | 'GREEN_TRAVEL_DECLARATION'
   | 'HOTEL_INVOICE'
+  | 'MEAL_RECEIPT'
+  | 'BANK_TRANSACTION'
+  | 'LUGGAGE_INVOICE'
+  | 'INTERRAIL_PASS'
   | 'OTHER';
 
 export interface TravelItem {

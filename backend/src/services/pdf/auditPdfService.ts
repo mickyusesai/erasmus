@@ -40,6 +40,7 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   FUEL_RECEIPT: 'Fuel Receipt',
   GREEN_TRAVEL_DECLARATION: 'Green Travel Declaration',
   HOTEL_INVOICE: 'Hotel Invoice',
+  MEAL_RECEIPT: 'Meal Receipt',
   BANK_TRANSACTION: 'Bank Transaction',
   LUGGAGE_INVOICE: 'Luggage Invoice',
   INTERRAIL_PASS: 'Interrail Pass',

@@ -157,9 +157,14 @@ Carefully determine the document type:
 
 3. OTHER DOCUMENTS:
    - FUEL_RECEIPT: Gas station receipt
+   - LUGGAGE_INVOICE: Separate invoice/receipt for checked baggage
+   - HOTEL_INVOICE: Hotel, hostel or other accommodation invoice/booking confirmation
+   - MEAL_RECEIPT: Restaurant, café, supermarket or other food/drink receipt
    - GREEN_TRAVEL_DECLARATION: Declaration for green travel
    - INTERRAIL_PASS: Interrail or Eurail pass (multi-day rail travel pass)
    - OTHER: Anything else
+
+For HOTEL_INVOICE and MEAL_RECEIPT still extract the total amount, currency, documentDate and merchantName.
 
 CRITICAL: Bank transactions and payment screenshots are NOT tickets!
 - If you see a bank app interface, transaction history, or payment confirmation
@@ -213,7 +218,7 @@ PRICE EXTRACTION:
 Extract ALL information you can find. Respond with ONLY a JSON object:
 {
   "documentLanguage": "Croatian" | "English" | "Dutch" | "German" | "French" | "Polish" | "Spanish" | "Italian" | "other",
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
   "confidence": 0.0-1.0,
   "reasoning": "Brief explanation: 1) What language is this document in? 2) How did you identify the document type? 3) Key information extracted",
 
@@ -674,6 +679,10 @@ After matching, check which documents remain unassigned:
   * Its route, date, or mode do NOT match any existing travel item
   * It genuinely looks like a separate trip not yet added
 - The "unassigned_documents" list should NOT include receipts you could confidently match
+
+RULE 8b: ACCOMMODATION AND FOOD ARE NOT TRAVEL
+- HOTEL_INVOICE and MEAL_RECEIPT documents are NEVER travel items and must NOT be attached to any leg
+- Always list them in "unassigned_documents" with reason "accommodation/food receipt (handled as allowance)"
 
 RULE 9: AMOUNT HANDLING
 - null = price is unknown (could not find in any document)
@@ -1302,6 +1311,8 @@ Do NOT include in warnings (these are handled elsewhere):
       BANK_TRANSACTION: 'BANK_TRANSACTION',
       LUGGAGE_INVOICE: 'LUGGAGE_INVOICE',
       INTERRAIL_PASS: 'INTERRAIL_PASS',
+      HOTEL_INVOICE: 'HOTEL_INVOICE',
+      MEAL_RECEIPT: 'MEAL_RECEIPT',
     };
     return (mapping[type] || 'OTHER') as DocumentType;
   }

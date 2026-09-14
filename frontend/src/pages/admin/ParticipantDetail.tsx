@@ -471,6 +471,11 @@ function DocumentCard({ document, onDelete }: { document: Document; onDelete: ()
     BUS_TICKET: 'Bus Ticket',
     FUEL_RECEIPT: 'Fuel Receipt',
     GREEN_TRAVEL_DECLARATION: 'Green Travel Declaration',
+    HOTEL_INVOICE: 'Hotel Invoice',
+    MEAL_RECEIPT: 'Meal Receipt',
+    BANK_TRANSACTION: 'Bank Transaction',
+    LUGGAGE_INVOICE: 'Luggage Invoice',
+    INTERRAIL_PASS: 'Interrail Pass',
     OTHER: 'Other',
   };
 
