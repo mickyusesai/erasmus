@@ -10,6 +10,8 @@ import {
 } from './types.js';
 import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
+import { computePayable } from '../../utils/reimbursementMath.js';
+import { refreshParticipantAllowances } from '../allowances/index.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
 /**
@@ -498,17 +500,26 @@ Other important notes:
     }
 
     // Applicable maximum: individual override, else the participant's country limit
-    const maxReimbursementAllowed = getEffectiveLimit(participant, participant.project.countryLimits).maxReimbursement;
+    const effectiveLimit = getEffectiveLimit(participant, participant.project.countryLimits);
+    const maxReimbursementAllowed = effectiveLimit.maxReimbursement;
 
     // If any travel item is a multi-person booking, do not apply the per-person cap
     const hasMultiPersonBooking = participant.travelItems.some(
       (item) => item.numberOfPassengers !== null && item.numberOfPassengers > 1
     );
 
-    // Calculate amount to reimburse (capped at max, or 100% if no max is configured or multi-person)
-    const amountToReimburse = (maxReimbursementAllowed > 0 && !hasMultiPersonBooking)
-      ? Math.min(totalEur, maxReimbursementAllowed)
-      : totalEur;
+    // Organisation-defined allowances (per diems, receipts); 0 when the project has no rules
+    const allowances = await refreshParticipantAllowances(participantId, effectiveLimit.greenTravel);
+    const allowancesEur = allowances.total;
+
+    // Single shared formula (see utils/reimbursementMath.ts)
+    const amountToReimburse = computePayable({
+      travelEur: totalEur,
+      allowanceInsideCap: allowances.insideCap,
+      allowanceOnTop: allowances.onTop,
+      maxReimbursement: maxReimbursementAllowed,
+      hasMultiPersonBooking,
+    }).total;
 
     // Validate
     const validation = await this.validateReimbursement(participantId);
@@ -521,12 +532,14 @@ Other important notes:
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
+        allowancesEur,
         aiCheckOk: validation.aiCheckPassed,
       },
       update: {
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
+        allowancesEur,
         aiCheckOk: validation.aiCheckPassed,
       },
     });
