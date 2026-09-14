@@ -11,7 +11,6 @@ import {
 import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
-import { refreshParticipantAllowances } from '../allowances/index.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
 /**
@@ -502,23 +501,22 @@ Other important notes:
     }
 
     // Applicable maximum: individual override, else the participant's country limit
-    const effectiveLimit = getEffectiveLimit(participant, participant.project.countryLimits);
-    const maxReimbursementAllowed = effectiveLimit.maxReimbursement;
+    const maxReimbursementAllowed = getEffectiveLimit(participant, participant.project.countryLimits).maxReimbursement;
 
     // If any travel item is a multi-person booking, do not apply the per-person cap
     const hasMultiPersonBooking = participant.travelItems.some(
       (item) => item.numberOfPassengers !== null && item.numberOfPassengers > 1
     );
 
-    // Organisation-defined allowances (per diems, receipts); 0 when the project has no rules
-    const allowances = await refreshParticipantAllowances(participantId, effectiveLimit.greenTravel);
-    const allowancesEur = allowances.total;
+    // Organiser-decided green travel extra (food + accommodation), paid on top of the cap
+    const greenTravelExtraEur =
+      Math.round(((participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0)) * 100) / 100;
 
     // Single shared formula (see utils/reimbursementMath.ts)
     const amountToReimburse = computePayable({
       travelEur: totalEur,
-      allowanceInsideCap: allowances.insideCap,
-      allowanceOnTop: allowances.onTop,
+      allowanceInsideCap: 0,
+      allowanceOnTop: greenTravelExtraEur,
       maxReimbursement: maxReimbursementAllowed,
       hasMultiPersonBooking,
     }).total;
@@ -534,14 +532,14 @@ Other important notes:
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
-        allowancesEur,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
       update: {
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
-        allowancesEur,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
     });
@@ -594,14 +592,7 @@ export async function generateParticipantReview(data: {
   projectEndDate: string;
   maxReimbursementForCountry: number;
   greenTravel?: boolean;
-  allowances?: Array<{
-    name: string;
-    mode: string;
-    days: number | null;
-    amountEur: number;
-    countsTowardMax: boolean;
-    receipts: Array<{ filename: string; amountEur: number | null }>;
-  }>;
+  greenTravelExtra?: { foodEur: number | null; accommodationEur: number | null; note: string | null } | null;
   travelItems: Array<{
     id: string;
     modeOfTransport: string;
@@ -725,11 +716,11 @@ ${data.travelItems.map((item, i) => {
 === DOCUMENTS (${data.documents.length}) ===
 ${data.documents.map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}`).join('\n')}
 
-=== ALLOWANCES (${(data.allowances || []).length}) ===
+=== GREEN TRAVEL ===
 ${data.greenTravel ? 'This participant is flagged as GREEN TRAVEL (low-emission transport for the main part of the journey).' : 'This participant is NOT flagged as green travel.'}
-Allowances are organisation-defined extras (e.g. per diems for extra travel days, hotel/meal receipts). They are configured by the organisation, so do NOT question the rates — only check plausibility (days claimed vs. ticket dates, receipts vs. claimed amounts).
-${(data.allowances || []).map((a) => `- ${a.name} [${a.mode}]: ${a.days != null ? `${a.days} day(s), ` : ''}€${a.amountEur.toFixed(2)} (${a.countsTowardMax ? 'counts toward the maximum' : 'paid on top of the maximum'})${a.receipts.length ? '\n     receipts: ' + a.receipts.map((r) => `${r.filename} (€${r.amountEur ?? '?'})`).join(', ') : ''}`).join('\n') || 'None'}
-${data.greenTravel && (data.allowances || []).some((a) => (a.days ?? 0) > 4) ? '⚠ Erasmus+ funds at most 4 extra travel days for green travel; a line claims more — flag as important.' : ''}
+${data.greenTravelExtra && ((data.greenTravelExtra.foodEur ?? 0) > 0 || (data.greenTravelExtra.accommodationEur ?? 0) > 0)
+  ? `The ORGANISATION added a green travel extra on top of the travel maximum: food €${(data.greenTravelExtra.foodEur ?? 0).toFixed(2)}, accommodation €${(data.greenTravelExtra.accommodationEur ?? 0).toFixed(2)}${data.greenTravelExtra.note ? ` (note: "${data.greenTravelExtra.note}")` : ''}. This amount was decided by the organisation — do NOT question it; only mention hotel/meal receipts that look implausible.`
+  : 'No green travel extra has been added by the organisation.'}
 
 === DECLARATIONS OF TRAVEL (${data.declarationsOfTravel.length}) ===
 These are SIGNED declarations the participant created to REPLACE missing boarding passes. Each one is a PDF with their signature. The organisation MUST manually verify each declaration is correct (check route, date, flight number match the travel item).

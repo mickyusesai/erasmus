@@ -41,7 +41,6 @@ import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
 import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
-import { AllowanceCard } from '../../components/participant/AllowanceCard';
 import { SignaturePad } from '../../components/participant/SignaturePad';
 import { computePayable } from '../../utils/reimbursementMath';
 import DisseminationPage from './DisseminationPage';
@@ -63,8 +62,7 @@ function isNonTripDocument(d: Document): boolean {
     d.documentType === 'FLIGHT_BOARDING_PASS' ||
     d.documentType === 'HOTEL_INVOICE' ||
     d.documentType === 'MEAL_RECEIPT' ||
-    d.documentType === 'GREEN_TRAVEL_DECLARATION' ||
-    !!d.allowanceReceipt
+    d.documentType === 'GREEN_TRAVEL_DECLARATION'
   );
 }
 
@@ -818,8 +816,6 @@ function Step1Upload({
   };
 
   const isGreenTravel = data.greenTravel || false;
-  // Any allowance that takes receipts → let participants upload and re-type receipts here
-  const hasReceiptAllowances = (data.allowanceRules ?? []).some((r) => r.mode === 'PER_RECEIPT' || r.receiptsRequired);
 
   // Handler to view document using signed URL
   const handleViewDocument = async (docId: string) => {
@@ -939,12 +935,10 @@ function Step1Upload({
               <><strong>{data.project.name}</strong> runs until <strong>{formatDate(data.project.endDate)}</strong>. Add every ticket, receipt &amp; boarding pass as you get them — we keep them safe so nothing is lost.</>
             )}
           </p>
-          {(isGreenTravel || hasReceiptAllowances) && (
+          {isGreenTravel && (
             <p className="text-white/85 text-sm mt-3 bg-white/10 rounded-xl px-3 py-2">
-              <strong>{isGreenTravel ? 'Green travel:' : 'Extras:'}</strong>{' '}
-              {hasReceiptAllowances
-                ? 'you can also upload hotel and meal receipts — you\'ll assign them to an allowance in the next step.'
-                : 'you can also upload hotel invoices for overnight stays needed due to longer eco-friendly travel.'}
+              <strong>Green travel:</strong> also upload your hotel and meal receipts from the journey. Your organisation
+              decides the extra green-travel budget and you'll get an email once it's added to your reimbursement.
             </p>
           )}
           <button
@@ -989,7 +983,7 @@ function Step1Upload({
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-900 truncate text-sm">{doc.renamedFilename}</p>
                     <p className="text-xs mt-0.5">
-                      {hasReceiptAllowances ? (
+                      {isGreenTravel ? (
                         <select
                           value={doc.documentType}
                           onChange={async (e) => {
@@ -1257,11 +1251,10 @@ function Step2CheckData({
         const newTotalEur = Math.max(0, (old.reimbursementSummary?.totalEur || 0) - deletedAmount);
         const maxAllowed = old.reimbursementSummary?.maxReimbursementAllowed || 0;
         const remaining = old.travelItems.filter((item: TravelItem) => item.id !== id);
-        const lines = (old.allowances ?? []).filter((a) => a.rule.active);
         const newAmountToReimburse = computePayable({
           travelEur: newTotalEur,
-          allowanceInsideCap: lines.filter((a) => a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0),
-          allowanceOnTop: lines.filter((a) => !a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0),
+          allowanceInsideCap: 0,
+          allowanceOnTop: old.reimbursementSummary?.greenTravelExtraEur || 0,
           maxReimbursement: maxAllowed,
           hasMultiPersonBooking: remaining.some((i: TravelItem) => (i.numberOfPassengers ?? 0) > 1),
         }).total;
@@ -1572,7 +1565,7 @@ function Step2CheckData({
           (s, i) => s + (i.amountEur || 0) + (i.luggageAmountEur || 0),
           0
         );
-        const allowancesEur = (data.allowances ?? []).reduce((s, a) => s + (a.amountEur || 0), 0);
+        const greenTravelExtraEur = data.reimbursementSummary?.greenTravelExtraEur || 0;
         // Route label: origin ⇄ turnaround for round trips, origin → destination otherwise
         const sorted = [...data.travelItems].sort(
           (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
@@ -1599,10 +1592,10 @@ function Step2CheckData({
                 {confirmedCount}/{totalItems} confirmed
               </span>
             </div>
-            <p className="text-4xl font-bold mt-2">{formatCurrency(totalEur + allowancesEur)}</p>
-            {allowancesEur > 0 && (
+            <p className="text-4xl font-bold mt-2">{formatCurrency(totalEur + greenTravelExtraEur)}</p>
+            {greenTravelExtraEur > 0 && (
               <p className="text-xs text-white/80 mt-1">
-                Travel {formatCurrency(totalEur)} + allowances {formatCurrency(allowancesEur)}
+                Travel {formatCurrency(totalEur)} + green travel extra {formatCurrency(greenTravelExtraEur)}
               </p>
             )}
             <div className="flex gap-1.5 mt-4">
@@ -1681,13 +1674,12 @@ function Step2CheckData({
             // Final slide: cost-breakdown "receipt"
             const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
             const max = data.maxReimbursementForCountry;
-            const allowanceLines = (data.allowances ?? []).filter((a) => a.rule.active && a.amountEur > 0);
-            const allowanceInside = allowanceLines.filter((a) => a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0);
-            const allowanceOnTop = allowanceLines.filter((a) => !a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0);
+            const greenExtra = data.greenTravelExtra;
+            const allowanceOnTop = greenExtra ? greenExtra.foodEur + greenExtra.accommodationEur : 0;
             const hasMultiPerson = data.travelItems.some((i) => (i.numberOfPassengers ?? 0) > 1);
             const payable = computePayable({
               travelEur: total,
-              allowanceInsideCap: allowanceInside,
+              allowanceInsideCap: 0,
               allowanceOnTop,
               maxReimbursement: max ?? 0,
               hasMultiPersonBooking: hasMultiPerson,
@@ -1720,26 +1712,30 @@ function Step2CheckData({
                       </div>
                     ))}
                   </div>
-                  {allowanceLines.length > 0 && (
+                  {greenExtra && allowanceOnTop > 0 && (
                     <div className="space-y-1.5 mb-3 pt-2 border-t border-dashed border-gray-200">
-                      {allowanceLines.map((a) => (
-                        <div key={a.id} className="flex justify-between gap-3 text-sm">
-                          <span className="text-gray-600 truncate min-w-0">
-                            {a.rule.name}
-                            <span className="text-gray-400">
-                              {a.rule.mode === 'PER_TRAVEL_DAY' && a.days != null ? ` · ${a.days} day${a.days === 1 ? '' : 's'}` : ' · receipts'}
-                              {!a.rule.countsTowardMax ? ' · on top' : ''}
-                            </span>
-                          </span>
-                          <span className="font-medium text-gray-900 whitespace-nowrap flex-shrink-0">{formatCurrency(a.amountEur)}</span>
+                      <p className="text-[11px] font-semibold tracking-wide uppercase text-emerald-700">
+                        Green travel extra · added by {data.project.organisation?.name || 'the organisation'}
+                      </p>
+                      {greenExtra.foodEur > 0 && (
+                        <div className="flex justify-between gap-3 text-sm">
+                          <span className="text-gray-600">Food</span>
+                          <span className="font-medium text-gray-900">{formatCurrency(greenExtra.foodEur)}</span>
                         </div>
-                      ))}
+                      )}
+                      {greenExtra.accommodationEur > 0 && (
+                        <div className="flex justify-between gap-3 text-sm">
+                          <span className="text-gray-600">Accommodation</span>
+                          <span className="font-medium text-gray-900">{formatCurrency(greenExtra.accommodationEur)}</span>
+                        </div>
+                      )}
+                      {greenExtra.note && <p className="text-xs text-gray-400 italic">“{greenExtra.note}”</p>}
                     </div>
                   )}
                   <div className="border-t border-gray-200 my-3" />
                   <div className="flex items-end justify-between gap-3">
                     <div>
-                      <p className="text-xs text-gray-500">{allowanceLines.length > 0 ? 'Travel costs' : 'Total travel costs'}</p>
+                      <p className="text-xs text-gray-500">{allowanceOnTop > 0 ? 'Travel costs' : 'Total travel costs'}</p>
                       <p className="text-xl font-bold text-gray-900">{formatCurrency(total)}</p>
                       {max != null && (
                         <p className="text-xs text-blue-600 font-medium mt-0.5">
@@ -1781,26 +1777,6 @@ function Step2CheckData({
             </Button>
           </CardContent>
         </Card>
-      )}
-
-      {/* Allowances — organisation-defined extras this participant qualifies for */}
-      {(data.allowanceRules?.length ?? 0) > 0 && (
-        <div>
-          <p className="text-base font-bold text-gray-900 mb-2 px-1">Allowances</p>
-          <div className="space-y-3">
-            {(data.allowanceRules ?? []).map((rule) => (
-              <AllowanceCard
-                key={rule.id}
-                token={token}
-                rule={rule}
-                allowance={(data.allowances ?? []).find((a) => a.ruleId === rule.id)}
-                documents={data.documents}
-                suggestedTravelDays={data.suggestedTravelDays ?? 0}
-                maxReimbursement={data.maxReimbursementForCountry}
-              />
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Add a trip manually (also links loose documents) */}
@@ -4065,11 +4041,11 @@ function Step3Confirm({
             <p className="text-4xl font-bold mt-1">
               {formatCurrency(data.reimbursementSummary?.amountToReimburse || 0)}
             </p>
-            {(data.reimbursementSummary?.allowancesEur || 0) > 0 ? (
+            {(data.reimbursementSummary?.greenTravelExtraEur || 0) > 0 ? (
               <p className="text-white/75 text-xs mt-2">
                 Travel {formatCurrency(data.reimbursementSummary?.totalEur || 0)}
                 {data.maxReimbursementForCountry ? ` (max ${formatCurrency(data.maxReimbursementForCountry)})` : ''}
-                {' '}+ allowances {formatCurrency(data.reimbursementSummary?.allowancesEur || 0)}
+                {' '}+ green travel extra {formatCurrency(data.reimbursementSummary?.greenTravelExtraEur || 0)}
               </p>
             ) : (data.reimbursementSummary?.totalEur || 0) !==
               (data.reimbursementSummary?.amountToReimburse || 0) && (

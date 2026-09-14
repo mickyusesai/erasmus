@@ -431,45 +431,6 @@ export const participantApi = {
     return handleResponse<{ noReimbursement: boolean }>(res);
   },
 
-  // Allowances (organisation-defined extras)
-  setAllowanceDays: async (token: string, ruleId: string, days: number | null) => {
-    const res = await fetch(`${API_BASE}/participant/allowances/${ruleId}?token=${token}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ days }),
-    });
-    return handleResponse<{ allowance: ParticipantAllowance }>(res);
-  },
-
-  addAllowanceReceipt: async (
-    token: string,
-    ruleId: string,
-    data: { documentId: string; amountOriginal?: number | null; currencyOriginal?: string }
-  ) => {
-    const res = await fetch(`${API_BASE}/participant/allowances/${ruleId}/receipts?token=${token}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return handleResponse<{ allowance: ParticipantAllowance }>(res);
-  },
-
-  updateAllowanceReceipt: async (token: string, receiptId: string, data: { amountOriginal: number | null; currencyOriginal?: string }) => {
-    const res = await fetch(`${API_BASE}/participant/allowances/receipts/${receiptId}?token=${token}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return handleResponse<{ allowance: ParticipantAllowance }>(res);
-  },
-
-  deleteAllowanceReceipt: async (token: string, receiptId: string) => {
-    const res = await fetch(`${API_BASE}/participant/allowances/receipts/${receiptId}?token=${token}`, {
-      method: 'DELETE',
-    });
-    return handleResponse<{ allowance: ParticipantAllowance }>(res);
-  },
-
   markComplete: async (token: string, body?: { greenTravelSignature?: string }) => {
     const res = await fetch(`${API_BASE}/participant/mark-complete?token=${token}`, {
       method: 'POST',
@@ -810,34 +771,20 @@ export const organisationApi = {
     return handleResponse<{ message: string; recalc: ProjectRecalcResult }>(res);
   },
 
-  // Allowance rules (per project)
-  getAllowanceRules: async (id: string) => {
-    const res = await fetch(`${API_BASE}/organisation/projects/${id}/allowance-rules`, {
-      headers: getOrgAuthHeaders(),
-    });
-    return handleResponse<{ rules: (AllowanceRule & { claimCount: number })[] }>(res);
-  },
-
-  updateAllowanceRules: async (id: string, rules: AllowanceRuleInput[]) => {
-    const res = await fetch(`${API_BASE}/organisation/projects/${id}/allowance-rules`, {
-      method: 'PUT',
-      headers: getOrgAuthHeaders(),
-      body: JSON.stringify({ rules }),
-    });
-    return handleResponse<{ message: string; rules: AllowanceRule[]; recalc: { participantsUpdated: number } }>(res);
-  },
-
-  updateParticipantAllowance: async (
+  // Organiser-decided green travel extra for one participant (emails the participant)
+  setGreenTravelExtra: async (
     participantId: string,
-    ruleId: string,
-    data: { days?: number | null; receipts?: { id: string; amountOriginal: number | null; currencyOriginal?: string }[] }
+    data: { foodEur: number | null; accommodationEur: number | null; note?: string | null }
   ) => {
-    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/allowances/${ruleId}`, {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/green-travel-extra`, {
       method: 'PATCH',
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ allowance: ParticipantAllowance }>(res);
+    return handleResponse<{
+      participant: { greenTravelFoodEur: number | null; greenTravelAccommodationEur: number | null; greenTravelExtraNote: string | null; greenTravelExtraUpdatedAt: string | null };
+      reimbursementSummary: ReimbursementSummary | null;
+    }>(res);
   },
 
   deleteProject: async (id: string) => {
@@ -1298,56 +1245,26 @@ export interface OrgProjectDetail extends OrgProject {
   participants: { id: string; firstName: string; lastName: string; email: string; country: string; status: string; createdAt: string }[];
 }
 
-// ---------------------------------------------------------------------------
-// Allowances (organisation-defined extras such as green-travel per diems)
-// ---------------------------------------------------------------------------
-export type AllowanceMode = 'PER_TRAVEL_DAY' | 'PER_RECEIPT';
-export type AllowanceAudience = 'ALL' | 'GREEN_TRAVEL';
-
-export interface AllowanceRuleInput {
-  id?: string;
-  name: string;
-  mode: AllowanceMode;
-  audience: AllowanceAudience;
-  amountPerDay?: number | null;
-  maxDays?: number | null;
-  capPerDay?: number | null;
-  capTotal?: number | null;
-  countsTowardMax: boolean;
-  receiptsRequired: boolean;
-  active: boolean;
-}
-
-export interface AllowanceRule extends AllowanceRuleInput {
-  id: string;
-  projectId: string;
-  sortOrder: number;
-}
-
-export interface AllowanceReceipt {
-  id: string;
-  allowanceId: string;
-  documentId: string;
-  amountOriginal: number | null;
-  currencyOriginal: string;
-  amountEur: number | null;
-  document: { id: string; renamedFilename: string; documentType: DocumentType; uploadDate: string };
-}
-
-export interface ParticipantAllowance {
-  id: string;
-  participantId: string;
-  ruleId: string;
-  days: number | null;
-  amountEur: number;
-  rule: AllowanceRule;
-  receipts: AllowanceReceipt[];
-}
-
 export interface GreenTravelDeclarationSummary {
   id: string;
   signedAt: string;
   documentId: string | null;
+}
+
+/** Organiser-decided green travel extra (food + accommodation), paid on top of the maximum */
+export interface GreenTravelExtra {
+  foodEur: number;
+  accommodationEur: number;
+  note: string | null;
+  updatedAt: string | null;
+}
+
+export interface GreenTravelSuggestion {
+  totalTravelDays: number;
+  extraTravelDays: number;
+  firstTravelDate: string | null;
+  lastTravelDate: string | null;
+  receipts: { id: string; renamedFilename: string; documentType: DocumentType; amount: number | null; currency: string | null; documentDate: string | null }[];
 }
 
 export interface OrgDashboardData {
@@ -1496,7 +1413,11 @@ export interface OrgParticipantDetail extends OrgParticipant {
   greenTravelOverride?: boolean | null;
   countryMaxReimbursement?: number;
   countryGreenTravel?: boolean;
-  allowances?: ParticipantAllowance[];
+  greenTravelFoodEur?: number | null;
+  greenTravelAccommodationEur?: number | null;
+  greenTravelExtraNote?: string | null;
+  greenTravelExtraUpdatedAt?: string | null;
+  greenTravelSuggestion?: GreenTravelSuggestion;
   greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
   project: {
     id: string;
@@ -1660,7 +1581,7 @@ export interface ReimbursementSummary {
   totalEur: number;
   maxReimbursementAllowed: number;
   amountToReimburse: number;
-  allowancesEur?: number;
+  greenTravelExtraEur?: number;
   adminNotes?: string;
   aiCheckOk: boolean;
   adminApproved: boolean;
@@ -1678,8 +1599,6 @@ export interface Document {
   uploadDate: string;
   documentType: DocumentType;
   ocrText?: string;
-  /** Present when the document is tagged as an allowance receipt */
-  allowanceReceipt?: { id: string; allowanceId: string } | null;
 }
 
 export type DocumentType =
@@ -1907,10 +1826,7 @@ export interface ParticipantAuthResponse {
   declarationsOfTravel?: DeclarationOfTravel[];
   maxReimbursementForCountry?: number;
   greenTravel?: boolean;
-  /** Rules that apply to this participant (audience already filtered) */
-  allowanceRules?: AllowanceRule[];
-  allowances?: ParticipantAllowance[];
-  suggestedTravelDays?: number;
+  greenTravelExtra?: GreenTravelExtra | null;
   greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
   requireGreenTravelDeclaration?: boolean;
   validation: ValidationResult;

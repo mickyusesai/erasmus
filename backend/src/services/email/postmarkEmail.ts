@@ -143,6 +143,23 @@ export class PostmarkEmailService implements EmailService {
     });
   }
 
+  async sendGreenTravelExtra(
+    to: string,
+    participantName: string,
+    projectName: string,
+    amounts: { foodEur: number; accommodationEur: number; note: string | null; newTotalEur: number },
+    magicLink: string,
+    ctx?: ProjectEmailContext
+  ): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.greenTravelExtraSubject(projectName, amounts),
+      text: templates.greenTravelExtraText(participantName, projectName, amounts, magicLink, ctx),
+      html: templates.greenTravelExtraHtml(participantName, projectName, amounts, magicLink, ctx),
+      ...senderFor(ctx),
+    });
+  }
+
   async sendCreditPurchase(to: string, organisationName: string, credits: number, totalCredits: number, dashboardUrl: string, invoiceUrl?: string | null): Promise<EmailResult> {
     return this.send({
       to,

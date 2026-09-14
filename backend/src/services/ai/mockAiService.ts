@@ -10,7 +10,6 @@ import {
 import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
-import { refreshParticipantAllowances } from '../allowances/index.js';
 
 /**
  * Mock AI Service for development
@@ -307,20 +306,21 @@ export class MockAiService implements TravelDocumentAiService {
     }
 
     // Applicable maximum: individual override, else the participant's country limit
-    const effectiveLimit = getEffectiveLimit(participant, participant.project.countryLimits);
-    const maxReimbursementAllowed = effectiveLimit.maxReimbursement;
+    const maxReimbursementAllowed = getEffectiveLimit(participant, participant.project.countryLimits).maxReimbursement;
 
     const hasMultiPersonBooking = participant.travelItems.some(
       (item) => item.numberOfPassengers !== null && item.numberOfPassengers > 1
     );
 
-    // Same pipeline as the real service: allowances + shared formula
-    const allowances = await refreshParticipantAllowances(participantId, effectiveLimit.greenTravel);
-    const allowancesEur = allowances.total;
+    // Organiser-decided green travel extra (food + accommodation), paid on top of the cap
+    const greenTravelExtraEur =
+      Math.round(((participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0)) * 100) / 100;
+
+    // Single shared formula (see utils/reimbursementMath.ts)
     const amountToReimburse = computePayable({
       travelEur: totalEur,
-      allowanceInsideCap: allowances.insideCap,
-      allowanceOnTop: allowances.onTop,
+      allowanceInsideCap: 0,
+      allowanceOnTop: greenTravelExtraEur,
       maxReimbursement: maxReimbursementAllowed,
       hasMultiPersonBooking,
     }).total;
@@ -336,14 +336,14 @@ export class MockAiService implements TravelDocumentAiService {
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
-        allowancesEur,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
       update: {
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
-        allowancesEur,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
     });

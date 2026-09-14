@@ -135,6 +135,19 @@ export interface EmailService {
   ): Promise<EmailResult>;
 
   /**
+   * Notify a participant that the organisation added (or removed) a green
+   * travel extra (food / accommodation) to their reimbursement
+   */
+  sendGreenTravelExtra(
+    to: string,
+    participantName: string,
+    projectName: string,
+    amounts: { foodEur: number; accommodationEur: number; note: string | null; newTotalEur: number },
+    magicLink: string,
+    ctx?: ProjectEmailContext
+  ): Promise<EmailResult>;
+
+  /**
    * Send a credit purchase confirmation email to an organisation
    */
   sendCreditPurchase(

@@ -12,7 +12,7 @@ import { getStorageService } from '../../services/storage/index.js';
 import { generateAuditPdf } from '../../services/pdf/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
-import { allowancesInclude, serializeAllowancesForReview, ruleAppliesTo } from '../../services/allowances/index.js';
+import { summarizeTravelDays } from '../../utils/travelDays.js';
 import archiver from 'archiver';
 import multer from 'multer';
 
@@ -1090,14 +1090,13 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
     where: { id: participantId },
     include: {
       project: true,
-      documents: true,
+      documents: { include: { extraction: { select: { amount: true, currency: true, documentDate: true } } } },
       travelItems: {
         orderBy: { departureDate: 'asc' },
       },
       declarationsOnHonor: true,
       declarationsOfTravel: true,
       reimbursementSummary: true,
-      allowances: allowancesInclude,
       greenTravelDeclaration: true,
       changeLogEntries: {
         orderBy: { changedAt: 'desc' },
@@ -1123,6 +1122,22 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
   });
   const effectiveLimit = getEffectiveLimit(participant, countryLimit);
 
+  // Helps the organiser decide a green travel extra: days travelled + hotel/meal receipts
+  const travelDays = summarizeTravelDays(participant.travelItems, participant.project.startDate, participant.project.endDate);
+  const greenTravelSuggestion = {
+    ...travelDays,
+    receipts: participant.documents
+      .filter((d) => d.documentType === 'HOTEL_INVOICE' || d.documentType === 'MEAL_RECEIPT')
+      .map((d) => ({
+        id: d.id,
+        renamedFilename: d.renamedFilename,
+        documentType: d.documentType,
+        amount: d.extraction?.amount ?? null,
+        currency: d.extraction?.currency ?? null,
+        documentDate: d.extraction?.documentDate ?? null,
+      })),
+  };
+
   res.json({
     participant: {
       ...participant,
@@ -1131,7 +1146,97 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
       greenTravel: effectiveLimit.greenTravel,
       countryMaxReimbursement: effectiveLimit.countryMax,
       countryGreenTravel: effectiveLimit.countryGreen,
+      greenTravelSuggestion,
     },
+  });
+}));
+
+/**
+ * PATCH /api/organisation/participants/:id/green-travel-extra
+ * The organiser decides the green travel extra (food + accommodation) for a
+ * participant. Always paid on top of the maximum; allowed at any stage except
+ * PAID; the participant is emailed when an amount changes.
+ */
+const greenTravelExtraSchema = z.object({
+  foodEur: z.number().min(0).nullable(),
+  accommodationEur: z.number().min(0).nullable(),
+  note: z.string().max(500).nullish(),
+});
+
+router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+  if (!participant) throw new NotFoundError('Participant not found');
+  if (participant.project.organisationId !== org.id) throw new ForbiddenError('Access denied');
+  if (participant.status === 'PAID') throw new ForbiddenError('This participant has already been paid');
+
+  const result = greenTravelExtraSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+
+  const food = result.data.foodEur == null ? null : Math.round(result.data.foodEur * 100) / 100;
+  const accommodation = result.data.accommodationEur == null ? null : Math.round(result.data.accommodationEur * 100) / 100;
+  const note = result.data.note?.trim() || null;
+  const foodChanged = (food ?? 0) !== (participant.greenTravelFoodEur ?? 0);
+  const accommodationChanged = (accommodation ?? 0) !== (participant.greenTravelAccommodationEur ?? 0);
+
+  const updated = await prisma.participant.update({
+    where: { id: participantId },
+    data: {
+      greenTravelFoodEur: food,
+      greenTravelAccommodationEur: accommodation,
+      greenTravelExtraNote: note,
+      greenTravelExtraUpdatedAt: new Date(),
+    },
+  });
+
+  for (const [field, changed, before, after] of [
+    ['food', foodChanged, participant.greenTravelFoodEur, food],
+    ['accommodation', accommodationChanged, participant.greenTravelAccommodationEur, accommodation],
+  ] as const) {
+    if (!changed) continue;
+    await prisma.changeLogEntry.create({
+      data: {
+        participantId,
+        userType: 'ORGANISATION',
+        fieldName: `greenTravelExtra.${field}`,
+        previousValue: String(before ?? ''),
+        newValue: String(after ?? ''),
+      },
+    });
+  }
+
+  const { getAiService } = await import('../../services/ai/index.js');
+  await getAiService().recalculateParticipantSummary(participantId);
+  const summary = await prisma.reimbursementSummary.findUnique({ where: { participantId } });
+
+  if (foodChanged || accommodationChanged) {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+    getEmailService()
+      .sendGreenTravelExtra(
+        participant.email,
+        participant.firstName,
+        participant.project.name,
+        { foodEur: food ?? 0, accommodationEur: accommodation ?? 0, note, newTotalEur: summary?.amountToReimburse ?? 0 },
+        magicLink,
+        await projectEmailContext(participant.project)
+      )
+      .catch((err: unknown) => console.error('[Email] Failed to send green travel extra notification:', err));
+  }
+
+  res.json({
+    participant: {
+      greenTravelFoodEur: updated.greenTravelFoodEur,
+      greenTravelAccommodationEur: updated.greenTravelAccommodationEur,
+      greenTravelExtraNote: updated.greenTravelExtraNote,
+      greenTravelExtraUpdatedAt: updated.greenTravelExtraUpdatedAt,
+    },
+    reimbursementSummary: summary,
   });
 }));
 
@@ -1258,7 +1363,6 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       declarationsOnHonor: true,
       declarationsOfTravel: true,
       reimbursementSummary: true,
-      allowances: allowancesInclude,
       changeLogEntries: { orderBy: { changedAt: 'desc' }, take: 50 },
     },
   });
@@ -1303,7 +1407,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     projectEndDate: participant.project.endDate.toISOString().split('T')[0],
     maxReimbursementForCountry: effectiveLimit.maxReimbursement,
     greenTravel: effectiveLimit.greenTravel,
-    allowances: serializeAllowancesForReview(participant.allowances),
+    greenTravelExtra: { foodEur: participant.greenTravelFoodEur, accommodationEur: participant.greenTravelAccommodationEur, note: participant.greenTravelExtraNote },
     travelItems: participant.travelItems.map((item) => ({
       id: item.id,
       modeOfTransport: item.modeOfTransport,
@@ -2512,195 +2616,6 @@ router.delete('/projects/:id/country-limits/:country', ensureOwnProject, asyncHa
   res.json({ success: true });
 }));
 
-// =============================================================================
-// ALLOWANCE RULES (per project) + participant allowance corrections
-// =============================================================================
-
-const allowanceRuleSchema = z.object({
-  id: z.string().uuid().optional(),
-  name: z.string().min(1).max(80),
-  mode: z.enum(['PER_TRAVEL_DAY', 'PER_RECEIPT']),
-  audience: z.enum(['ALL', 'GREEN_TRAVEL']).default('GREEN_TRAVEL'),
-  amountPerDay: z.number().min(0).nullish(),
-  maxDays: z.number().int().min(0).max(30).nullish(),
-  capPerDay: z.number().min(0).nullish(),
-  capTotal: z.number().min(0).nullish(),
-  countsTowardMax: z.boolean().default(false),
-  receiptsRequired: z.boolean().default(false),
-  active: z.boolean().default(true),
-});
-const allowanceRulesSchema = z.object({ rules: z.array(allowanceRuleSchema).max(20) });
-
-/** Recalculate every participant of a project who is not yet approved/paid */
-async function recalculateOpenParticipants(projectId: string): Promise<number> {
-  const participants = await prisma.participant.findMany({
-    where: { projectId, status: { in: ['DRAFT', 'PARTICIPANT_COMPLETE'] } },
-    select: { id: true },
-  });
-  const { getAiService } = await import('../../services/ai/index.js');
-  const aiService = getAiService();
-  for (const p of participants) {
-    await aiService.recalculateParticipantSummary(p.id);
-  }
-  return participants.length;
-}
-
-/**
- * GET /api/organisation/projects/:id/allowance-rules
- */
-router.get('/projects/:id/allowance-rules', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
-  const rules = await prisma.projectAllowanceRule.findMany({
-    where: { projectId: req.params.id },
-    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-    include: { _count: { select: { participantAllowances: true } } },
-  });
-  res.json({
-    rules: rules.map(({ _count, ...r }) => ({ ...r, claimCount: _count.participantAllowances })),
-  });
-}));
-
-/**
- * PUT /api/organisation/projects/:id/allowance-rules
- * Replace the project's rule set. Rules omitted from the payload are deleted
- * when nobody has claimed them, otherwise deactivated (claims are kept).
- */
-router.put('/projects/:id/allowance-rules', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
-  const projectId = req.params.id;
-  const result = allowanceRulesSchema.safeParse(req.body);
-  if (!result.success) throw new ValidationError(result.error.errors[0].message);
-
-  for (const r of result.data.rules) {
-    if (r.mode === 'PER_TRAVEL_DAY' && (r.amountPerDay == null || r.amountPerDay <= 0)) {
-      throw new ValidationError(`"${r.name}": an amount per day is required`);
-    }
-  }
-
-  const existing = await prisma.projectAllowanceRule.findMany({
-    where: { projectId },
-    include: { _count: { select: { participantAllowances: true } } },
-  });
-  const keptIds = new Set(result.data.rules.map((r) => r.id).filter((id): id is string => !!id));
-
-  await prisma.$transaction(async (tx) => {
-    for (const old of existing) {
-      if (keptIds.has(old.id)) continue;
-      if (old._count.participantAllowances > 0) {
-        await tx.projectAllowanceRule.update({ where: { id: old.id }, data: { active: false } });
-      } else {
-        await tx.projectAllowanceRule.delete({ where: { id: old.id } });
-      }
-    }
-    let order = 0;
-    for (const r of result.data.rules) {
-      const data = {
-        name: r.name.trim(),
-        mode: r.mode,
-        audience: r.audience,
-        amountPerDay: r.mode === 'PER_TRAVEL_DAY' ? r.amountPerDay ?? null : null,
-        maxDays: r.maxDays ?? 4,
-        capPerDay: r.mode === 'PER_RECEIPT' ? r.capPerDay ?? null : null,
-        capTotal: r.mode === 'PER_RECEIPT' ? r.capTotal ?? null : null,
-        countsTowardMax: r.countsTowardMax,
-        receiptsRequired: r.receiptsRequired,
-        active: r.active,
-        sortOrder: order++,
-      };
-      if (r.id && existing.some((e) => e.id === r.id)) {
-        await tx.projectAllowanceRule.update({ where: { id: r.id }, data });
-      } else {
-        await tx.projectAllowanceRule.create({ data: { ...data, projectId } });
-      }
-    }
-  });
-
-  const participantsUpdated = await recalculateOpenParticipants(projectId);
-  const rules = await prisma.projectAllowanceRule.findMany({
-    where: { projectId },
-    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-  });
-  res.json({ message: 'Allowance rules saved', rules, recalc: { participantsUpdated } });
-}));
-
-/**
- * PATCH /api/organisation/participants/:id/allowances/:ruleId
- * Organisation correction of a participant's allowance line (days / receipt amounts)
- */
-const orgAllowanceUpdateSchema = z.object({
-  days: z.number().int().min(0).nullish(),
-  receipts: z.array(z.object({
-    id: z.string().uuid(),
-    amountOriginal: z.number().min(0).nullable(),
-    currencyOriginal: z.string().min(3).max(3).optional(),
-  })).optional(),
-});
-
-router.patch('/participants/:id/allowances/:ruleId', asyncHandler(async (req: Request, res: Response) => {
-  const org = req.organisation!;
-  const { id: participantId, ruleId } = req.params;
-
-  const participant = await prisma.participant.findUnique({
-    where: { id: participantId },
-    include: { project: true },
-  });
-  if (!participant) throw new NotFoundError('Participant not found');
-  if (participant.project.organisationId !== org.id) throw new ForbiddenError('Access denied');
-
-  const result = orgAllowanceUpdateSchema.safeParse(req.body);
-  if (!result.success) throw new ValidationError(result.error.errors[0].message);
-
-  const rule = await prisma.projectAllowanceRule.findFirst({ where: { id: ruleId, projectId: participant.projectId } });
-  if (!rule) throw new NotFoundError('Allowance rule not found');
-
-  const line = await prisma.participantAllowance.upsert({
-    where: { participantId_ruleId: { participantId, ruleId } },
-    create: { participantId, ruleId, days: result.data.days ?? null },
-    update: result.data.days !== undefined ? { days: result.data.days } : {},
-    include: { receipts: true },
-  });
-
-  if (result.data.days !== undefined) {
-    await prisma.changeLogEntry.create({
-      data: {
-        participantId,
-        userType: 'ORGANISATION',
-        fieldName: `allowance.${rule.name}.days`,
-        previousValue: String(line.days ?? ''),
-        newValue: String(result.data.days ?? ''),
-      },
-    });
-  }
-
-  for (const r of result.data.receipts || []) {
-    const receipt = line.receipts.find((x) => x.id === r.id);
-    if (!receipt) continue;
-    const currency = (r.currencyOriginal || receipt.currencyOriginal).toUpperCase();
-    const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
-    const amountEur = r.amountOriginal == null ? null : await convertToEurForParticipant(participantId, r.amountOriginal, currency, null);
-    await prisma.participantAllowanceReceipt.update({
-      where: { id: r.id },
-      data: { amountOriginal: r.amountOriginal, currencyOriginal: currency, amountEur },
-    });
-    await prisma.changeLogEntry.create({
-      data: {
-        participantId,
-        userType: 'ORGANISATION',
-        fieldName: `allowance.${rule.name}.receipt`,
-        previousValue: String(receipt.amountOriginal ?? ''),
-        newValue: String(r.amountOriginal ?? ''),
-      },
-    });
-  }
-
-  const { getAiService } = await import('../../services/ai/index.js');
-  await getAiService().recalculateParticipantSummary(participantId);
-
-  const updated = await prisma.participantAllowance.findUnique({
-    where: { id: line.id },
-    ...allowancesInclude,
-  });
-  res.json({ allowance: updated });
-}));
-
 /**
  * GET /api/organisation/projects/:id/export/csv
  * Export project participants to CSV
@@ -2733,7 +2648,7 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
     'Reimbursement Status',
     'Reimbursement Amount (EUR)',
     'Travel (EUR)',
-    'Allowances (EUR)',
+    'Green travel extra (EUR)',
   ];
 
   const rows = project.participants.map((p: any) => [
@@ -2744,7 +2659,7 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
     p.status,
     p.reimbursementSummary?.amountToReimburse ?? '',
     p.reimbursementSummary?.totalEur ?? '',
-    p.reimbursementSummary?.allowancesEur ?? '',
+    p.reimbursementSummary?.greenTravelExtraEur ?? '',
   ]);
 
   const csvContent = [

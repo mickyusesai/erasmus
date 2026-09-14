@@ -156,21 +156,6 @@ export async function recalculateProjectExchangeRates(projectId: string): Promis
       }
     }
 
-    // Allowance receipts in foreign currency follow the same project rate config
-    const receipts = await prisma.participantAllowanceReceipt.findMany({
-      where: { allowance: { participantId: participant.id }, NOT: { currencyOriginal: 'EUR' } },
-      include: { document: { select: { extraction: { select: { documentDate: true } } } } },
-    });
-    for (const receipt of receipts) {
-      if (receipt.amountOriginal == null) continue;
-      const rate = await getEffectiveRate(rateConfig, currencyRates, receipt.currencyOriginal.toUpperCase(), receipt.document.extraction?.documentDate ?? null);
-      const newEur = Math.round(receipt.amountOriginal * rate * 100) / 100;
-      if (newEur !== receipt.amountEur) {
-        await prisma.participantAllowanceReceipt.update({ where: { id: receipt.id }, data: { amountEur: newEur } });
-        participantTouched = true;
-      }
-    }
-
     // Refresh the summary for every non-paid participant (totals may shift even
     // if a specific item didn't, e.g. a previously-failed conversion now resolves).
     await aiService.recalculateParticipantSummary(participant.id);

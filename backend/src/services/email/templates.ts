@@ -608,3 +608,65 @@ export function projectEndedHtml(participantName: string, projectName: string, m
     <p>If you have any questions, please contact your project team.</p>
   `, ctx);
 }
+
+// =============================================================================
+// GREEN TRAVEL EXTRA (organiser added food/accommodation budget)
+// =============================================================================
+
+export interface GreenTravelExtraAmounts {
+  foodEur: number;
+  accommodationEur: number;
+  note: string | null;
+  newTotalEur: number;
+}
+
+const eur = (n: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(n);
+
+export function greenTravelExtraSubject(projectName: string, amounts: GreenTravelExtraAmounts): string {
+  const removed = amounts.foodEur + amounts.accommodationEur <= 0;
+  return removed
+    ? `Green travel extra removed – ${projectName}`
+    : `Extra green travel budget added to your reimbursement – ${projectName}`;
+}
+
+export function greenTravelExtraText(participantName: string, projectName: string, amounts: GreenTravelExtraAmounts, magicLink: string, ctx?: ProjectEmailContext): string {
+  const removed = amounts.foodEur + amounts.accommodationEur <= 0;
+  const who = ctx?.organisationName || 'The project team';
+  return `Hello ${participantName},
+
+${removed
+  ? `${who} has removed the green travel extra from your reimbursement for "${projectName}".`
+  : `${who} has added an extra green travel budget to your reimbursement for "${projectName}", because you travelled sustainably:
+
+- Food: ${eur(amounts.foodEur)}
+- Accommodation: ${eur(amounts.accommodationEur)}`}
+${amounts.note ? `\nNote from ${who}: ${amounts.note}\n` : ''}
+Your reimbursement total is now ${eur(amounts.newTotalEur)}.
+
+You can see the details on your reimbursement page:
+${magicLink}
+
+Best regards,
+${who}
+
+---
+${textFooter(ctx)}`;
+}
+
+export function greenTravelExtraHtml(participantName: string, projectName: string, amounts: GreenTravelExtraAmounts, magicLink: string, ctx?: ProjectEmailContext): string {
+  const removed = amounts.foodEur + amounts.accommodationEur <= 0;
+  const who = escapeHtml(ctx?.organisationName || 'The project team');
+  return wrapInLayout(`
+    <p>Hello <strong>${participantName}</strong>,</p>
+    ${removed
+      ? `<p>${who} has removed the green travel extra from your reimbursement for "${escapeHtml(projectName)}".</p>`
+      : `${successBox(`${who} has added an <strong>extra green travel budget</strong> to your reimbursement for "${escapeHtml(projectName)}", because you travelled sustainably.`)}
+    <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
+      <tr><td style="padding: 6px 0; color: #374151;">Food</td><td style="padding: 6px 0; text-align: right; font-weight: 600;">${eur(amounts.foodEur)}</td></tr>
+      <tr><td style="padding: 6px 0; color: #374151;">Accommodation</td><td style="padding: 6px 0; text-align: right; font-weight: 600;">${eur(amounts.accommodationEur)}</td></tr>
+    </table>`}
+    ${amounts.note ? infoBox(`<strong>Note from ${who}:</strong> ${escapeHtml(amounts.note)}`) : ''}
+    <p>Your reimbursement total is now <strong>${eur(amounts.newTotalEur)}</strong>.</p>
+    ${button(magicLink, 'View my reimbursement')}
+  `, ctx);
+}

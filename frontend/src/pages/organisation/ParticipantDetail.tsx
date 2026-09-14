@@ -41,9 +41,10 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, ParticipantAllowance, type OrgParticipantDetail as OrgParticipantDetailData } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, type OrgParticipantDetail as OrgParticipantDetailData } from '../../services/api';
 import { clsx } from 'clsx';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -565,8 +566,8 @@ export default function OrgParticipantDetail() {
                 <div>
                   <p className="text-white/70 text-sm">To Reimburse</p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(summary?.amountToReimburse || 0)}</p>
-                  {(summary?.allowancesEur || 0) > 0 && (
-                    <p className="text-white/70 text-xs">incl. {formatCurrency(summary?.allowancesEur || 0)} allowances</p>
+                  {(summary?.greenTravelExtraEur || 0) > 0 && (
+                    <p className="text-white/70 text-xs">incl. {formatCurrency(summary?.greenTravelExtraEur || 0)} green travel extra</p>
                   )}
                 </div>
                 <div>
@@ -593,14 +594,8 @@ export default function OrgParticipantDetail() {
             onSave={(data) => updateLimitOverrideMutation.mutate(data)}
           />
 
-          {/* ── Allowances claimed (organisation-defined extras) ── */}
-          {(participant.allowances?.length ?? 0) > 0 && (
-            <OrgAllowancesCard
-              participantId={participant.id}
-              allowances={participant.allowances ?? []}
-              greenDeclarationSignedAt={participant.greenTravelDeclaration?.signedAt ?? null}
-            />
-          )}
+          {/* ── Green travel extra (decided by the organiser) ── */}
+          <GreenTravelExtraCard participant={participant} />
 
           {/* ── Two Column Layout ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1927,102 +1922,106 @@ function IndividualLimitCard({
 }
 
 /**
- * The participant's allowance lines with organisation corrections (days,
- * receipt amounts). Every change is logged and recalculates the summary.
+ * The organiser decides the green travel extra (food + accommodation) for this
+ * participant. Highlighted with a suggestion for green travellers; allowed at
+ * every stage except PAID; saving emails the participant.
  */
-function OrgAllowancesCard({
-  participantId,
-  allowances,
-  greenDeclarationSignedAt,
-}: {
-  participantId: string;
-  allowances: ParticipantAllowance[];
-  greenDeclarationSignedAt: string | null;
-}) {
+function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDetailData }) {
   const queryClient = useQueryClient();
+  const [food, setFood] = useState(participant.greenTravelFoodEur != null ? String(participant.greenTravelFoodEur) : '');
+  const [accommodation, setAccommodation] = useState(participant.greenTravelAccommodationEur != null ? String(participant.greenTravelAccommodationEur) : '');
+  const [note, setNote] = useState(participant.greenTravelExtraNote || '');
+  useEffect(() => {
+    setFood(participant.greenTravelFoodEur != null ? String(participant.greenTravelFoodEur) : '');
+    setAccommodation(participant.greenTravelAccommodationEur != null ? String(participant.greenTravelAccommodationEur) : '');
+    setNote(participant.greenTravelExtraNote || '');
+  }, [participant.greenTravelFoodEur, participant.greenTravelAccommodationEur, participant.greenTravelExtraNote]);
+
   const mutation = useMutation({
-    mutationFn: ({ ruleId, data }: { ruleId: string; data: { days?: number | null; receipts?: { id: string; amountOriginal: number | null }[] } }) =>
-      organisationApi.updateParticipantAllowance(participantId, ruleId, data),
+    mutationFn: () =>
+      organisationApi.setGreenTravelExtra(participant.id, {
+        foodEur: food.trim() === '' ? null : parseFloat(food),
+        accommodationEur: accommodation.trim() === '' ? null : parseFloat(accommodation),
+        note: note.trim() || null,
+      }),
     onSuccess: () => {
-      toast.success('Allowance updated');
-      queryClient.invalidateQueries({ queryKey: ['org-participant', participantId] });
+      toast.success('Green travel extra saved — the participant has been notified');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', participant.id] });
+      if (participant.project?.id) queryClient.invalidateQueries({ queryKey: ['org-participants', participant.project.id] });
     },
-    onError: (err: Error) => toast.error(err.message || 'Failed to update allowance'),
+    onError: (err: Error) => toast.error(err.message || 'Failed to save'),
   });
 
-  const active = allowances.filter((a) => a.rule.active);
-  if (active.length === 0 && !greenDeclarationSignedAt) return null;
+  const isPaid = participant.status === 'PAID';
+  const isGreen = !!participant.greenTravel;
+  const s = participant.greenTravelSuggestion;
+  const current = (participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0);
+  const parsedFood = food.trim() === '' ? 0 : parseFloat(food);
+  const parsedAcc = accommodation.trim() === '' ? 0 : parseFloat(accommodation);
+  const invalid = isNaN(parsedFood) || isNaN(parsedAcc) || parsedFood < 0 || parsedAcc < 0;
+  const dirty =
+    parsedFood !== (participant.greenTravelFoodEur ?? 0) ||
+    parsedAcc !== (participant.greenTravelAccommodationEur ?? 0) ||
+    (note.trim() || '') !== (participant.greenTravelExtraNote || '');
+
+  const handleSave = () => {
+    if (invalid) { toast.error('Amounts must be numbers of 0 or more'); return; }
+    if (window.confirm(`Save a green travel extra of ${formatCurrency(parsedFood + parsedAcc)}? The participant will receive an email.`)) {
+      mutation.mutate();
+    }
+  };
 
   return (
-    <Card>
-      <CardContent className="p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <p className="font-semibold text-gray-900">Allowances</p>
-          {greenDeclarationSignedAt && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-              Green travel declaration signed {formatDate(greenDeclarationSignedAt)}
-            </span>
+    <Card className={isGreen ? 'border-emerald-200' : undefined}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <p className="font-semibold text-gray-900">
+              Green travel extra
+              {isGreen && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Green traveller</span>}
+              {participant.greenTravelDeclaration?.signedAt && (
+                <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Declaration signed {formatDate(participant.greenTravelDeclaration.signedAt)}</span>
+              )}
+            </p>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Food and accommodation budget you add on top of the travel maximum. You decide the amount; the participant is emailed.
+            </p>
+          </div>
+          {current > 0 && participant.greenTravelExtraUpdatedAt && (
+            <p className="text-xs text-gray-400">Set {formatDate(participant.greenTravelExtraUpdatedAt)} · {formatCurrency(current)}</p>
           )}
         </div>
-        {active.map((a) => (
-          <div key={a.id} className="p-3 bg-gray-50 rounded-xl">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="font-medium text-gray-900">{a.rule.name}</p>
-                <p className="text-xs text-gray-500">
-                  {a.rule.mode === 'PER_TRAVEL_DAY'
-                    ? `${formatCurrency(a.rule.amountPerDay ?? 0)} per day · max ${a.rule.maxDays ?? '—'} days`
-                    : 'Receipts'}
-                  {' · '}{a.rule.countsTowardMax ? 'within max' : 'on top of max'}
-                </p>
-              </div>
-              <div className="flex items-center gap-3 flex-shrink-0">
-                {(a.rule.mode === 'PER_TRAVEL_DAY' || a.rule.capPerDay != null) && (
-                  <label className="text-xs text-gray-500 flex items-center gap-1">
-                    Days
-                    <input
-                      type="number"
-                      min="0"
-                      defaultValue={a.days ?? 0}
-                      onBlur={(e) => {
-                        const v = parseInt(e.target.value, 10);
-                        if (!isNaN(v) && v !== (a.days ?? 0)) mutation.mutate({ ruleId: a.ruleId, data: { days: v } });
-                      }}
-                      disabled={mutation.isPending}
-                      className="w-14 px-2 py-1 rounded border border-gray-200 text-sm text-right"
-                    />
-                  </label>
-                )}
-                <p className="font-bold text-gray-900">{formatCurrency(a.amountEur)}</p>
-              </div>
-            </div>
-            {a.receipts.length > 0 && (
-              <ul className="mt-2 space-y-1">
-                {a.receipts.map((r) => (
-                  <li key={r.id} className="flex items-center gap-2 text-xs text-gray-600">
-                    <span className="truncate flex-1">{r.document.renamedFilename}</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      defaultValue={r.amountOriginal ?? ''}
-                      onBlur={(e) => {
-                        const v = e.target.value.trim() === '' ? null : parseFloat(e.target.value);
-                        if (v !== r.amountOriginal && !(v != null && isNaN(v))) {
-                          mutation.mutate({ ruleId: a.ruleId, data: { receipts: [{ id: r.id, amountOriginal: v }] } });
-                        }
-                      }}
-                      disabled={mutation.isPending}
-                      className="w-20 px-2 py-1 rounded border border-gray-200 text-right"
-                    />
-                    <span className="w-10">{r.currencyOriginal}</span>
-                    {r.amountEur != null && r.currencyOriginal !== 'EUR' && <span className="text-gray-400">= {formatCurrency(r.amountEur)}</span>}
-                  </li>
-                ))}
-              </ul>
-            )}
+
+        {isGreen && s && (
+          <div className="mt-3 p-3 rounded-xl bg-emerald-50 text-sm text-emerald-900">
+            <p>
+              Travelled <strong>{s.totalTravelDays} day{s.totalTravelDays === 1 ? '' : 's'}</strong> in total
+              {s.firstTravelDate && s.lastTravelDate && ` (${formatDate(s.firstTravelDate)} → ${formatDate(s.lastTravelDate)})`},
+              {' '}<strong>{s.extraTravelDays}</strong> beyond the project dates.
+            </p>
+            <p className="mt-1">
+              Receipts uploaded:{' '}
+              {s.receipts.length === 0
+                ? 'none'
+                : s.receipts.map((r) => `${r.documentType === 'HOTEL_INVOICE' ? 'hotel' : 'meal'} ${r.amount != null ? `${r.amount.toFixed(2)} ${r.currency || ''}`.trim() : '(amount unclear)'}`).join(', ')}
+            </p>
+            <p className="mt-1 text-emerald-700">Fill in the total amount for green travel you wish to add to their reimbursement.</p>
           </div>
-        ))}
+        )}
+
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Input label="Food (€)" type="number" min="0" step="0.01" value={food} onChange={(e) => setFood(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
+          <Input label="Accommodation (€)" type="number" min="0" step="0.01" value={accommodation} onChange={(e) => setAccommodation(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
+          <Input label="Note to participant (optional)" value={note} onChange={(e) => setNote(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="e.g. 2 nights, as agreed" />
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-gray-400">
+            {isPaid ? 'This participant has been paid — the extra can no longer be changed.' : `Total extra: ${formatCurrency(invalid ? 0 : parsedFood + parsedAcc)}`}
+          </p>
+          <Button size="sm" onClick={handleSave} loading={mutation.isPending} disabled={isPaid || !dirty || invalid}>
+            Save & notify participant
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

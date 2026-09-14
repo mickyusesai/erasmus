@@ -162,7 +162,6 @@ model Project {
   participants             Participant[]
   disseminationActivities  DisseminationActivity[]
   currencyRates            ProjectCurrencyRate[]
-  allowanceRules           ProjectAllowanceRule[]
 }
 
 // Per-project manual exchange rate override for a specific currency
@@ -224,6 +223,11 @@ model Participant {
   // Individual limit overrides set by the organisation (null = use the country limit)
   maxReimbursementOverride  Float?                  // Individual maximum in EUR
   greenTravelOverride       Boolean?                // Individual green-travel status
+  // Green travel extra decided by the organisation (food + accommodation), always on top of the maximum
+  greenTravelFoodEur          Float?
+  greenTravelAccommodationEur Float?
+  greenTravelExtraNote        String?
+  greenTravelExtraUpdatedAt   DateTime?
   aiReviewStatus            AiReviewStatus          @default(NOT_STARTED)  // Status of background AI review after submission
   tokenExpiresAt            DateTime?               // Magic link expiry (set to project.endDate + 180 days on creation)
   reopenedAt                DateTime?               // When the reimbursement was last reopened by the organisation
@@ -240,7 +244,6 @@ model Participant {
   socialMediaPosts          SocialMediaPost[]
   declarationsOfTravel      DeclarationOfTravel[]
   aiReviewFindings          AiReviewFinding[]
-  allowances                ParticipantAllowance[]
   greenTravelDeclaration    GreenTravelDeclaration?
 }
 
@@ -275,7 +278,6 @@ model Document {
   updatedAt        DateTime            @updatedAt
   travelItems      TravelItem[]
   extraction       DocumentExtraction?
-  allowanceReceipt ParticipantAllowanceReceipt?
 }
 
 // DocumentExtraction - raw AI-extracted data from a document (before consolidation)
@@ -465,7 +467,7 @@ model ReimbursementSummary {
   totalEur                    Float       @default(0)
   maxReimbursementAllowed     Float       @default(0)
   amountToReimburse           Float       @default(0)   // all-in payable amount (travel after cap + allowances)
-  allowancesEur               Float       @default(0)   // Σ allowance lines after their own caps (0 = no rules)
+  greenTravelExtraEur         Float       @default(0)   // organiser-decided green travel extra (food + accommodation), paid on top of the cap
   adminNotes                  String?
   aiCheckOk                   Boolean     @default(false)
   adminApproved               Boolean     @default(false)
@@ -674,70 +676,6 @@ model DeclarationOfTravel {
   generatedPdfPath        String?
 
   createdAt               DateTime    @default(now())
-}
-
-// =============================================================================
-// ALLOWANCES (per-project rules for extras such as green-travel per diems)
-// =============================================================================
-
-enum AllowanceMode {
-  PER_TRAVEL_DAY   // amountPerDay × days (max maxDays)
-  PER_RECEIPT      // sum of tagged receipts, optionally capped
-}
-
-enum AllowanceAudience {
-  ALL
-  GREEN_TRAVEL     // only participants whose effective green-travel status is true
-}
-
-// An organisation-defined allowance rule. Projects with no rules behave exactly as before.
-model ProjectAllowanceRule {
-  id               String            @id @default(uuid())
-  projectId        String
-  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name             String                                // "Food during travel", "Accommodation"
-  mode             AllowanceMode
-  audience         AllowanceAudience @default(GREEN_TRAVEL)
-  amountPerDay     Float?                                // PER_TRAVEL_DAY
-  maxDays          Int?              @default(4)         // PER_TRAVEL_DAY (Erasmus+ green travel: up to 4 extra days)
-  capPerDay        Float?                                // PER_RECEIPT: optional cap per claimed day
-  capTotal         Float?                                // PER_RECEIPT: optional overall cap
-  countsTowardMax  Boolean           @default(false)     // false = paid on top of the country/individual maximum
-  receiptsRequired Boolean           @default(false)     // PER_TRAVEL_DAY: whether receipts are asked for as evidence
-  active           Boolean           @default(true)      // soft-deleted once participants have claims
-  sortOrder        Int               @default(0)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  participantAllowances ParticipantAllowance[]
-}
-
-// One claimed allowance line per participant per rule
-model ParticipantAllowance {
-  id            String               @id @default(uuid())
-  participantId String
-  participant   Participant          @relation(fields: [participantId], references: [id], onDelete: Cascade)
-  ruleId        String
-  rule          ProjectAllowanceRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
-  days          Int?                                     // PER_TRAVEL_DAY (also used for PER_RECEIPT capPerDay)
-  amountEur     Float                @default(0)         // computed server-side after caps
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
-  receipts      ParticipantAllowanceReceipt[]
-
-  @@unique([participantId, ruleId])
-}
-
-// A document tagged as evidence/receipt for an allowance line (one allowance per document)
-model ParticipantAllowanceReceipt {
-  id               String               @id @default(uuid())
-  allowanceId      String
-  allowance        ParticipantAllowance @relation(fields: [allowanceId], references: [id], onDelete: Cascade)
-  documentId       String               @unique
-  document         Document             @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  amountOriginal   Float?
-  currencyOriginal String               @default("EUR")
-  amountEur        Float?
-  createdAt        DateTime             @default(now())
 }
 
 // Signed green-travel declaration on honour (one per participant), generated at submission
