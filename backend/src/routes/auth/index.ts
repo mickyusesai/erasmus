@@ -87,6 +87,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         startDate,
         endDate,
         isTestProject: true,
+        requireGreenTravelDeclaration: true,
         maxParticipants: TEST_PROJECT_MAX_PARTICIPANTS,
         creditSource: null, // No credit consumed for test projects
       },

@@ -156,6 +156,7 @@ router.post('/', async (req: Request, res: Response) => {
     data: {
       ...data,
       organisationId,
+      requireGreenTravelDeclaration: true,
     },
   });
 

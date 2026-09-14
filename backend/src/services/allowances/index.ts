@@ -111,3 +111,55 @@ export function suggestTravelDays(
   const after = Math.max(0, Math.round((last - end) / dayMs));
   return before + after;
 }
+
+// ---------------------------------------------------------------------------
+// Serialisation helpers shared by routes
+// ---------------------------------------------------------------------------
+
+export interface ReviewAllowanceLine {
+  name: string;
+  mode: string;
+  audience: string;
+  days: number | null;
+  amountEur: number;
+  countsTowardMax: boolean;
+  receipts: { filename: string; amountOriginal: number | null; currencyOriginal: string; amountEur: number | null }[];
+}
+
+/** Shape allowance lines for the AI review prompt / org views */
+export function serializeAllowancesForReview(
+  allowances: {
+    days: number | null;
+    amountEur: number;
+    rule: { name: string; mode: string; audience: string; countsTowardMax: boolean; active: boolean };
+    receipts: { amountOriginal: number | null; currencyOriginal: string; amountEur: number | null; document: { renamedFilename: string } }[];
+  }[]
+): ReviewAllowanceLine[] {
+  return allowances
+    .filter((a) => a.rule.active)
+    .map((a) => ({
+      name: a.rule.name,
+      mode: a.rule.mode,
+      audience: a.rule.audience,
+      days: a.days,
+      amountEur: a.amountEur,
+      countsTowardMax: a.rule.countsTowardMax,
+      receipts: a.receipts.map((r) => ({
+        filename: r.document.renamedFilename,
+        amountOriginal: r.amountOriginal,
+        currencyOriginal: r.currencyOriginal,
+        amountEur: r.amountEur,
+      })),
+    }));
+}
+
+/** Prisma include fragment for allowance lines with rule + receipts + document names */
+export const allowancesInclude = {
+  include: {
+    rule: true,
+    receipts: {
+      include: { document: { select: { id: true, renamedFilename: true, documentType: true, uploadDate: true } } },
+      orderBy: { createdAt: 'asc' as const },
+    },
+  },
+};
