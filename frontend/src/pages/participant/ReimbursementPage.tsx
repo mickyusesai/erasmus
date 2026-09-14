@@ -41,6 +41,9 @@ import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
 import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
+import { AllowanceCard } from '../../components/participant/AllowanceCard';
+import { SignaturePad } from '../../components/participant/SignaturePad';
+import { computePayable } from '../../utils/reimbursementMath';
 import DisseminationPage from './DisseminationPage';
 import {
   participantApi,
@@ -53,6 +56,17 @@ import {
   ApiError,
 } from '../../services/api';
 import { clsx } from 'clsx';
+
+/** Documents that never become travel items (boarding passes, receipts for allowances, declarations) */
+function isNonTripDocument(d: Document): boolean {
+  return (
+    d.documentType === 'FLIGHT_BOARDING_PASS' ||
+    d.documentType === 'HOTEL_INVOICE' ||
+    d.documentType === 'MEAL_RECEIPT' ||
+    d.documentType === 'GREEN_TRAVEL_DECLARATION' ||
+    !!d.allowanceReceipt
+  );
+}
 
 // Helper function to format dates as DD-MM-YYYY (European format)
 function formatDate(dateInput: string | Date): string {
@@ -804,6 +818,8 @@ function Step1Upload({
   };
 
   const isGreenTravel = data.greenTravel || false;
+  // Any allowance that takes receipts → let participants upload and re-type receipts here
+  const hasReceiptAllowances = (data.allowanceRules ?? []).some((r) => r.mode === 'PER_RECEIPT' || r.receiptsRequired);
 
   // Handler to view document using signed URL
   const handleViewDocument = async (docId: string) => {
@@ -923,9 +939,12 @@ function Step1Upload({
               <><strong>{data.project.name}</strong> runs until <strong>{formatDate(data.project.endDate)}</strong>. Add every ticket, receipt &amp; boarding pass as you get them — we keep them safe so nothing is lost.</>
             )}
           </p>
-          {isGreenTravel && (
+          {(isGreenTravel || hasReceiptAllowances) && (
             <p className="text-white/85 text-sm mt-3 bg-white/10 rounded-xl px-3 py-2">
-              <strong>Green travel:</strong> you can also upload hotel invoices for overnight stays needed due to longer eco-friendly travel.
+              <strong>{isGreenTravel ? 'Green travel:' : 'Extras:'}</strong>{' '}
+              {hasReceiptAllowances
+                ? 'you can also upload hotel and meal receipts — you\'ll assign them to an allowance in the next step.'
+                : 'you can also upload hotel invoices for overnight stays needed due to longer eco-friendly travel.'}
             </p>
           )}
           <button
@@ -970,9 +989,29 @@ function Step1Upload({
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-900 truncate text-sm">{doc.renamedFilename}</p>
                     <p className="text-xs mt-0.5">
-                      <span className="inline-block px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 font-medium mr-1">
-                        {docTypeLabels[doc.documentType] || 'Document'}
-                      </span>
+                      {hasReceiptAllowances ? (
+                        <select
+                          value={doc.documentType}
+                          onChange={async (e) => {
+                            try {
+                              await participantApi.updateDocumentType(token, doc.id, e.target.value as DocumentType);
+                              queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+                            } catch {
+                              toast.error('Could not change the document type');
+                            }
+                          }}
+                          className="inline-block px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 font-medium mr-1 border-0 text-xs"
+                          title="Correct the detected type"
+                        >
+                          {Object.entries(docTypeLabels).map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="inline-block px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 font-medium mr-1">
+                          {docTypeLabels[doc.documentType] || 'Document'}
+                        </span>
+                      )}
                       <span className="text-gray-400">detected type</span>
                     </p>
                   </div>
@@ -1136,7 +1175,7 @@ function Step2CheckData({
     return ids;
   }, [data.travelItems]);
   const unlinkedDocs = data.documents.filter(d =>
-    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+    !linkedDocIds.has(d.id) && !isNonTripDocument(d)
   );
   const hasUnlinkedDocs = unlinkedDocs.length > 0;
 
@@ -1212,10 +1251,20 @@ function Step2CheckData({
 
         // Also optimistically update reimbursement summary
         const deletedItem = old.travelItems.find((item: TravelItem) => item.id === id);
-        const deletedAmount = (!deletedItem?.excludedFromReimbursement && deletedItem?.amountEur) ? deletedItem.amountEur : 0;
-        const newTotalEur = (old.reimbursementSummary?.totalEur || 0) - deletedAmount;
+        const deletedAmount = deletedItem && !deletedItem.excludedFromReimbursement
+          ? (deletedItem.amountEur || 0) + (deletedItem.luggageAmountEur || 0)
+          : 0;
+        const newTotalEur = Math.max(0, (old.reimbursementSummary?.totalEur || 0) - deletedAmount);
         const maxAllowed = old.reimbursementSummary?.maxReimbursementAllowed || 0;
-        const newAmountToReimburse = maxAllowed > 0 ? Math.min(newTotalEur, maxAllowed) : newTotalEur;
+        const remaining = old.travelItems.filter((item: TravelItem) => item.id !== id);
+        const lines = (old.allowances ?? []).filter((a) => a.rule.active);
+        const newAmountToReimburse = computePayable({
+          travelEur: newTotalEur,
+          allowanceInsideCap: lines.filter((a) => a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0),
+          allowanceOnTop: lines.filter((a) => !a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0),
+          maxReimbursement: maxAllowed,
+          hasMultiPersonBooking: remaining.some((i: TravelItem) => (i.numberOfPassengers ?? 0) > 1),
+        }).total;
 
         return {
           ...old,
@@ -1523,6 +1572,7 @@ function Step2CheckData({
           (s, i) => s + (i.amountEur || 0) + (i.luggageAmountEur || 0),
           0
         );
+        const allowancesEur = (data.allowances ?? []).reduce((s, a) => s + (a.amountEur || 0), 0);
         // Route label: origin ⇄ turnaround for round trips, origin → destination otherwise
         const sorted = [...data.travelItems].sort(
           (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
@@ -1549,7 +1599,12 @@ function Step2CheckData({
                 {confirmedCount}/{totalItems} confirmed
               </span>
             </div>
-            <p className="text-4xl font-bold mt-2">{formatCurrency(totalEur)}</p>
+            <p className="text-4xl font-bold mt-2">{formatCurrency(totalEur + allowancesEur)}</p>
+            {allowancesEur > 0 && (
+              <p className="text-xs text-white/80 mt-1">
+                Travel {formatCurrency(totalEur)} + allowances {formatCurrency(allowancesEur)}
+              </p>
+            )}
             <div className="flex gap-1.5 mt-4">
               {data.travelItems.map((it) => (
                 <div
@@ -1626,7 +1681,18 @@ function Step2CheckData({
             // Final slide: cost-breakdown "receipt"
             const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
             const max = data.maxReimbursementForCountry;
-            const willReceive = max != null && total > max ? max : total;
+            const allowanceLines = (data.allowances ?? []).filter((a) => a.rule.active && a.amountEur > 0);
+            const allowanceInside = allowanceLines.filter((a) => a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0);
+            const allowanceOnTop = allowanceLines.filter((a) => !a.rule.countsTowardMax).reduce((s, a) => s + a.amountEur, 0);
+            const hasMultiPerson = data.travelItems.some((i) => (i.numberOfPassengers ?? 0) > 1);
+            const payable = computePayable({
+              travelEur: total,
+              allowanceInsideCap: allowanceInside,
+              allowanceOnTop,
+              maxReimbursement: max ?? 0,
+              hasMultiPersonBooking: hasMultiPerson,
+            });
+            const willReceive = payable.total;
             const receiptSlide = {
               key: '__cost_breakdown__',
               node: (
@@ -1654,13 +1720,31 @@ function Step2CheckData({
                       </div>
                     ))}
                   </div>
+                  {allowanceLines.length > 0 && (
+                    <div className="space-y-1.5 mb-3 pt-2 border-t border-dashed border-gray-200">
+                      {allowanceLines.map((a) => (
+                        <div key={a.id} className="flex justify-between gap-3 text-sm">
+                          <span className="text-gray-600 truncate min-w-0">
+                            {a.rule.name}
+                            <span className="text-gray-400">
+                              {a.rule.mode === 'PER_TRAVEL_DAY' && a.days != null ? ` · ${a.days} day${a.days === 1 ? '' : 's'}` : ' · receipts'}
+                              {!a.rule.countsTowardMax ? ' · on top' : ''}
+                            </span>
+                          </span>
+                          <span className="font-medium text-gray-900 whitespace-nowrap flex-shrink-0">{formatCurrency(a.amountEur)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="border-t border-gray-200 my-3" />
                   <div className="flex items-end justify-between gap-3">
                     <div>
-                      <p className="text-xs text-gray-500">Total travel costs</p>
+                      <p className="text-xs text-gray-500">{allowanceLines.length > 0 ? 'Travel costs' : 'Total travel costs'}</p>
                       <p className="text-xl font-bold text-gray-900">{formatCurrency(total)}</p>
                       {max != null && (
-                        <p className="text-xs text-blue-600 font-medium mt-0.5">max {formatCurrency(max)}</p>
+                        <p className="text-xs text-blue-600 font-medium mt-0.5">
+                          max {formatCurrency(max)}{allowanceOnTop > 0 ? ` + ${formatCurrency(allowanceOnTop)} on top` : ''}
+                        </p>
                       )}
                     </div>
                     <div className="text-right">
@@ -1697,6 +1781,26 @@ function Step2CheckData({
             </Button>
           </CardContent>
         </Card>
+      )}
+
+      {/* Allowances — organisation-defined extras this participant qualifies for */}
+      {(data.allowanceRules?.length ?? 0) > 0 && (
+        <div>
+          <p className="text-base font-bold text-gray-900 mb-2 px-1">Allowances</p>
+          <div className="space-y-3">
+            {(data.allowanceRules ?? []).map((rule) => (
+              <AllowanceCard
+                key={rule.id}
+                token={token}
+                rule={rule}
+                allowance={(data.allowances ?? []).find((a) => a.ruleId === rule.id)}
+                documents={data.documents}
+                suggestedTravelDays={data.suggestedTravelDays ?? 0}
+                maxReimbursement={data.maxReimbursementForCountry}
+              />
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Add a trip manually (also links loose documents) */}
@@ -3201,7 +3305,7 @@ function AddTravelModal({
     return ids;
   }, [travelItems]);
   const unlinkedDocs = documents.filter(d =>
-    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+    !linkedDocIds.has(d.id) && !isNonTripDocument(d)
   );
 
   const uploadAndCreateMutation = useMutation({
@@ -3871,6 +3975,10 @@ function Step3Confirm({
   const [declarationTravelItem, setDeclarationTravelItem] = useState<TravelItem | null>(null);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  // Green travel declaration: signature captured here and sent with the submission
+  const needsGreenSignature =
+    !!data.requireGreenTravelDeclaration && !!data.greenTravel && !data.greenTravelDeclaration;
+  const [greenSignature, setGreenSignature] = useState<string | null>(null);
 
   // Find flights missing boarding passes (no linked boarding pass document and no declaration of travel)
   const declarationsOfTravel = data.declarationsOfTravel || [];
@@ -3907,7 +4015,7 @@ function Step3Confirm({
   });
 
   const markCompleteMutation = useMutation({
-    mutationFn: () => participantApi.markComplete(token),
+    mutationFn: () => participantApi.markComplete(token, greenSignature ? { greenTravelSignature: greenSignature } : undefined),
     onSuccess: (result) => {
       if ('success' in result && result.success) {
         queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
@@ -3929,6 +4037,7 @@ function Step3Confirm({
     confirmations.dataCorrect &&
     confirmations.erasmusRules &&
     confirmations.ibanCorrect &&
+    (!needsGreenSignature || !!greenSignature) &&
     bankDetails.bankAccountIban &&
     bankDetails.bankAccountHolderName &&
     bankDetails.bankAccountBic;
@@ -3956,7 +4065,13 @@ function Step3Confirm({
             <p className="text-4xl font-bold mt-1">
               {formatCurrency(data.reimbursementSummary?.amountToReimburse || 0)}
             </p>
-            {(data.reimbursementSummary?.totalEur || 0) !==
+            {(data.reimbursementSummary?.allowancesEur || 0) > 0 ? (
+              <p className="text-white/75 text-xs mt-2">
+                Travel {formatCurrency(data.reimbursementSummary?.totalEur || 0)}
+                {data.maxReimbursementForCountry ? ` (max ${formatCurrency(data.maxReimbursementForCountry)})` : ''}
+                {' '}+ allowances {formatCurrency(data.reimbursementSummary?.allowancesEur || 0)}
+              </p>
+            ) : (data.reimbursementSummary?.totalEur || 0) !==
               (data.reimbursementSummary?.amountToReimburse || 0) && (
               <p className="text-white/75 text-xs mt-2">
                 Total travel costs {formatCurrency(data.reimbursementSummary?.totalEur || 0)} · capped at your country maximum
@@ -4236,6 +4351,33 @@ function Step3Confirm({
               </label>
             ))}
           </div>
+
+          {/* Green travel declaration — signed here, PDF generated on submit */}
+          {needsGreenSignature && (
+            <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 sm:p-5">
+              <h3 className="font-bold text-gray-900">Green travel declaration</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                You are registered as a green traveller. Please confirm by signing below; we generate a signed
+                declaration on honour with your trips and attach it to your file.
+              </p>
+              <div className="mt-3 bg-white rounded-xl border border-gray-200 p-3 text-sm text-gray-700 italic">
+                “I declare on my honour that I used low-emission means of transport (train, bus, car-pooling, bicycle)
+                for the main part of my round trip to “{data.project.name}”, as listed in my travel items, and that I keep
+                my original tickets for five years and will provide them on request.”
+              </div>
+              <ul className="mt-2 text-xs text-gray-500 space-y-0.5">
+                {data.travelItems.filter((t) => !t.excludedFromReimbursement).map((t) => (
+                  <li key={t.id}>• {formatDate(t.departureDate)} — {t.fromLocation} → {t.toLocation} ({t.modeOfTransport.toLowerCase()})</li>
+                ))}
+              </ul>
+              <div className="mt-3">
+                <SignaturePad onSignatureChange={setGreenSignature} />
+              </div>
+              {!greenSignature && (
+                <p className="text-xs text-amber-700 mt-2">Sign above to be able to submit.</p>
+              )}
+            </div>
+          )}
 
           {/* Navigation */}
           <div className="mt-8 flex items-stretch gap-3">
