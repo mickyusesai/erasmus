@@ -15,6 +15,7 @@ import { getEmailService } from '../../services/email/index.js';
 import { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
+import { PDFDocument as LibPDFDocument } from 'pdf-lib';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { suggestTravelDays } from '../../utils/travelDays.js';
 import disseminationRoutes from './dissemination.js';
@@ -131,6 +132,9 @@ const declarationOfTravelSchema = z.object({
   licensePlate: z.string().nullable().optional(),
   driverName: z.string().nullable().optional(),
 });
+
+// Maximum number of uploaded documents per participant
+const MAX_DOCUMENTS = 25;
 
 // Wrap async route handlers
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
@@ -294,14 +298,32 @@ router.post(
       throw new ForbiddenError('Cannot upload documents after approval');
     }
 
-    // Enforce 15-document limit
+    // Enforce the document limit
     const existingDocCount = await prisma.document.count({
       where: { participantId: participant.id },
     });
-    if (existingDocCount >= 15) {
+    if (existingDocCount >= MAX_DOCUMENTS) {
       throw new ValidationError(
-        'You have reached the maximum of 15 documents. Only upload documents for travel items you will claim reimbursement for. If you have additional evidence, you can add more detail manually after AI consolidation.'
+        `You have reached the maximum of ${MAX_DOCUMENTS} documents. Combine pages into one PDF where possible and only upload documents for trips you will claim.`
       );
+    }
+
+    // A file that isn't a readable PDF (a saved web page, a truncated download,
+    // an encrypted file) would make the AI provider reject the whole analysis.
+    if (req.file.mimetype.includes('pdf')) {
+      const header = req.file.buffer.subarray(0, 8).toString('latin1');
+      if (!header.startsWith('%PDF')) {
+        throw new ValidationError("This file isn't a readable PDF — please re-download it from the airline/app, or upload a screenshot or photo instead.");
+      }
+      try {
+        const pdf = await LibPDFDocument.load(req.file.buffer, { ignoreEncryption: true });
+        if (pdf.isEncrypted) {
+          throw new ValidationError('This PDF is password-protected. Please upload an unprotected copy, or a screenshot or photo.');
+        }
+      } catch (err) {
+        if (err instanceof ValidationError) throw err;
+        throw new ValidationError("This file isn't a readable PDF — please re-download it from the airline/app, or upload a screenshot or photo instead.");
+      }
     }
 
     const storage = getStorageService();
@@ -412,6 +434,18 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
   // Recalculate summary after consolidation
   const aiService = getAiService();
   await aiService.recalculateParticipantSummary(participant.id);
+
+  // A failed run must be unmistakable for the client: no trips were built.
+  if (!result.success) {
+    res.status(422).json({
+      success: false,
+      message: result.message,
+      travelItems: [],
+      warnings: result.warnings,
+      unreadableDocuments: result.unreadableDocuments ?? [],
+    });
+    return;
+  }
 
   // Send email notifying the participant that analysis is complete
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';

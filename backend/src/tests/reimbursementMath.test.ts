@@ -38,3 +38,14 @@ describe('travel days', () => {
     expect(s.lastTravelDate?.toISOString().slice(0, 10)).toBe('2026-03-11');
   });
 });
+
+describe('consolidation provider-error mapping', () => {
+  it('extracts the rejected content part index from an invalid-PDF error', async () => {
+    const { JourneyConsolidationService } = await import('../services/ai/journeyConsolidationService.js');
+    const svc = new JourneyConsolidationService() as unknown as { unreadablePartIndex: (e: unknown) => number | null; describeFailure: (e: unknown) => string };
+    const err = { status: 400, message: '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.0.content.3.pdf.source.base64.data: The PDF specified was not valid."}}' };
+    expect(svc.unreadablePartIndex(err)).toBe(3);
+    expect(svc.unreadablePartIndex({ message: 'overloaded_error' })).toBeNull();
+    expect(svc.describeFailure({ status: 529, message: 'overloaded' })).toMatch(/busy/);
+  });
+});

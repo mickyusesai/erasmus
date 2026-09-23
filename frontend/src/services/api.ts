@@ -3,7 +3,7 @@ const API_BASE = import.meta.env.VITE_API_URL
   : '/api';
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public payload?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
   }
@@ -12,7 +12,7 @@ export class ApiError extends Error {
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, data.error?.message || 'An error occurred');
+    throw new ApiError(response.status, data.error?.message || data.message || 'An error occurred', data);
   }
   return response.json();
 }
@@ -1435,6 +1435,8 @@ export interface ConsolidationResult {
   message: string;
   travelItems: TravelItem[];
   warnings: string[];
+  /** Files the AI could not read; the analysis ran without them */
+  unreadableDocuments?: { docId: string; filename: string }[];
   missingDocuments?: { type: string; description: string }[];
   documentLinks?: { invoiceDocId: string; boardingPassDocId: string; reason: string }[];
 }

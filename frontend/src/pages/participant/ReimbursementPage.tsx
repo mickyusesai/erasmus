@@ -56,6 +56,9 @@ import {
 } from '../../services/api';
 import { clsx } from 'clsx';
 
+/** Maximum uploads per participant (mirrors MAX_DOCUMENTS in the backend upload route) */
+const MAX_DOCUMENTS = 25;
+
 /** Documents that never become travel items (boarding passes, receipts for allowances, declarations) */
 function isNonTripDocument(d: Document): boolean {
   return (
@@ -739,13 +742,17 @@ function Step1Upload({
     setConsolidating(true);
     try {
       const result = await participantApi.consolidateJourney(token);
+      setAnalysisFailure(null);
 
       // Store AI warnings to display on the next step as persistent banners
-      if (result.warnings && result.warnings.length > 0) {
-        onAiWarnings(result.warnings);
-      } else {
-        onAiWarnings([]);
+      const warnings = [...(result.warnings || [])];
+      if (result.unreadableDocuments && result.unreadableDocuments.length > 0) {
+        warnings.push(
+          `We could not read ${result.unreadableDocuments.map((d) => `"${d.filename}"`).join(', ')} — please upload ${result.unreadableDocuments.length === 1 ? 'it' : 'them'} again as a photo or screenshot.`
+        );
+        toast(`${result.unreadableDocuments.length} file(s) could not be read — see the note on the next step`, { icon: '⚠️' });
       }
+      onAiWarnings(warnings);
 
       // Refresh data and move to next step
       // Use refetchQueries instead of invalidateQueries to ensure fresh data is loaded
@@ -754,7 +761,16 @@ function Step1Upload({
       onNext();
     } catch (error) {
       console.error('Consolidation error:', error);
-      toast.error('Failed to analyze journey. Please try again.');
+      const message =
+        error instanceof ApiError && error.message && error.message !== 'An error occurred'
+          ? error.message
+          : 'The analysis could not be completed. Please try again.';
+      const unreadable =
+        error instanceof ApiError && Array.isArray(error.payload?.unreadableDocuments)
+          ? (error.payload!.unreadableDocuments as { docId: string; filename: string }[])
+          : [];
+      setAnalysisFailure({ message, unreadable });
+      toast.error(message);
     } finally {
       setConsolidating(false);
       consolidatingRef.current = false;
@@ -786,7 +802,9 @@ function Step1Upload({
     }
   }, [uploadMutation]);
 
-  const atDocumentLimit = data.documents.length >= 15;
+  const atDocumentLimit = data.documents.length >= MAX_DOCUMENTS;
+  // Result of the last failed analysis (shown inline so the participant knows what to fix)
+  const [analysisFailure, setAnalysisFailure] = useState<{ message: string; unreadable: { docId: string; filename: string }[] } | null>(null);
   const { getRootProps, getInputProps, open } = useDropzone({
     onDrop,
     disabled: atDocumentLimit || uploading,
@@ -955,7 +973,7 @@ function Step1Upload({
           </button>
           {atDocumentLimit && (
             <p className="text-white/80 text-xs mt-2 text-center">
-              Document limit reached (15/15). You can add items manually after building your trips.
+              Document limit reached ({MAX_DOCUMENTS}/{MAX_DOCUMENTS}). Combine pages into one PDF, or add items manually after building your trips.
             </p>
           )}
           {!atDocumentLimit && (
@@ -967,7 +985,9 @@ function Step1Upload({
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
             <h3 className="font-semibold text-gray-900">Uploaded</h3>
-            <span className="text-sm text-gray-500">{data.documents.length} file{data.documents.length === 1 ? '' : 's'}</span>
+            <span className={clsx('text-sm', data.documents.length >= MAX_DOCUMENTS - 3 ? 'text-amber-600 font-medium' : 'text-gray-500')}>
+              {data.documents.length} of {MAX_DOCUMENTS} files
+            </span>
           </div>
           {data.documents.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-gray-400">
@@ -1039,6 +1059,27 @@ function Step1Upload({
           />
           <span className="text-sm text-gray-500">I didn't travel / don't need reimbursement</span>
         </label>
+
+        {/* Last analysis failed — say why and what to do, never silently move on */}
+        {analysisFailure && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="font-semibold text-red-800">We couldn't build your trips</p>
+                <p className="text-red-700 mt-0.5">{analysisFailure.message}</p>
+                {analysisFailure.unreadable.length > 0 && (
+                  <ul className="mt-1.5 text-red-700 list-disc pl-4">
+                    {analysisFailure.unreadable.map((d) => (
+                      <li key={d.docId}>{d.filename} — remove it below and upload a screenshot or photo instead</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-red-600 text-xs mt-1.5">Nothing was lost — your documents are still here. Fix the file if needed, then tap "Build my trips" again.</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Footer CTA — locked while project ongoing, "Build my trips" once ended/unlocked */}
         {aiUnlocked ? (
@@ -2713,6 +2754,16 @@ function TravelItemCard({
                 I don't have it
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Price missing (e.g. trip built from a boarding pass) */}
+        {(item.priceMissing || item.amountOriginal == null) && !item.amountIncludedInRoundTrip && !item.excludedFromReimbursement && (
+          <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>
+              <strong>Price missing.</strong> Boarding passes don't show a price — upload the booking confirmation or invoice and rebuild, or tap Edit and type the amount.
+            </span>
           </div>
         )}
 

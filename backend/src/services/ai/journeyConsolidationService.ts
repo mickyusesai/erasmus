@@ -413,61 +413,6 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       throw new Error('Participant not found');
     }
 
-    // Clean up orphaned documents: if there are 0 travel items but documents exist
-    // that are not linked to any travel item, they're orphans from a previous delete cycle.
-    // Keeping them would cause the AI to see duplicate data and create duplicate travel items.
-    const existingTravelItems = participant.travelItems || [];
-    if (existingTravelItems.length === 0 && participant.documents.length > 0) {
-      // Check which documents are NOT linked to any travel item
-      const linkedDocIds = new Set<string>();
-      for (const item of existingTravelItems) {
-        if ((item as any).documentId) linkedDocIds.add((item as any).documentId);
-        if ((item as any).additionalDocumentIds) {
-          try {
-            const ids = JSON.parse((item as any).additionalDocumentIds) as string[];
-            ids.forEach(id => linkedDocIds.add(id));
-          } catch { /* ignore */ }
-        }
-      }
-
-      const orphanedDocs = participant.documents.filter((doc: { id: string }) => !linkedDocIds.has(doc.id));
-      if (orphanedDocs.length > 0) {
-        // Check if there are also recently uploaded documents (within last 5 minutes)
-        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-        const recentDocs = participant.documents.filter((doc: any) => new Date(doc.createdAt) >= fiveMinAgo);
-        const oldOrphans = orphanedDocs.filter((doc: any) => new Date(doc.createdAt) < fiveMinAgo);
-
-        if (recentDocs.length > 0 && oldOrphans.length > 0) {
-          // There are both recent uploads AND old orphans — clean up old orphans
-          console.log(`[Consolidation] Cleaning up ${oldOrphans.length} orphaned documents from previous session`);
-          const storage = getStorageService();
-          for (const doc of oldOrphans) {
-            try {
-              await storage.delete((doc as any).storedFilePath);
-            } catch (error) {
-              console.error(`[Consolidation] Failed to delete orphaned file: ${(doc as any).storedFilePath}`, error);
-            }
-            await prisma.document.delete({ where: { id: doc.id } });
-          }
-
-          // Re-fetch participant with cleaned up documents
-          const refreshed = await prisma.participant.findUnique({
-            where: { id: participantId },
-            include: {
-              project: true,
-              documents: { include: { extraction: true } },
-              travelItems: true,
-            },
-          });
-          if (refreshed) {
-            // Update the participant reference with fresh data
-            (participant as any).documents = (refreshed as any).documents;
-            (participant as any).travelItems = (refreshed as any).travelItems;
-          }
-        }
-      }
-    }
-
     // Build extraction map for quick lookup by document ID
     const extractionMap = new Map<string, Record<string, unknown>>();
     for (const doc of participant.documents) {
@@ -904,6 +849,9 @@ Do NOT include in warnings (these are handled elsewhere):
         | { type: 'text'; text: string };
 
       const contentParts: ContentPart[] = [];
+      // content-part index → document, so a provider error naming a part can be mapped back to the file
+      const partOwner = new Map<number, { id: string; filename: string }>();
+      const unreadableDocuments: { docId: string; filename: string }[] = [];
 
       // Load and add all document files
       for (let i = 0; i < participant.documents.length; i++) {
@@ -922,6 +870,7 @@ Do NOT include in warnings (these are handled elsewhere):
           if (isPdf) {
             const base64Data = fileBuffer.toString('base64');
             console.log(`[Consolidation] Adding document ${i + 1}: PDF (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
+            partOwner.set(contentParts.length, { id: doc.id, filename: doc.originalFilename });
             contentParts.push({
               type: 'document',
               source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
@@ -936,6 +885,7 @@ Do NOT include in warnings (these are handled elsewhere):
             else if (doc.mimeType.includes('webp')) mediaType = 'image/webp';
 
             console.log(`[Consolidation] Adding document ${i + 1}: ${mediaType} (${(processedBuffer.length / 1024).toFixed(1)}KB)`);
+            partOwner.set(contentParts.length, { id: doc.id, filename: doc.originalFilename });
             contentParts.push({
               type: 'image',
               source: { type: 'base64', media_type: mediaType, data: base64Data },
@@ -958,20 +908,52 @@ Do NOT include in warnings (these are handled elsewhere):
 
       console.log(`[Consolidation] Using Anthropic ${this.model} with extended thinking for journey consolidation with ${contentParts.length} content parts`);
 
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 28000,
-        thinking: {
-          type: 'enabled',
-          budget_tokens: 12000, // ~12k for reasoning, ~16k available for the JSON response
-        } as Anthropic.ThinkingConfigParam,
-        messages: [
-          {
-            role: 'user',
-            content: contentParts as Anthropic.MessageParam['content'],
-          },
-        ],
-      });
+      // One unreadable file (e.g. a web page saved as .pdf) must not block the
+      // other documents: when the provider rejects a specific content part, drop
+      // that document (and its label) and retry without it.
+      let activeParts = contentParts;
+      let activeOwner = partOwner;
+      let response: Anthropic.Message | undefined;
+      for (let attempt = 0; attempt <= participant.documents.length; attempt++) {
+        try {
+          response = await this.client.messages.create({
+            model: this.model,
+            max_tokens: 28000,
+            thinking: {
+              type: 'enabled',
+              budget_tokens: 12000, // ~12k for reasoning, ~16k available for the JSON response
+            } as Anthropic.ThinkingConfigParam,
+            messages: [
+              {
+                role: 'user',
+                content: activeParts as Anthropic.MessageParam['content'],
+              },
+            ],
+          });
+          break;
+        } catch (apiError) {
+          const badIndex = this.unreadablePartIndex(apiError);
+          const owner = badIndex != null ? activeOwner.get(badIndex) : undefined;
+          if (badIndex == null || !owner) throw apiError;
+          console.warn(`[Consolidation] Provider could not read document ${owner.id} (${owner.filename}); retrying without it`);
+          unreadableDocuments.push({ docId: owner.id, filename: owner.filename });
+          // Rebuild parts without this document and its preceding label
+          const rebuilt: ContentPart[] = [];
+          const rebuiltOwner = new Map<number, { id: string; filename: string }>();
+          for (let i = 0; i < activeParts.length; i++) {
+            if (i === badIndex || i === badIndex - 1) continue;
+            const o = activeOwner.get(i);
+            if (o) rebuiltOwner.set(rebuilt.length, o);
+            rebuilt.push(activeParts[i]);
+          }
+          activeParts = rebuilt;
+          activeOwner = rebuiltOwner;
+          if (rebuiltOwner.size === 0) {
+            throw new Error('None of the uploaded files could be read');
+          }
+        }
+      }
+      if (!response) throw new Error('No response from Anthropic');
 
       // Filter out thinking blocks — only keep the text output
       const responseText = response.content
@@ -1042,20 +1024,26 @@ Do NOT include in warnings (these are handled elsewhere):
           ? await convertToEurForParticipant(participantId, totalAmount, currency)
           : totalAmount;
 
-        const travelBooking = await prisma.travelBooking.create({
-          data: {
-            participantId,
-            bookingReference: booking.bookingReference,
-            isRoundTrip: booking.isRoundTrip || false,
-            totalAmount: totalAmount,
-            currency: currency,
-            totalAmountEur: totalAmountEur,
-            numberOfPassengers: booking.numberOfPassengers || null,
-            documentIds: linkedDocIds.length > 0 ? JSON.stringify(linkedDocIds) : null,
-            hasPerLegPrices: booking.hasPerLegPrices || false,
-            priceSource: booking.priceSource || null,
-          },
-        });
+        let travelBooking;
+        try {
+          travelBooking = await prisma.travelBooking.create({
+            data: {
+              participantId,
+              bookingReference: booking.bookingReference,
+              isRoundTrip: booking.isRoundTrip || false,
+              totalAmount: totalAmount,
+              currency: currency,
+              totalAmountEur: totalAmountEur,
+              numberOfPassengers: booking.numberOfPassengers || null,
+              documentIds: linkedDocIds.length > 0 ? JSON.stringify(linkedDocIds) : null,
+              hasPerLegPrices: booking.hasPerLegPrices || false,
+              priceSource: booking.priceSource || null,
+            },
+          });
+        } catch (bookingError) {
+          console.error(`[Consolidation] Could not create booking ${booking.bookingReference}, continuing without it:`, bookingError);
+          continue;
+        }
 
         bookingIdMap.set(booking.bookingReference, travelBooking.id);
         console.log(`[Consolidation] Created booking ${booking.bookingReference} (round-trip: ${booking.isRoundTrip}, total: ${totalAmount} ${currency})`);
@@ -1091,13 +1079,17 @@ Do NOT include in warnings (these are handled elsewhere):
           if (primaryDocId) {
             const oldDocId = existingMatch.item.documentId;
 
-            await prisma.travelItem.update({
-              where: { id: existingMatch.item.id },
-              data: {
-                documentId: primaryDocId,
-                additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
-              },
-            });
+            try {
+              await prisma.travelItem.update({
+                where: { id: existingMatch.item.id },
+                data: {
+                  documentId: primaryDocId,
+                  additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
+                },
+              });
+            } catch (updateError) {
+              console.warn(`[Consolidation] Could not update document links for ${itemSignature}, keeping existing:`, updateError);
+            }
 
             if (oldDocId !== primaryDocId) {
               console.log(`[Consolidation] Updated document link for existing item ${itemSignature}: ${oldDocId} -> ${primaryDocId}`);
@@ -1194,8 +1186,7 @@ Do NOT include in warnings (these are handled elsewhere):
         }
         const luggageDocumentId = item.luggageDocumentId ? resolveDocumentId(item.luggageDocumentId) : null;
 
-        const travelItem = await prisma.travelItem.create({
-          data: {
+        const itemData = {
             participantId,
             documentId: primaryDocId,
             additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
@@ -1230,8 +1221,24 @@ Do NOT include in warnings (these are handled elsewhere):
             luggageDocumentId: luggageDocumentId,
             isRoundTrip: false, // Individual legs are not round-trips; the booking is
             numberOfPassengers: item.numberOfPassengers || null,
-          },
-        });
+          };
+
+        let travelItem;
+        try {
+          travelItem = await prisma.travelItem.create({ data: itemData });
+        } catch (createError) {
+          // A linked document may have been deleted while the (multi-minute) analysis
+          // ran. Keep the trip, drop the links, never abort the whole run.
+          if (this.isForeignKeyError(createError)) {
+            console.warn(`[Consolidation] Document link vanished for ${item.fromLocation} -> ${item.toLocation}; saving trip without links`);
+            travelItem = await prisma.travelItem.create({
+              data: { ...itemData, documentId: null, additionalDocumentIds: null, priceSourceDocId: null, luggageDocumentId: null, bookingId: null },
+            });
+          } else {
+            console.error(`[Consolidation] Could not save trip ${item.fromLocation} -> ${item.toLocation}, skipping:`, createError);
+            continue;
+          }
+        }
 
         const amountInfo = amountIncludedInRoundTrip ? '0 (included in round-trip)' : `${baseAmount ?? 'null'} ${currency}`;
         console.log(`[Consolidation] Created travel item: ${item.fromLocation} -> ${item.toLocation}, amount: ${amountInfo}, priceMissing: ${item.priceMissing}`);
@@ -1279,6 +1286,7 @@ Do NOT include in warnings (these are handled elsewhere):
         success: true,
         message: result.journey_summary,
         travelItems: createdItems,
+        unreadableDocuments,
         bookings: result.bookings || [],
         warnings: result.warnings || [],
         missingDocuments: result.missing_documents || [],
@@ -1293,11 +1301,35 @@ Do NOT include in warnings (these are handled elsewhere):
       console.error('[Consolidation] Error consolidating journey:', error);
       return {
         success: false,
-        message: error instanceof Error ? error.message : 'Unknown error',
+        message: this.describeFailure(error),
         travelItems: [],
         warnings: ['Failed to consolidate journey - please check your documents'],
       };
     }
+  }
+
+  /** Index of the content part the provider rejected as unreadable, if the error names one */
+  private unreadablePartIndex(error: unknown): number | null {
+    const message = (error as { message?: string })?.message || '';
+    const m = message.match(/content\.(\d+)\.(?:pdf|image|document)\.source/i);
+    if (!m) return null;
+    if (!/not valid|could not be processed|invalid|corrupt|unsupported/i.test(message)) return null;
+    return parseInt(m[1], 10);
+  }
+
+  private isForeignKeyError(error: unknown): boolean {
+    return (error as { code?: string })?.code === 'P2003';
+  }
+
+  /** Participant-facing explanation for a failed run */
+  private describeFailure(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = (error as { status?: number })?.status;
+    if (/could not be read|not valid/i.test(message)) return 'One of your files could not be read. Please re-upload it as a photo or screenshot.';
+    if (status === 429 || status === 529 || /overloaded|rate limit/i.test(message)) return 'The analysis service is busy right now. Please try again in a minute.';
+    if (/timeout|timed out/i.test(message)) return 'The analysis took too long. Please try again.';
+    if (/too large|request_too_large|exceeds/i.test(message)) return 'Your documents are too large to analyse together. Please upload smaller files or photos.';
+    return 'The analysis could not be completed. Please try again; if it keeps failing, add your trips manually.';
   }
 
   private mapDocumentType(type: string): DocumentType {
@@ -1344,6 +1376,8 @@ export interface ConsolidationResult {
   success: boolean;
   message: string;
   travelItems: unknown[];
+  /** Files the AI provider could not read (e.g. a web page saved as .pdf); the run continued without them */
+  unreadableDocuments?: { docId: string; filename: string }[];
   bookings?: unknown[];
   warnings: string[];
   missingDocuments?: { type: string; description: string }[];
