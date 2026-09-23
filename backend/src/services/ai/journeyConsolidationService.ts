@@ -4,6 +4,7 @@ import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
 import { getStorageService } from '../storage/index.js';
 import { convertToEurForParticipant } from '../exchangeRate/projectRecalc.js';
+import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -103,8 +104,11 @@ export class JourneyConsolidationService {
     const contentParts: ContentPart[] = [];
 
     if (isPdf) {
-      const base64Data = fileBuffer.toString('base64');
-      console.log(`[Consolidation] Sending PDF directly (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
+      // Repair junk before the header; a file without any header can't be sent as a PDF
+      const sanitized = sanitizePdfBuffer(fileBuffer);
+      if (!sanitized) throw new Error('File has no PDF header');
+      const base64Data = sanitized.buffer.toString('base64');
+      console.log(`[Consolidation] Sending PDF directly (${(sanitized.buffer.length / 1024).toFixed(1)}KB${sanitized.repaired ? ', header repaired' : ''})`);
       contentParts.push({
         type: 'document',
         source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
@@ -868,8 +872,15 @@ Do NOT include in warnings (these are handled elsewhere):
           });
 
           if (isPdf) {
-            const base64Data = fileBuffer.toString('base64');
-            console.log(`[Consolidation] Adding document ${i + 1}: PDF (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
+            const sanitized = sanitizePdfBuffer(fileBuffer);
+            if (!sanitized) {
+              console.warn(`[Consolidation] Document ${doc.id} (${doc.originalFilename}) has no PDF header; skipping`);
+              unreadableDocuments.push({ docId: doc.id, filename: doc.originalFilename });
+              contentParts.pop(); // remove the label pushed above
+              continue;
+            }
+            const base64Data = sanitized.buffer.toString('base64');
+            console.log(`[Consolidation] Adding document ${i + 1}: PDF (${(sanitized.buffer.length / 1024).toFixed(1)}KB${sanitized.repaired ? ', header repaired' : ''})`);
             partOwner.set(contentParts.length, { id: doc.id, filename: doc.originalFilename });
             contentParts.push({
               type: 'document',

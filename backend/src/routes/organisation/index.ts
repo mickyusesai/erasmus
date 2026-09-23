@@ -13,6 +13,7 @@ import { generateAuditPdf } from '../../services/pdf/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { summarizeTravelDays } from '../../utils/travelDays.js';
+import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
 import multer from 'multer';
 
@@ -2287,10 +2288,19 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
   if (!req.file) throw new ValidationError('No file uploaded');
 
   const documentType = (req.body.documentType as string) || 'OTHER';
+
+  // Repair PDFs with junk before the header; refuse files that aren't PDFs at all
+  let fileBuffer = req.file.buffer;
+  if (req.file.mimetype.includes('pdf')) {
+    const sanitized = sanitizePdfBuffer(fileBuffer);
+    if (!sanitized) throw new ValidationError("This file isn't a readable PDF — please re-download it or upload a screenshot or photo instead.");
+    fileBuffer = sanitized.buffer;
+  }
+
   const storage = getStorageService();
   const storedPath = `participants/${participantId}/documents/${uuidv4()}-${req.file.originalname}`;
   await storage.store(
-    { buffer: req.file.buffer, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size },
+    { buffer: fileBuffer, originalname: req.file.originalname, mimetype: req.file.mimetype, size: fileBuffer.length },
     storedPath
   );
 
@@ -2301,7 +2311,7 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
       originalFilename: req.file.originalname,
       renamedFilename: req.file.originalname,
       mimeType: req.file.mimetype,
-      fileSize: req.file.size,
+      fileSize: fileBuffer.length,
       documentType: documentType as DocumentType,
     },
   });

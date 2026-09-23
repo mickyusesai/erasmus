@@ -16,6 +16,7 @@ import { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from '../..
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import { PDFDocument as LibPDFDocument } from 'pdf-lib';
+import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { suggestTravelDays } from '../../utils/travelDays.js';
 import disseminationRoutes from './dissemination.js';
@@ -310,13 +311,19 @@ router.post(
 
     // A file that isn't a readable PDF (a saved web page, a truncated download,
     // an encrypted file) would make the AI provider reject the whole analysis.
+    // Files with junk before the header (some ticket portals do this) are repaired.
+    let fileBuffer = req.file.buffer;
     if (req.file.mimetype.includes('pdf')) {
-      const header = req.file.buffer.subarray(0, 8).toString('latin1');
-      if (!header.startsWith('%PDF')) {
+      const sanitized = sanitizePdfBuffer(fileBuffer);
+      if (!sanitized) {
         throw new ValidationError("This file isn't a readable PDF — please re-download it from the airline/app, or upload a screenshot or photo instead.");
       }
+      if (sanitized.repaired) {
+        console.log(`[Upload] Repaired PDF header for ${req.file.originalname} (stripped ${sanitized.strippedBytes} leading bytes)`);
+      }
+      fileBuffer = sanitized.buffer;
       try {
-        const pdf = await LibPDFDocument.load(req.file.buffer, { ignoreEncryption: true });
+        const pdf = await LibPDFDocument.load(fileBuffer, { ignoreEncryption: true });
         if (pdf.isEncrypted) {
           throw new ValidationError('This PDF is password-protected. Please upload an unprotected copy, or a screenshot or photo.');
         }
@@ -335,10 +342,10 @@ router.post(
     // Store file
     await storage.store(
       {
-        buffer: req.file.buffer,
+        buffer: fileBuffer,
         originalname: req.file.originalname,
         mimetype: req.file.mimetype,
-        size: req.file.size,
+        size: fileBuffer.length,
       },
       storagePath
     );
@@ -354,7 +361,7 @@ router.post(
           originalFilename: req.file.originalname,
           renamedFilename: req.file.originalname,
           mimeType: req.file.mimetype,
-          fileSize: req.file.size,
+          fileSize: fileBuffer.length,
           documentType: 'OTHER', // Will be updated during consolidation
         },
       });
