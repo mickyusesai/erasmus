@@ -1654,7 +1654,16 @@ function Step2CheckData({
       {/* Trips carousel — one trip per slide, cost summary as the final slide */}
       {data.travelItems.length > 0 ? (
         <div>
-          <p className="text-base font-bold text-gray-900 mb-2 px-1">AI-generated trips</p>
+          <div className="flex items-center justify-between mb-2 px-1">
+            <p className="text-base font-bold text-gray-900">AI-generated trips</p>
+            <button
+              type="button"
+              onClick={() => setShowReuploadWarning(true)}
+              className="text-xs font-semibold text-primary-600 hover:text-primary-700 underline underline-offset-2"
+            >
+              Regenerate my trips
+            </button>
+          </div>
           {(() => {
             const groups = groupTravelItemsByBooking(data.travelItems);
             const tripSlides = groups.map((group) => {
@@ -2090,17 +2099,18 @@ function Step2CheckData({
               <div className="p-2 bg-amber-100 rounded-full">
                 <AlertTriangle className="w-6 h-6 text-amber-600" />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900">Re-upload Documents?</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Regenerate your trips?</h3>
             </div>
 
             <p className="text-gray-600 mb-4">
-              Going back to the upload page will allow you to upload additional documents.
+              You'll go back to the upload step, where you can add missing documents (for example a booking
+              confirmation with the price) and then press "Build my trips" to let the AI rebuild your trips.
             </p>
 
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-4">
               <p className="text-sm text-amber-800">
-                <strong>Note:</strong> This will restart the AI analysis and may modify your current travel items.
-                If you just want to add a new travel item manually, you can do that here using the "Add Travel" button.
+                <strong>Note:</strong> Rebuilding may change your current trips and you'll need to confirm them again.
+                To add a single trip by hand, use "Add a trip manually" instead.
               </p>
             </div>
 
@@ -2118,7 +2128,7 @@ function Step2CheckData({
                   onBack();
                 }}
               >
-                Go to Upload
+                Go to upload step
               </Button>
             </div>
           </div>
