@@ -36,50 +36,36 @@ export class JourneyConsolidationService {
    * Resize image if it exceeds the maximum size
    * Uses iterative approach to ensure image is under limit
    */
-  private async resizeImageIfNeeded(buffer: Buffer, mimeType: string): Promise<Buffer> {
-    // Use a slightly lower target to account for base64 encoding overhead
-    const TARGET_SIZE = MAX_IMAGE_SIZE * 0.85; // 85% of max to be safe
+  /**
+   * Normalise any uploaded image into a real JPEG the AI provider accepts.
+   *
+   * Uploads are trusted for their declared MIME type only, and the provider
+   * verifies the bytes against the declared type: a HEIC screenshot renamed
+   * ".png", a PNG we re-encoded as JPEG while resizing, or an RGBA/16-bit PNG
+   * all came back as "could not process image". Decoding with sharp and
+   * re-encoding as JPEG (resized when large) removes every such mismatch.
+   */
+  private async normalizeImage(buffer: Buffer): Promise<Buffer> {
+    const TARGET_SIZE = MAX_IMAGE_SIZE * 0.85; // headroom for base64 overhead
 
-    if (buffer.length <= TARGET_SIZE) {
-      return buffer;
-    }
-
-    console.log(`[Consolidation] Resizing image from ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
-
-    let resized = buffer;
-    let maxDimension = 1800;
-    let quality = 75;
-
-    // Iteratively reduce size until under limit
-    while (resized.length > TARGET_SIZE && quality >= 20) {
-      console.log(`[Consolidation] Attempting resize: ${maxDimension}px, quality ${quality}`);
-
-      resized = await sharp(buffer)
+    const encode = (maxDimension: number, quality: number) =>
+      sharp(buffer, { failOn: 'none' })
+        .rotate() // apply EXIF orientation so phone photos are upright
+        .flatten({ background: '#ffffff' }) // drop alpha (transparent screenshots)
         .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality, mozjpeg: true })
         .toBuffer();
 
-      console.log(`[Consolidation] Result: ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
-
-      if (resized.length > TARGET_SIZE) {
-        // Reduce quality and dimensions for next iteration
-        quality -= 15;
-        maxDimension -= 200;
-        maxDimension = Math.max(maxDimension, 800); // Don't go below 800px
-      }
+    let maxDimension = 2400;
+    let quality = 85;
+    let out = await encode(maxDimension, quality);
+    while (out.length > TARGET_SIZE && quality >= 20) {
+      quality -= 15;
+      maxDimension = Math.max(800, maxDimension - 400);
+      console.log(`[Consolidation] Image still ${(out.length / 1024 / 1024).toFixed(2)}MB, re-encoding at ${maxDimension}px q${quality}`);
+      out = await encode(maxDimension, quality);
     }
-
-    // If still too large, do one final aggressive resize
-    if (resized.length > TARGET_SIZE) {
-      console.log(`[Consolidation] Final aggressive resize`);
-      resized = await sharp(buffer)
-        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 20, mozjpeg: true })
-        .toBuffer();
-      console.log(`[Consolidation] Final result: ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
-    }
-
-    return resized;
+    return out;
   }
 
   /**
@@ -115,16 +101,14 @@ export class JourneyConsolidationService {
       });
     } else {
       // Process image - resize if needed
-      const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, mimeType);
+      // Always send a real JPEG regardless of the declared type (see normalizeImage)
+      const processedBuffer = await this.normalizeImage(fileBuffer);
       const base64Data = processedBuffer.toString('base64');
-      let mediaType = 'image/jpeg';
-      if (mimeType.includes('png')) mediaType = 'image/png';
-      else if (mimeType.includes('gif')) mediaType = 'image/gif';
-      else if (mimeType.includes('webp')) mediaType = 'image/webp';
+      console.log(`[Consolidation] Sending image as JPEG (${(processedBuffer.length / 1024).toFixed(1)}KB, declared ${mimeType})`);
 
       contentParts.push({
         type: 'image',
-        source: { type: 'base64', media_type: mediaType, data: base64Data },
+        source: { type: 'base64', media_type: 'image/jpeg', data: base64Data },
       });
     }
 
@@ -903,19 +887,23 @@ Do NOT include in warnings (these are handled elsewhere):
               source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
             });
           } else {
-            // Process image - resize if needed
-            const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, doc.mimeType);
+            // Always send a real JPEG regardless of the declared type (see normalizeImage)
+            let processedBuffer: Buffer;
+            try {
+              processedBuffer = await this.normalizeImage(fileBuffer);
+            } catch (imageError) {
+              console.warn(`[Consolidation] Document ${doc.id} (${doc.originalFilename}) is not a decodable image; skipping:`, imageError);
+              unreadableDocuments.push({ docId: doc.id, filename: doc.originalFilename });
+              contentParts.pop(); // remove the label pushed above
+              continue;
+            }
             const base64Data = processedBuffer.toString('base64');
-            let mediaType = 'image/jpeg';
-            if (doc.mimeType.includes('png')) mediaType = 'image/png';
-            else if (doc.mimeType.includes('gif')) mediaType = 'image/gif';
-            else if (doc.mimeType.includes('webp')) mediaType = 'image/webp';
 
-            console.log(`[Consolidation] Adding document ${i + 1}: ${mediaType} (${(processedBuffer.length / 1024).toFixed(1)}KB)`);
+            console.log(`[Consolidation] Adding document ${i + 1}: image/jpeg (${(processedBuffer.length / 1024).toFixed(1)}KB, declared ${doc.mimeType})`);
             partOwner.set(contentParts.length, { id: doc.id, filename: doc.originalFilename });
             contentParts.push({
               type: 'image',
-              source: { type: 'base64', media_type: mediaType, data: base64Data },
+              source: { type: 'base64', media_type: 'image/jpeg', data: base64Data },
             });
           }
         } catch (docError) {
