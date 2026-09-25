@@ -1702,6 +1702,50 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
 }));
 
 /**
+ * POST /api/organisation/participants/:id/rebuild-trips
+ * Rebuild a participant's trips from their current documents: existing trips
+ * and bookings are deleted, documents are kept, the AI runs again. For
+ * participants who are not yet approved.
+ */
+router.post('/participants/:id/rebuild-trips', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true, _count: { select: { documents: true } } },
+  });
+  if (!participant) throw new NotFoundError('Participant not found');
+  if (participant.project.organisationId !== org.id) throw new ForbiddenError('Access denied');
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Trips can no longer be rebuilt after approval');
+  }
+  if (participant._count.documents === 0) throw new ValidationError('This participant has no documents to rebuild from');
+
+  const { JourneyConsolidationService } = await import('../../services/ai/journeyConsolidationService.js');
+  const result = await new JourneyConsolidationService().consolidateParticipantJourney(participantId, { fresh: true });
+
+  const { getAiService } = await import('../../services/ai/index.js');
+  await getAiService().recalculateParticipantSummary(participantId);
+
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId,
+      userType: 'ORGANISATION',
+      fieldName: 'travelItems.rebuilt',
+      previousValue: '',
+      newValue: result.success ? `Rebuilt ${result.travelItems.length} trip(s) from documents` : `Rebuild failed: ${result.message}`,
+    },
+  });
+
+  if (!result.success) {
+    res.status(422).json({ success: false, message: result.message, unreadableDocuments: result.unreadableDocuments ?? [] });
+    return;
+  }
+  res.json({ success: true, travelItems: result.travelItems.length, unreadableDocuments: result.unreadableDocuments ?? [] });
+}));
+
+/**
  * POST /api/organisation/participants/:id/reset
  * Reset a participant: delete all uploaded files, travel items, and extracted data,
  * reset status to DRAFT, and re-send the magic link so they can start fresh.

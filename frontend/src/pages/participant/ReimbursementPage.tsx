@@ -741,7 +741,9 @@ function Step1Upload({
     consolidatingRef.current = true;
     setConsolidating(true);
     try {
-      const result = await participantApi.consolidateJourney(token);
+      // Rebuilding after trips already exist must start from scratch, otherwise the
+      // old trips (and their missing prices) are preserved and nothing changes.
+      const result = await participantApi.consolidateJourney(token, { fresh: data.travelItems.length > 0 });
       setAnalysisFailure(null);
 
       // Store AI warnings to display on the next step as persistent banners
@@ -1179,6 +1181,27 @@ function Step2CheckData({
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<TravelItem | null>(null);
   const [deleteWithDocuments, setDeleteWithDocuments] = useState(false);
   const [showReuploadWarning, setShowReuploadWarning] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+
+  // Rebuild trips from the current documents without leaving Step 2
+  const rebuildNow = async () => {
+    setShowReuploadWarning(false);
+    setRebuilding(true);
+    try {
+      const result = await participantApi.consolidateJourney(token, { fresh: true });
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
+      if (result.unreadableDocuments && result.unreadableDocuments.length > 0) {
+        toast(`Rebuilt, but ${result.unreadableDocuments.length} file(s) could not be read`, { icon: '⚠️' });
+      } else {
+        toast.success('Your trips were rebuilt from your documents');
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Rebuilding failed. Please try again.');
+    } finally {
+      setRebuilding(false);
+    }
+  };
   // Imperative handle to jump the trips carousel (e.g. to the first unconfirmed trip)
   const carouselApiRef = useRef<{ goTo: (i: number) => void } | null>(null);
 
@@ -1829,6 +1852,8 @@ function Step2CheckData({
         </Card>
       )}
 
+      {rebuilding && <ConsolidationLoading documentCount={data.documents.length} />}
+
       {/* Add a trip manually (also links loose documents) */}
       <button
         type="button"
@@ -2103,32 +2128,32 @@ function Step2CheckData({
             </div>
 
             <p className="text-gray-600 mb-4">
-              You'll go back to the upload step, where you can add missing documents (for example a booking
-              confirmation with the price) and then press "Build my trips" to let the AI rebuild your trips.
+              The AI will rebuild all your trips from your uploaded documents. Your current trips — including any
+              edits — are replaced, and you'll confirm the new ones again.
             </p>
 
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-4">
               <p className="text-sm text-amber-800">
-                <strong>Note:</strong> Rebuilding may change your current trips and you'll need to confirm them again.
-                To add a single trip by hand, use "Add a trip manually" instead.
+                Missing a document (for example the booking confirmation with the price)? Add it on the upload step
+                first — the rebuild there uses the new file too. To add a single trip by hand, use "Add a trip manually".
               </p>
             </div>
 
-            <div className="flex gap-3 justify-end">
-              <Button
-                variant="secondary"
-                onClick={() => setShowReuploadWarning(false)}
-              >
-                Stay Here
+            <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+              <Button variant="secondary" onClick={() => setShowReuploadWarning(false)}>
+                Cancel
               </Button>
               <Button
-                variant="primary"
+                variant="secondary"
                 onClick={() => {
                   setShowReuploadWarning(false);
                   onBack();
                 }}
               >
-                Go to upload step
+                Add documents first
+              </Button>
+              <Button variant="primary" onClick={rebuildNow}>
+                Rebuild now
               </Button>
             </div>
           </div>

@@ -449,8 +449,8 @@ export const participantApi = {
    * Consolidate all uploaded documents into a coherent journey
    * This should be called when moving from Step 1 (Upload) to Step 2 (Review)
    */
-  consolidateJourney: async (token: string) => {
-    const res = await fetch(`${API_BASE}/participant/consolidate?token=${token}`, {
+  consolidateJourney: async (token: string, options?: { fresh?: boolean }) => {
+    const res = await fetch(`${API_BASE}/participant/consolidate?token=${token}${options?.fresh ? '&fresh=1' : ''}`, {
       method: 'POST',
     });
     return handleResponse<ConsolidationResult>(res);
@@ -890,6 +890,15 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
     });
     return handleResponse<{ success: boolean }>(res);
+  },
+
+  // Rebuild a participant's trips from their documents (deletes current trips, keeps documents)
+  rebuildParticipantTrips: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}/rebuild-trips`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; travelItems: number; unreadableDocuments: { docId: string; filename: string }[] }>(res);
   },
 
   resetParticipant: async (id: string) => {

@@ -243,6 +243,15 @@ export default function OrgParticipantDetail() {
     onError: () => toast.error('Failed to refresh AI review'),
   });
 
+  const rebuildTripsMutation = useMutation({
+    mutationFn: () => organisationApi.rebuildParticipantTrips(id!),
+    onSuccess: (r) => {
+      toast.success(`Rebuilt ${r.travelItems} trip(s) from the documents${r.unreadableDocuments.length ? ` — ${r.unreadableDocuments.length} file(s) could not be read` : ''}`);
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Rebuild failed'),
+  });
+
   const sendMagicLinkMutation = useMutation({
     mutationFn: () => organisationApi.sendMagicLink(id!),
     onSuccess: () => {
@@ -543,6 +552,21 @@ export default function OrgParticipantDetail() {
                 <Send className="w-4 h-4 mr-2" />
                 Send Magic Link
               </Button>
+              {participant.status !== 'ADMIN_APPROVED' && participant.status !== 'PAID' && participant.documents.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (window.confirm('Rebuild this participant\'s trips from their documents? Current trips (including edits) are replaced; documents are kept. This can take a few minutes.')) {
+                      rebuildTripsMutation.mutate();
+                    }
+                  }}
+                  loading={rebuildTripsMutation.isPending}
+                  title="Delete the current trips and let the AI rebuild them from the uploaded documents"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Rebuild trips
+                </Button>
+              )}
             </div>
           </div>
 

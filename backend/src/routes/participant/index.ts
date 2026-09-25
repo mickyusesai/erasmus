@@ -435,8 +435,9 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
     return;
   }
 
-  // Run the consolidation
-  const result = await consolidationService.consolidateParticipantJourney(participant.id);
+  // Run the consolidation ("fresh" wipes existing trips so they are rebuilt from the documents)
+  const fresh = req.query.fresh === '1' || req.body?.fresh === true;
+  const result = await consolidationService.consolidateParticipantJourney(participant.id, { fresh });
 
   // Recalculate summary after consolidation
   const aiService = getAiService();

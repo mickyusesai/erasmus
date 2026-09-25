@@ -397,8 +397,24 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
    * Consolidate all documents for a participant into a coherent journey
    * This is called when the participant moves from Step 1 to Step 2
    */
-  async consolidateParticipantJourney(participantId: string): Promise<ConsolidationResult> {
-    console.log(`[Consolidation] Starting journey consolidation for participant ${participantId}`);
+  /**
+   * Build the participant's trips from their documents.
+   * By default existing trips are preserved (only document links are refreshed);
+   * with `fresh: true` all trips and bookings are deleted first so the AI
+   * rebuilds everything from the current documents (e.g. after a booking
+   * confirmation with prices was added).
+   */
+  async consolidateParticipantJourney(participantId: string, options: { fresh?: boolean } = {}): Promise<ConsolidationResult> {
+    console.log(`[Consolidation] Starting journey consolidation for participant ${participantId}${options.fresh ? ' (fresh rebuild)' : ''}`);
+
+    if (options.fresh) {
+      // Declarations and review findings keep their rows (FK SetNull); documents are untouched.
+      const [items, bookings] = await prisma.$transaction([
+        prisma.travelItem.deleteMany({ where: { participantId } }),
+        prisma.travelBooking.deleteMany({ where: { participantId } }),
+      ]);
+      console.log(`[Consolidation] Fresh rebuild: removed ${items.count} travel item(s) and ${bookings.count} booking(s)`);
+    }
 
     // Get participant with all documents and extractions
     const participant = await prisma.participant.findUnique({
