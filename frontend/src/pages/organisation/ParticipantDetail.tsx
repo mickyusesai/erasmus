@@ -38,6 +38,8 @@ import {
   X,
   Link2,
   Repeat,
+  BedDouble,
+  Utensils,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -1950,6 +1952,113 @@ function IndividualLimitCard({
  * participant. Highlighted with a suggestion for green travellers; allowed at
  * every stage except PAID; saving emails the participant.
  */
+type SuggestionReceipt = NonNullable<OrgParticipantDetailData['greenTravelSuggestion']>['receipts'][number];
+
+function sumByCurrency(list: SuggestionReceipt[]): string {
+  const sums = new Map<string, number>();
+  let unclear = 0;
+  for (const r of list) {
+    if (r.amount == null) { unclear++; continue; }
+    const cur = r.currency || 'EUR';
+    sums.set(cur, (sums.get(cur) || 0) + r.amount);
+  }
+  const parts = [...sums.entries()].map(([cur, v]) => (cur === 'EUR' ? formatCurrency(v) : `${v.toFixed(2)} ${cur}`));
+  if (unclear > 0) parts.push(`${unclear} unclear`);
+  return parts.length > 0 ? parts.join(' + ') : '—';
+}
+
+/** One receipt tile: image thumbnail (signed URL fetched lazily) or a PDF icon; click opens the file */
+function ReceiptThumb({ participantId, receipt }: { participantId: string; receipt: SuggestionReceipt }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const isImage = !!receipt.mimeType && receipt.mimeType.startsWith('image/');
+  const isHotel = receipt.documentType === 'HOTEL_INVOICE';
+  useEffect(() => {
+    let cancelled = false;
+    if (isImage) {
+      organisationApi.getDocumentUrl(participantId, receipt.id)
+        .then((r) => { if (!cancelled) setUrl(r.url); })
+        .catch(() => { /* fall back to the icon */ });
+    }
+    return () => { cancelled = true; };
+  }, [participantId, receipt.id, isImage]);
+
+  const openFile = async () => {
+    try {
+      const r = await organisationApi.getDocumentUrl(participantId, receipt.id);
+      window.open(r.url, '_blank', 'noopener,noreferrer');
+    } catch {
+      toast.error('Could not open the receipt');
+    }
+  };
+
+  const amount = receipt.amount != null
+    ? (receipt.currency && receipt.currency !== 'EUR' ? `${receipt.amount.toFixed(2)} ${receipt.currency}` : formatCurrency(receipt.amount))
+    : 'amount unclear';
+
+  return (
+    <button
+      type="button"
+      onClick={openFile}
+      title={`${receipt.renamedFilename} — open`}
+      className="w-24 flex-shrink-0 text-left group"
+    >
+      <div className={`w-24 h-24 rounded-xl overflow-hidden border bg-white flex items-center justify-center ${isHotel ? 'border-sky-200' : 'border-amber-200'} group-hover:ring-2 group-hover:ring-emerald-400`}>
+        {url ? (
+          <img src={url} alt={receipt.renamedFilename} className="w-full h-full object-cover" loading="lazy" />
+        ) : (
+          <div className={`flex flex-col items-center gap-1 ${isHotel ? 'text-sky-500' : 'text-amber-500'}`}>
+            {isHotel ? <BedDouble className="w-6 h-6" /> : <Utensils className="w-6 h-6" />}
+            <span className="text-[10px] uppercase tracking-wide">{isImage ? 'photo' : 'PDF'}</span>
+          </div>
+        )}
+      </div>
+      <p className="text-[11px] mt-1 font-medium text-gray-800 truncate">{amount}</p>
+      <p className="text-[10px] text-gray-500 truncate">{isHotel ? 'Hotel' : 'Meal'}</p>
+    </button>
+  );
+}
+
+/** Receipts grouped by day, with meal and hotel totals, for deciding the green travel extra */
+function ReceiptGallery({ participantId, receipts }: { participantId: string; receipts: SuggestionReceipt[] }) {
+  if (receipts.length === 0) {
+    return <p className="mt-1">Receipts uploaded: none yet — the participant can still add them.</p>;
+  }
+  const meals = receipts.filter((r) => r.documentType === 'MEAL_RECEIPT');
+  const hotels = receipts.filter((r) => r.documentType === 'HOTEL_INVOICE');
+  const dayKey = (r: SuggestionReceipt) => {
+    const d = r.documentDate || r.uploadDate;
+    return d ? new Date(d).toISOString().slice(0, 10) : 'unknown';
+  };
+  const groups = new Map<string, SuggestionReceipt[]>();
+  for (const r of receipts) {
+    const k = dayKey(r);
+    groups.set(k, [...(groups.get(k) || []), r]);
+  }
+  const ordered = [...groups.entries()].sort(([a], [b]) => (a === 'unknown' ? 1 : b === 'unknown' ? -1 : a.localeCompare(b)));
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        <span><Utensils className="inline w-3.5 h-3.5 mr-1 text-amber-500" />{meals.length} meal receipt{meals.length === 1 ? '' : 's'} · <strong>{sumByCurrency(meals)}</strong></span>
+        <span><BedDouble className="inline w-3.5 h-3.5 mr-1 text-sky-500" />{hotels.length} hotel invoice{hotels.length === 1 ? '' : 's'} · <strong>{sumByCurrency(hotels)}</strong></span>
+      </div>
+      <div className="mt-2 space-y-2">
+        {ordered.map(([day, list]) => (
+          <div key={day}>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700/80 mb-1">
+              {day === 'unknown' ? 'Date unclear' : formatDate(day)} · {list.length}
+            </p>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {list.map((r) => <ReceiptThumb key={r.id} participantId={participantId} receipt={r} />)}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-emerald-800/70 mt-1">Amounts are read by the AI from the receipts; click a tile to open the file.</p>
+    </div>
+  );
+}
+
 function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDetailData }) {
   const queryClient = useQueryClient();
   const [food, setFood] = useState(participant.greenTravelFoodEur != null ? String(participant.greenTravelFoodEur) : '');
@@ -2023,13 +2132,8 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
               {s.firstTravelDate && s.lastTravelDate && ` (${formatDate(s.firstTravelDate)} → ${formatDate(s.lastTravelDate)})`},
               {' '}<strong>{s.extraTravelDays}</strong> beyond the project dates.
             </p>
-            <p className="mt-1">
-              Receipts uploaded:{' '}
-              {s.receipts.length === 0
-                ? 'none'
-                : s.receipts.map((r) => `${r.documentType === 'HOTEL_INVOICE' ? 'hotel' : 'meal'} ${r.amount != null ? `${r.amount.toFixed(2)} ${r.currency || ''}`.trim() : '(amount unclear)'}`).join(', ')}
-            </p>
-            <p className="mt-1 text-emerald-700">Fill in the total amount for green travel you wish to add to their reimbursement.</p>
+            <ReceiptGallery participantId={participant.id} receipts={s.receipts} />
+            <p className="mt-2 text-emerald-700">Fill in the total amount for green travel you wish to add to their reimbursement.</p>
           </div>
         )}
 

@@ -321,9 +321,11 @@ export const participantApi = {
     return handleResponse<ParticipantAuthResponse>(res);
   },
 
-  uploadDocument: async (token: string, file: File) => {
+  uploadDocument: async (token: string, file: File, documentType?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT') => {
     const formData = new FormData();
     formData.append('file', file);
+    // Receipts for the green-travel extra are stored as such and never treated as tickets
+    if (documentType) formData.append('documentType', documentType);
 
     const res = await fetch(`${API_BASE}/participant/documents?token=${token}`, {
       method: 'POST',
@@ -1273,7 +1275,7 @@ export interface GreenTravelSuggestion {
   extraTravelDays: number;
   firstTravelDate: string | null;
   lastTravelDate: string | null;
-  receipts: { id: string; renamedFilename: string; documentType: DocumentType; amount: number | null; currency: string | null; documentDate: string | null }[];
+  receipts: { id: string; renamedFilename: string; documentType: DocumentType; mimeType?: string; uploadDate?: string; amount: number | null; currency: string | null; documentDate: string | null }[];
 }
 
 export interface OrgDashboardData {
@@ -1610,6 +1612,8 @@ export interface Document {
   uploadDate: string;
   documentType: DocumentType;
   ocrText?: string;
+  /** Quick AI read of the document (amount/date for receipts) */
+  extraction?: { amount: number | null; currency: string | null; documentDate: string | null; merchantName: string | null } | null;
 }
 
 export type DocumentType =
@@ -1838,6 +1842,8 @@ export interface ParticipantAuthResponse {
   maxReimbursementForCountry?: number;
   greenTravel?: boolean;
   greenTravelExtra?: GreenTravelExtra | null;
+  /** Hotel/meal receipts may still be added (green travel extra not yet settled, not paid) */
+  receiptUploadsOpen?: boolean;
   greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
   requireGreenTravelDeclaration?: boolean;
   validation: ValidationResult;

@@ -42,6 +42,8 @@ import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
 import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
 import { SignaturePad } from '../../components/participant/SignaturePad';
+import { ReceiptsCard } from '../../components/participant/ReceiptsCard';
+import { isReceiptDocument } from '../../utils/documentKinds';
 import { computePayable } from '../../utils/reimbursementMath';
 import { sameCountry, normalizeCountryName } from '../../utils/countryName';
 import DisseminationPage from './DisseminationPage';
@@ -460,7 +462,7 @@ export default function ReimbursementPage() {
             </CardContent>
           </Card>
         ) : isComplete ? (
-          <CompletedView data={data} />
+          <CompletedView data={data} token={token} />
         ) : (
           <>
             {currentStep === 1 && (
@@ -661,8 +663,14 @@ function TravelSwipeCarousel({
   );
 }
 
-function CompletedView({ data }: { data: ParticipantAuthResponse }) {
+function CompletedView({ data, token }: { data: ParticipantAuthResponse; token: string }) {
   return (
+    <>
+    {data.greenTravel && (
+      <div className="mt-6">
+        <ReceiptsCard data={data} token={token} compact />
+      </div>
+    )}
     <Card className="mt-6">
       <CardContent className="py-12 text-center">
         <div className="w-20 h-20 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-6">
@@ -689,6 +697,7 @@ function CompletedView({ data }: { data: ParticipantAuthResponse }) {
         </div>
       </CardContent>
     </Card>
+    </>
   );
 }
 
@@ -805,7 +814,10 @@ function Step1Upload({
     }
   }, [uploadMutation]);
 
-  const atDocumentLimit = data.documents.length >= MAX_DOCUMENTS;
+  // Hotel/meal receipts are kept apart: not counted and not sent to the trip builder
+  const travelDocs = data.documents.filter((d) => !isReceiptDocument(d));
+  const receiptDocs = data.documents.filter(isReceiptDocument);
+  const atDocumentLimit = travelDocs.length >= MAX_DOCUMENTS;
   // Result of the last failed analysis (shown inline so the participant knows what to fix)
   const [analysisFailure, setAnalysisFailure] = useState<{ message: string; unreadable: { docId: string; filename: string }[] } | null>(null);
   const { getRootProps, getInputProps, open } = useDropzone({
@@ -958,8 +970,9 @@ function Step1Upload({
           </p>
           {isGreenTravel && (
             <p className="text-white/85 text-sm mt-3 bg-white/10 rounded-xl px-3 py-2">
-              <strong>Green travel:</strong> also upload your hotel and meal receipts from the journey. Your organisation
-              decides the extra green-travel budget and you'll get an email once it's added to your reimbursement.
+              <strong>Green travel:</strong> your hotel and meal receipts can go in here too, or later in the
+              “Food &amp; accommodation” section on the next step. They don't count towards the file limit. Your organisation
+              decides the extra green-travel budget and you'll get an email once it's added.
             </p>
           )}
           <button
@@ -988,8 +1001,8 @@ function Step1Upload({
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
             <h3 className="font-semibold text-gray-900">Uploaded</h3>
-            <span className={clsx('text-sm', data.documents.length >= MAX_DOCUMENTS - 3 ? 'text-amber-600 font-medium' : 'text-gray-500')}>
-              {data.documents.length} of {MAX_DOCUMENTS} files
+            <span className={clsx('text-sm', travelDocs.length >= MAX_DOCUMENTS - 3 ? 'text-amber-600 font-medium' : 'text-gray-500')}>
+              {travelDocs.length} of {MAX_DOCUMENTS} files
             </span>
           </div>
           {data.documents.length === 0 ? (
@@ -998,10 +1011,22 @@ function Step1Upload({
             </div>
           ) : (
             <ul className="divide-y divide-gray-100">
-              {data.documents.map((doc) => (
+              {(isGreenTravel && receiptDocs.length > 0
+                ? [
+                    { key: 'travel', label: 'Tickets, boarding passes & invoices', docs: travelDocs },
+                    { key: 'receipts', label: 'Food & accommodation receipts (not counted)', docs: receiptDocs },
+                  ]
+                : [{ key: 'all', label: null, docs: data.documents }]
+              ).flatMap((group) => [
+                group.label ? (
+                  <li key={`h-${group.key}`} className="px-4 py-1.5 bg-gray-50 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                    {group.label} · {group.docs.length}
+                  </li>
+                ) : null,
+                ...group.docs.map((doc) => (
                 <li key={doc.id} className="flex items-center gap-3 px-4 py-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0">
-                    <FileText className="w-5 h-5 text-primary-500" />
+                  <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0', isReceiptDocument(doc) ? 'bg-emerald-50' : 'bg-primary-50')}>
+                    <FileText className={clsx('w-5 h-5', isReceiptDocument(doc) ? 'text-emerald-500' : 'text-primary-500')} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-900 truncate text-sm">{doc.renamedFilename}</p>
@@ -1047,7 +1072,8 @@ function Step1Upload({
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </li>
-              ))}
+                )),
+              ])}
             </ul>
           )}
         </div>
@@ -1091,19 +1117,20 @@ function Step1Upload({
               <div className="min-w-0">
                 <p className="text-sm text-gray-500">Ready to build trips</p>
                 <p className="font-bold text-gray-900">
-                  {data.documents.length} document{data.documents.length === 1 ? '' : 's'}
+                  {travelDocs.length} travel document{travelDocs.length === 1 ? '' : 's'}
+                  {receiptDocs.length > 0 && <span className="text-gray-400 font-normal text-sm"> + {receiptDocs.length} receipt{receiptDocs.length === 1 ? '' : 's'}</span>}
                 </p>
               </div>
               <button
                 onClick={() => setShowConfirmModal(true)}
-                disabled={data.documents.length === 0 || consolidating}
+                disabled={travelDocs.length === 0 || consolidating}
                 className="px-6 py-3.5 rounded-2xl font-semibold text-white bg-gradient-to-r from-primary-600 to-fuchsia-500 shadow-lg disabled:opacity-50 flex items-center gap-2 transition-opacity flex-shrink-0"
               >
                 {consolidating ? 'Analyzing…' : (<>Build my trips <ArrowRight className="w-5 h-5" /></>)}
               </button>
             </div>
-            {data.documents.length === 0 && (
-              <p className="text-xs text-gray-400 mt-2">Upload at least one document to continue.</p>
+            {travelDocs.length === 0 && (
+              <p className="text-xs text-gray-400 mt-2">Upload at least one ticket or booking confirmation to continue.</p>
             )}
           </div>
         ) : (
@@ -1759,6 +1786,7 @@ function Step2CheckData({
               hasMultiPersonBooking: hasMultiPerson,
             });
             const willReceive = payable.total;
+            const receiptCount = data.documents.filter(isReceiptDocument).length;
             const receiptSlide = {
               key: '__cost_breakdown__',
               node: (
@@ -1804,6 +1832,17 @@ function Step2CheckData({
                         </div>
                       )}
                       {greenExtra.note && <p className="text-xs text-gray-400 italic">“{greenExtra.note}”</p>}
+                    </div>
+                  )}
+                  {data.greenTravel && !(greenExtra && allowanceOnTop > 0) && (
+                    <div className="mb-3 pt-2 border-t border-dashed border-gray-200 flex justify-between gap-3 text-sm">
+                      <span className="text-gray-600">
+                        Food &amp; accommodation
+                        <span className="block text-[11px] text-gray-400">
+                          {receiptCount} receipt{receiptCount === 1 ? '' : 's'} uploaded · amount decided by {data.project.organisation?.name || 'your organisation'}
+                        </span>
+                      </span>
+                      <span className="text-emerald-700 text-xs font-medium whitespace-nowrap">to be added</span>
                     </div>
                   )}
                   <div className="border-t border-gray-200 my-3" />
@@ -1853,7 +1892,10 @@ function Step2CheckData({
         </Card>
       )}
 
-      {rebuilding && <ConsolidationLoading documentCount={data.documents.length} />}
+      {rebuilding && <ConsolidationLoading documentCount={data.documents.filter((d) => !isReceiptDocument(d)).length} />}
+
+      {/* Food & accommodation receipts — separate from trips, organiser decides the amount */}
+      {data.greenTravel && <ReceiptsCard data={data} token={token} />}
 
       {/* Add a trip manually (also links loose documents) */}
       <button
@@ -4140,6 +4182,15 @@ function Step3Confirm({
                 Total travel costs {formatCurrency(data.reimbursementSummary?.totalEur || 0)} · capped at your country maximum
               </p>
             )}
+            {data.greenTravel && !(data.reimbursementSummary?.greenTravelExtraEur || 0) && (() => {
+              const n = data.documents.filter(isReceiptDocument).length;
+              return (
+                <p className="text-white/85 text-xs mt-2 bg-white/10 rounded-xl px-3 py-2">
+                  <strong>Food &amp; accommodation:</strong> {n} receipt{n === 1 ? '' : 's'} uploaded. Your organisation decides this
+                  amount and will email you once it is added. You can still add receipts after submitting.
+                </p>
+              );
+            })()}
           </div>
 
           {/* Missing Items Warning — hide bank-related items until user tries to submit */}

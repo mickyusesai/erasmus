@@ -11,6 +11,7 @@ import {
 import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { normalizeCountryName, sameCountry } from '../../utils/countryName.js';
+import { isReceiptDocument } from '../../utils/documentKinds.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
@@ -721,9 +722,12 @@ ${data.travelItems.map((item, i) => {
     return `${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} | Date: ${item.departureDate || '?'}${item.purchaseDate ? ` | Purchase: ${item.purchaseDate}` : ''} | €${item.amountEur ?? 'MISSING'} (${item.currencyOriginal || 'EUR'})${item.flightNumber ? ` | Flight: ${item.flightNumber}` : ''}${item.bookingReference ? ` | Booking: ${item.bookingReference}` : ''}${flags.length > 0 ? '\n     ⚠ ' + flags.join('\n     ⚠ ') : ''}`;
   }).join('\n')}
 
-=== DOCUMENTS (${data.documents.length}) ===
-${data.documents.map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}`).join('\n')}
-
+=== TRAVEL DOCUMENTS (${data.documents.filter((d) => !isReceiptDocument(d)).length}) ===
+${data.documents.filter((d) => !isReceiptDocument(d)).map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}`).join('\n')}
+${(() => { const r = data.documents.filter(isReceiptDocument); return r.length > 0 ? `
+=== FOOD & ACCOMMODATION RECEIPTS (${r.length}) ===
+${r.filter((d) => d.documentType === 'MEAL_RECEIPT').length} meal receipt(s), ${r.filter((d) => d.documentType === 'HOTEL_INVOICE').length} hotel invoice(s). These support the green-travel extra that the organisation decides separately. They are NEVER linked to travel items — do not flag them as unlinked, unused or missing.
+` : ''; })()}
 === GREEN TRAVEL ===
 ${data.greenTravel ? 'This participant is flagged as GREEN TRAVEL (low-emission transport for the main part of the journey).' : 'This participant is NOT flagged as green travel.'}
 ${data.greenTravelExtra && ((data.greenTravelExtra.foodEur ?? 0) > 0 || (data.greenTravelExtra.accommodationEur ?? 0) > 0)

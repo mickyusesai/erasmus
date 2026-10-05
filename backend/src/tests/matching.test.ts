@@ -31,3 +31,15 @@ describe('place matching', () => {
     expect(sameTravelDay('2026-08-22', '2026-08-24')).toBe(false);
   });
 });
+
+import { isReceiptDocument, isReceiptDocumentType } from '../utils/documentKinds.js';
+
+describe('receipt document kinds', () => {
+  it('treats hotel invoices and meal receipts as receipts, nothing else', () => {
+    expect(isReceiptDocumentType('HOTEL_INVOICE')).toBe(true);
+    expect(isReceiptDocumentType('MEAL_RECEIPT')).toBe(true);
+    expect(isReceiptDocumentType('TRAIN_TICKET')).toBe(false);
+    expect(isReceiptDocumentType(undefined)).toBe(false);
+    expect(isReceiptDocument({ documentType: 'FUEL_RECEIPT' })).toBe(false);
+  });
+});

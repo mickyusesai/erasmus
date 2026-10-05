@@ -7,6 +7,7 @@ import { convertToEurForParticipant } from '../exchangeRate/projectRecalc.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import { normalizeCountryName } from '../../utils/countryName.js';
 import { samePlace, sameTravelDay } from '../../utils/placeMatch.js';
+import { isReceiptDocument } from '../../utils/documentKinds.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -77,8 +78,10 @@ export class JourneyConsolidationService {
   async extractAndStoreDocumentData(
     documentId: string,
     fileBuffer: Buffer,
-    mimeType: string
+    mimeType: string,
+    options: { typeHint?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT' } = {}
   ): Promise<void> {
+    const typeHint = options.typeHint;
     console.log(`[Consolidation] Extracting data from document ${documentId} using OpenAI GPT-5.2`);
 
     const isPdf = mimeType.includes('pdf');
@@ -255,7 +258,9 @@ IMPORTANT - Round-trip detection:
 
 Extract real values only - use null if not visible.
 For station names like "Rotterdam C." or "Eindhoven C." use just the city name.
-REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
+REMEMBER: European dates are DD/MM/YYYY - day first, then month!${typeHint ? `
+
+PARTICIPANT'S OWN CLASSIFICATION: the participant uploaded this as a ${typeHint === 'HOTEL_INVOICE' ? 'hotel/accommodation invoice' : 'meal/food receipt'} for their green-travel extra. Set documentType to ${typeHint} and focus on the total amount, currency, documentDate and merchantName.` : ''}`;
 
     contentParts.push({ type: 'text', text: prompt });
 
@@ -293,7 +298,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         where: { documentId },
         create: {
           documentId,
-          detectedDocumentType: this.mapDocumentType(parsed.documentType),
+          detectedDocumentType: typeHint ?? this.mapDocumentType(parsed.documentType),
           confidence: parsed.confidence || 0.5,
           passengerName: parsed.passengerName || null,
           fromLocation: parsed.fromLocation ? this.toTitleCase(parsed.fromLocation) : null,
@@ -320,7 +325,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
           rawAiResponse: responseText,
         },
         update: {
-          detectedDocumentType: this.mapDocumentType(parsed.documentType),
+          detectedDocumentType: typeHint ?? this.mapDocumentType(parsed.documentType),
           confidence: parsed.confidence || 0.5,
           passengerName: parsed.passengerName || null,
           fromLocation: parsed.fromLocation ? this.toTitleCase(parsed.fromLocation) : null,
@@ -349,10 +354,11 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         },
       });
 
-      // Update the document type based on AI detection
+      // Update the document type based on AI detection (the participant's own
+      // classification of a receipt wins over the AI's guess)
       await prisma.document.update({
         where: { id: documentId },
-        data: { documentType: this.mapDocumentType(parsed.documentType) },
+        data: { documentType: typeHint ?? this.mapDocumentType(parsed.documentType) },
       });
 
       console.log(`[Consolidation] Stored extraction for document ${documentId}: ${parsed.documentType}`);
@@ -419,6 +425,15 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       throw new Error('Participant not found');
     }
 
+    // Hotel/meal receipts belong to the green-travel extra: they never become
+    // trips, so they are left out of the (expensive) trip-building request.
+    const allDocuments = participant.documents;
+    const receiptCount = allDocuments.filter(isReceiptDocument).length;
+    participant.documents = allDocuments.filter((d) => !isReceiptDocument(d));
+    if (receiptCount > 0) {
+      console.log(`[Consolidation] Skipping ${receiptCount} hotel/meal receipt(s); analysing ${participant.documents.length} travel document(s)`);
+    }
+
     // Build extraction map for quick lookup by document ID
     const extractionMap = new Map<string, Record<string, unknown>>();
     for (const doc of participant.documents) {
@@ -431,7 +446,9 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
       console.log('[Consolidation] No extractions found, nothing to consolidate');
       return {
         success: false,
-        message: 'No document extractions available',
+        message: participant.documents.length === 0 && receiptCount > 0
+          ? 'Only hotel/meal receipts were uploaded. Add your tickets or booking confirmations to build trips.'
+          : 'No document extractions available',
         travelItems: [],
         warnings: ['No documents have been analyzed yet'],
       };

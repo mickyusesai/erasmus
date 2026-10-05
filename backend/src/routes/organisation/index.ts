@@ -1133,6 +1133,8 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
         id: d.id,
         renamedFilename: d.renamedFilename,
         documentType: d.documentType,
+        mimeType: d.mimeType,
+        uploadDate: d.uploadDate,
         amount: d.extraction?.amount ?? null,
         currency: d.extraction?.currency ?? null,
         documentDate: d.extraction?.documentDate ?? null,
@@ -2369,6 +2371,15 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
       newValue: req.file.originalname,
     },
   });
+
+  // Receipts uploaded by the organiser get the same quick amount/date read as
+  // participant uploads, so they show up with amounts in the green-travel card
+  if (documentType === 'HOTEL_INVOICE' || documentType === 'MEAL_RECEIPT') {
+    const { JourneyConsolidationService } = await import('../../services/ai/journeyConsolidationService.js');
+    new JourneyConsolidationService()
+      .extractAndStoreDocumentData(document.id, fileBuffer, req.file.mimetype, { typeHint: documentType })
+      .catch((error) => console.error(`[OrgUpload] Receipt extraction failed for ${document.id}:`, error));
+  }
 
   res.status(201).json(document);
 }));

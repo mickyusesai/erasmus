@@ -5,6 +5,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { participantAuth, ensureOwnParticipant } from '../../middleware/auth.js';
+import { isReceiptDocument, isReceiptDocumentType } from '../../utils/documentKinds.js';
 import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
@@ -134,8 +135,21 @@ const declarationOfTravelSchema = z.object({
   driverName: z.string().nullable().optional(),
 });
 
-// Maximum number of uploaded documents per participant
+// Maximum number of uploaded travel documents per participant (tickets, boarding
+// passes, invoices...). Hotel/meal receipts for the green-travel extra are not
+// counted: they never go to the trip-building AI. A generous guard still applies.
 const MAX_DOCUMENTS = 25;
+const MAX_RECEIPTS = 80;
+
+/**
+ * Receipts may be added until the organiser has either set the green-travel
+ * extra or paid out; travel documents are locked once the organiser approves.
+ */
+function receiptUploadsOpen(p: { status: string; greenTravelExtraUpdatedAt: Date | null }): boolean {
+  if (p.status === 'PAID') return false;
+  if (p.status === 'ADMIN_APPROVED') return !p.greenTravelExtraUpdatedAt;
+  return true;
+}
 
 // Wrap async route handlers
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
@@ -182,6 +196,9 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       },
       documents: {
         orderBy: { uploadDate: 'desc' },
+        include: {
+          extraction: { select: { amount: true, currency: true, documentDate: true, merchantName: true } },
+        },
       },
       greenTravelDeclaration: { select: { id: true, signedAt: true, documentId: true } },
       travelItems: {
@@ -272,6 +289,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
         }
       : null,
     greenTravelDeclaration: data?.greenTravelDeclaration ?? null,
+    receiptUploadsOpen: data ? receiptUploadsOpen(data) : false,
     requireGreenTravelDeclaration: data?.project.requireGreenTravelDeclaration ?? false,
     validation,
     disseminationStatus,
@@ -294,18 +312,33 @@ router.post(
       throw new ValidationError('File is required');
     }
 
+    // Optional type hint from the "Food & accommodation" section: the participant
+    // tells us it is a receipt, so it is stored as one and never treated as a ticket.
+    const typeHint = isReceiptDocumentType(req.body?.documentType) ? req.body.documentType : null;
+
     // Check if participant can still upload
-    if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    if (typeHint) {
+      if (!receiptUploadsOpen(participant)) {
+        throw new ForbiddenError('Receipts can no longer be added: the green travel extra has been settled');
+      }
+    } else if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
       throw new ForbiddenError('Cannot upload documents after approval');
     }
 
-    // Enforce the document limit
-    const existingDocCount = await prisma.document.count({
+    // Enforce the document limit (receipts are counted separately)
+    const existingDocs = await prisma.document.findMany({
       where: { participantId: participant.id },
+      select: { documentType: true },
     });
-    if (existingDocCount >= MAX_DOCUMENTS) {
+    const receiptCount = existingDocs.filter(isReceiptDocument).length;
+    const travelDocCount = existingDocs.length - receiptCount;
+    if (typeHint) {
+      if (receiptCount >= MAX_RECEIPTS) {
+        throw new ValidationError(`You have reached the maximum of ${MAX_RECEIPTS} receipts. Combine several receipts into one PDF.`);
+      }
+    } else if (travelDocCount >= MAX_DOCUMENTS) {
       throw new ValidationError(
-        `You have reached the maximum of ${MAX_DOCUMENTS} documents. Combine pages into one PDF where possible and only upload documents for trips you will claim.`
+        `You have reached the maximum of ${MAX_DOCUMENTS} travel documents. Combine pages into one PDF where possible and only upload documents for trips you will claim.`
       );
     }
 
@@ -362,7 +395,7 @@ router.post(
           renamedFilename: req.file.originalname,
           mimeType: req.file.mimetype,
           fileSize: fileBuffer.length,
-          documentType: 'OTHER', // Will be updated during consolidation
+          documentType: typeHint ?? 'OTHER', // Travel documents are typed during extraction
         },
       });
     } catch (dbError) {
@@ -371,18 +404,21 @@ router.post(
       throw dbError;
     }
 
-    // Clear the consolidation flag since we have new documents
-    await prisma.participant.update({
-      where: { id: participant.id },
-      data: { journeyConsolidatedAt: null },
-    });
+    // A new travel document means the trips must be rebuilt; a receipt never affects them
+    if (!typeHint) {
+      await prisma.participant.update({
+        where: { id: participant.id },
+        data: { journeyConsolidatedAt: null },
+      });
+    }
 
     // Extract document data in the background (don't block the response)
     // This enables the AI to analyze the document so consolidation works later
     consolidationService.extractAndStoreDocumentData(
       document.id,
       req.file.buffer,
-      req.file.mimetype
+      req.file.mimetype,
+      typeHint ? { typeHint } : undefined
     ).catch((error) => {
       console.error(`[Upload] Background extraction failed for document ${document.id}:`, error);
     });
@@ -553,10 +589,6 @@ router.patch('/documents/:id', participantAuth, asyncHandler(async (req: Request
 router.delete('/documents/:id', participantAuth, ensureOwnParticipant, asyncHandler(async (req: Request, res: Response) => {
   const participant = req.participant!;
 
-  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
-    throw new ForbiddenError('Cannot delete documents after approval');
-  }
-
   const document = await prisma.document.findFirst({
     where: {
       id: req.params.id,
@@ -566,6 +598,14 @@ router.delete('/documents/:id', participantAuth, ensureOwnParticipant, asyncHand
 
   if (!document) {
     throw new NotFoundError('Document not found');
+  }
+
+  if (isReceiptDocument(document)) {
+    if (!receiptUploadsOpen(participant)) {
+      throw new ForbiddenError('Receipts can no longer be changed: the green travel extra has been settled');
+    }
+  } else if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot delete documents after approval');
   }
 
   // Delete file from storage
