@@ -34,6 +34,16 @@ model Organisation {
   // Account status
   isActive                Boolean   @default(true)
 
+  // Accountant / invoicing details (optional; shown on audit PDFs)
+  legalName               String?   // Official registered name, if different from display name
+  vatNumber               String?   // VAT identification number
+
+  // Affiliate programme
+  isAffiliate             Boolean   @default(false)
+  affiliateCode           String?   @unique  // Matches Stripe coupon ID (e.g. "YASIR10")
+  affiliateActive         Boolean   @default(true)  // false = deactivated; existing links unchanged
+  commissionRate          Float?                    // e.g. 0.10 = 10%
+
   // Metadata
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
@@ -41,6 +51,10 @@ model Organisation {
   // Relations
   projects                Project[]
   purchases               Purchase[]
+  affiliateLinks          AffiliateLink[]  @relation("AffiliateOrg")
+  customerLink            AffiliateLink?   @relation("CustomerOrg")
+  commissionsEarned       AffiliateCommission[]
+  affiliatePayouts        AffiliatePayout[]
 }
 
 // Purchase history for audit trail and Stripe integration
@@ -63,6 +77,8 @@ model Purchase {
   createdAt         DateTime       @default(now())
   completedAt       DateTime?
 
+  commission        AffiliateCommission?
+
   @@index([organisationId])
   @@index([stripeSessionId])
 }
@@ -81,6 +97,7 @@ enum PurchaseStatus {
   COMPLETED
   FAILED
   REFUNDED
+  EXPIRED
 }
 
 // Super Admin - internal administrative access
@@ -111,6 +128,27 @@ model Project {
   carRatePerKm             Float                   @default(0.22)   // Rate per km for car travel reimbursement (EUR)
   venueAddress             String?                                  // Address of the project venue (helps AI understand travel destination)
 
+  // Exchange rate handling
+  exchangeRateMode         String                  @default("PURCHASE_DATE")  // PURCHASE_DATE | PROJECT_END_DATE | MANUAL_DATE
+  exchangeRateManualDate   DateTime?                                          // Used only when exchangeRateMode = MANUAL_DATE
+
+  // AI analysis ("Build my trips") is normally locked until the project end date passes.
+  // Set true to let participants run AI consolidation before the project has ended.
+  aiAnalysisUnlocked       Boolean                 @default(false)
+
+  // When the automatic "project ended — build your trips" email batch was sent (null = not yet)
+  endEmailSentAt           DateTime?
+
+  // Communication with participants (shown in invitation/reminder/project-ended emails and on their page)
+  participantInstructions  String?                 // Free-text instructions from the organisation
+  documentDeadline         DateTime?               // By when participants should have uploaded their documents
+  contactEmail             String?                 // Where participants can ask questions
+  contactPhone             String?
+
+  // Green-travel participants must sign a declaration on honour at submission.
+  // Default false so live projects are unaffected; set true on project creation.
+  requireGreenTravelDeclaration Boolean            @default(false)
+
   // Test project - automatically created for new organisations (max 10 participants)
   isTestProject            Boolean                 @default(false)
   maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects
@@ -123,6 +161,21 @@ model Project {
   countryLimits            ProjectCountryLimit[]
   participants             Participant[]
   disseminationActivities  DisseminationActivity[]
+  currencyRates            ProjectCurrencyRate[]
+}
+
+// Per-project manual exchange rate override for a specific currency
+// Applies on top of the project's exchangeRateMode; one row per currency.
+model ProjectCurrencyRate {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  currencyCode String                       // e.g. "PLN"
+  rate         Float                        // 1 unit of currency = X EUR
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([projectId, currencyCode])
 }
 
 // Maximum reimbursement amounts per sending country for a project
@@ -167,6 +220,16 @@ model Participant {
   homeCountryReasoning      String?                 // AI reasoning for the detected home country
   consolidationSummary      String?                 // AI notes from consolidation for the review AI
   noReimbursement           Boolean                 @default(false)  // Participant opted out of reimbursement
+  // Individual limit overrides set by the organisation (null = use the country limit)
+  maxReimbursementOverride  Float?                  // Individual maximum in EUR
+  greenTravelOverride       Boolean?                // Individual green-travel status
+  // Green travel extra decided by the organisation (food + accommodation), always on top of the maximum
+  greenTravelFoodEur          Float?
+  greenTravelAccommodationEur Float?
+  greenTravelExtraNote        String?
+  greenTravelExtraUpdatedAt   DateTime?
+  aiReviewStatus            AiReviewStatus          @default(NOT_STARTED)  // Status of background AI review after submission
+  tokenExpiresAt            DateTime?               // Magic link expiry (set to project.endDate + 180 days on creation)
   reopenedAt                DateTime?               // When the reimbursement was last reopened by the organisation
   reopenMessage             String?                 // Organisation's message to participant explaining what to fix
   createdAt                 DateTime                @default(now())
@@ -181,6 +244,7 @@ model Participant {
   socialMediaPosts          SocialMediaPost[]
   declarationsOfTravel      DeclarationOfTravel[]
   aiReviewFindings          AiReviewFinding[]
+  greenTravelDeclaration    GreenTravelDeclaration?
 }
 
 enum ParticipantStatus {
@@ -188,6 +252,13 @@ enum ParticipantStatus {
   PARTICIPANT_COMPLETE
   ADMIN_APPROVED
   PAID
+}
+
+enum AiReviewStatus {
+  NOT_STARTED
+  PENDING
+  COMPLETE
+  FAILED
 }
 
 // Document - uploaded travel document
@@ -276,6 +347,7 @@ enum DocumentType {
   FUEL_RECEIPT
   GREEN_TRAVEL_DECLARATION
   HOTEL_INVOICE
+  MEAL_RECEIPT
   BANK_TRANSACTION
   LUGGAGE_INVOICE
   INTERRAIL_PASS
@@ -369,6 +441,7 @@ model TravelItem {
 
   // Exclusion from reimbursement
   excludedFromReimbursement Boolean           @default(false)  // User marked this item to be excluded from reimbursement (e.g., personal trip)
+  exclusionReason           String?                            // Why it was excluded: HOSTING_ORG_PAID | OTHER (null = unspecified)
 
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
@@ -393,7 +466,8 @@ model ReimbursementSummary {
   totalOriginalCurrency       Float?
   totalEur                    Float       @default(0)
   maxReimbursementAllowed     Float       @default(0)
-  amountToReimburse           Float       @default(0)
+  amountToReimburse           Float       @default(0)   // all-in payable amount (travel after cap + allowances)
+  greenTravelExtraEur         Float       @default(0)   // organiser-decided green travel extra (food + accommodation), paid on top of the cap
   adminNotes                  String?
   aiCheckOk                   Boolean     @default(false)
   adminApproved               Boolean     @default(false)
@@ -503,6 +577,63 @@ model SocialMediaPost {
   uploadedAt       DateTime    @default(now())
 }
 
+// =============================================================================
+// AFFILIATE PROGRAMME
+// =============================================================================
+
+// Links a customer org to their affiliate (one affiliate per customer, forever)
+model AffiliateLink {
+  id              String       @id @default(uuid())
+  affiliateId     String
+  affiliate       Organisation @relation("AffiliateOrg", fields: [affiliateId], references: [id], onDelete: Cascade)
+  customerId      String       @unique
+  customer        Organisation @relation("CustomerOrg", fields: [customerId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+  commissions     AffiliateCommission[]
+
+  @@index([affiliateId])
+}
+
+// Commission earned by an affiliate for one purchase
+model AffiliateCommission {
+  id              String           @id @default(uuid())
+  affiliateId     String
+  affiliate       Organisation     @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliateLinkId String
+  affiliateLink   AffiliateLink    @relation(fields: [affiliateLinkId], references: [id], onDelete: Cascade)
+  purchaseId      String           @unique
+  purchase        Purchase         @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  amountCents     Int              // commission amount (purchase amount × rate)
+  commissionRate  Float            // snapshot of rate at time of purchase
+  status          CommissionStatus @default(PENDING)
+  payoutId        String?
+  payout          AffiliatePayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  createdAt       DateTime         @default(now())
+
+  @@index([affiliateId])
+  @@index([status])
+}
+
+enum CommissionStatus {
+  PENDING
+  PAID
+  REVERSED
+}
+
+// Payout record — created when super admin confirms payment
+model AffiliatePayout {
+  id            String                @id @default(uuid())
+  affiliateId   String
+  affiliate     Organisation          @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  amountCents   Int
+  confirmedBy   String?               // super admin email
+  notes         String?
+  confirmedAt   DateTime              @default(now())
+  commissions   AffiliateCommission[]
+
+  @@index([affiliateId])
+}
+
 // Declaration of Travel - for missing boarding passes with signature
 model DeclarationOfTravel {
   id                      String      @id @default(uuid())
@@ -545,4 +676,18 @@ model DeclarationOfTravel {
   generatedPdfPath        String?
 
   createdAt               DateTime    @default(now())
+}
+
+// Signed green-travel declaration on honour (one per participant), generated at submission
+model GreenTravelDeclaration {
+  id                String      @id @default(uuid())
+  participantId     String      @unique
+  participant       Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  signatureDataUrl  String
+  signedAt          DateTime    @default(now())
+  generatedPdfPath  String?
+  documentId        String?                              // the Document row created for the PDF
+  travelDaysClaimed Int?
+  summaryJson       String                               // the trip list as printed (audit trail)
+  createdAt         DateTime    @default(now())
 }

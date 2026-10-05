@@ -9,11 +9,16 @@ import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
-import { ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+import { ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { getEmailService } from '../../services/email/index.js';
-import { generateDeclarationPdf } from '../../services/pdf/index.js';
+import { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
+import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
+import { PDFDocument as LibPDFDocument } from 'pdf-lib';
+import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
+import { suggestTravelDays } from '../../utils/travelDays.js';
 import disseminationRoutes from './dissemination.js';
 
 // Initialize the consolidation service
@@ -40,7 +45,8 @@ const upload = multer({
 
 // Validation schemas
 const updateBankDetailsSchema = z.object({
-  bankAccountIban: z.string().min(1, 'IBAN is required'),
+  // Strip all whitespace from IBAN so it is always stored space-free (accountant requirement)
+  bankAccountIban: z.string().min(1, 'IBAN is required').transform((s) => s.replace(/\s+/g, '').toUpperCase()),
   bankAccountHolderName: z.string().min(1, 'Account holder name is required'),
   bankAccountBic: z.string().optional(),
   bankName: z.string().optional(),
@@ -73,6 +79,9 @@ const updateTravelItemSchema = z.object({
   isDriverCarpool: z.boolean().optional(),
   // Company / airline name
   companyName: z.string().nullable().optional(),
+  // Exclude from reimbursement
+  excludedFromReimbursement: z.boolean().optional(),
+  exclusionReason: z.enum(['HOSTING_ORG_PAID', 'OTHER']).nullable().optional(),
 });
 
 const declarationOnHonorSchema = z.object({
@@ -125,6 +134,9 @@ const declarationOfTravelSchema = z.object({
   driverName: z.string().nullable().optional(),
 });
 
+// Maximum number of uploaded documents per participant
+const MAX_DOCUMENTS = 25;
+
 // Wrap async route handlers
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -153,6 +165,12 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
           countryLimits: true,
           disseminationEnabled: true,
           carRatePerKm: true,
+          aiAnalysisUnlocked: true,
+          participantInstructions: true,
+          documentDeadline: true,
+          contactEmail: true,
+          contactPhone: true,
+          requireGreenTravelDeclaration: true,
           organisation: {
             select: {
               id: true,
@@ -165,6 +183,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       documents: {
         orderBy: { uploadDate: 'desc' },
       },
+      greenTravelDeclaration: { select: { id: true, signedAt: true, documentId: true } },
       travelItems: {
         orderBy: { departureDate: 'asc' },
         include: {
@@ -177,10 +196,8 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
     },
   });
 
-  // Get country limit
-  const countryLimit = data?.project.countryLimits.find(
-    (limit: { country: string }) => limit.country === participant.country
-  );
+  // Applicable limit: individual override, else the country limit
+  const effectiveLimit = data ? getEffectiveLimit(data, data.project.countryLimits) : null;
 
   // Calculate completion status
   const aiService = getAiService();
@@ -239,12 +256,23 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
       organisation: data?.project.organisation || null,
     },
     documents: data?.documents,
-    travelItems: data?.travelItems,
+    travelItems: sortTravelItemsByJourney(data?.travelItems ?? []),
     reimbursementSummary: data?.reimbursementSummary,
     declarationsOnHonor: data?.declarationsOnHonor,
     declarationsOfTravel: data?.declarationsOfTravel,
-    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
-    greenTravel: countryLimit?.greenTravel || false,
+    maxReimbursementForCountry: effectiveLimit?.maxReimbursement || null,
+    greenTravel: effectiveLimit?.greenTravel || false,
+    // Organiser-decided green travel extra (shown as a line on the participant's total)
+    greenTravelExtra: data && ((data.greenTravelFoodEur ?? 0) > 0 || (data.greenTravelAccommodationEur ?? 0) > 0)
+      ? {
+          foodEur: data.greenTravelFoodEur ?? 0,
+          accommodationEur: data.greenTravelAccommodationEur ?? 0,
+          note: data.greenTravelExtraNote,
+          updatedAt: data.greenTravelExtraUpdatedAt,
+        }
+      : null,
+    greenTravelDeclaration: data?.greenTravelDeclaration ?? null,
+    requireGreenTravelDeclaration: data?.project.requireGreenTravelDeclaration ?? false,
     validation,
     disseminationStatus,
   });
@@ -271,6 +299,40 @@ router.post(
       throw new ForbiddenError('Cannot upload documents after approval');
     }
 
+    // Enforce the document limit
+    const existingDocCount = await prisma.document.count({
+      where: { participantId: participant.id },
+    });
+    if (existingDocCount >= MAX_DOCUMENTS) {
+      throw new ValidationError(
+        `You have reached the maximum of ${MAX_DOCUMENTS} documents. Combine pages into one PDF where possible and only upload documents for trips you will claim.`
+      );
+    }
+
+    // A file that isn't a readable PDF (a saved web page, a truncated download,
+    // an encrypted file) would make the AI provider reject the whole analysis.
+    // Files with junk before the header (some ticket portals do this) are repaired.
+    let fileBuffer = req.file.buffer;
+    if (req.file.mimetype.includes('pdf')) {
+      const sanitized = sanitizePdfBuffer(fileBuffer);
+      if (!sanitized) {
+        throw new ValidationError("This file isn't a readable PDF — please re-download it from the airline/app, or upload a screenshot or photo instead.");
+      }
+      if (sanitized.repaired) {
+        console.log(`[Upload] Repaired PDF header for ${req.file.originalname} (stripped ${sanitized.strippedBytes} leading bytes)`);
+      }
+      fileBuffer = sanitized.buffer;
+      try {
+        const pdf = await LibPDFDocument.load(fileBuffer, { ignoreEncryption: true });
+        if (pdf.isEncrypted) {
+          throw new ValidationError('This PDF is password-protected. Please upload an unprotected copy, or a screenshot or photo.');
+        }
+      } catch (err) {
+        if (err instanceof ValidationError) throw err;
+        throw new ValidationError("This file isn't a readable PDF — please re-download it from the airline/app, or upload a screenshot or photo instead.");
+      }
+    }
+
     const storage = getStorageService();
 
     // Generate storage path
@@ -280,26 +342,34 @@ router.post(
     // Store file
     await storage.store(
       {
-        buffer: req.file.buffer,
+        buffer: fileBuffer,
         originalname: req.file.originalname,
         mimetype: req.file.mimetype,
-        size: req.file.size,
+        size: fileBuffer.length,
       },
       storagePath
     );
 
     // Create document record (type will be determined during consolidation)
-    const document = await prisma.document.create({
-      data: {
-        participantId: participant.id,
-        storedFilePath: storagePath,
-        originalFilename: req.file.originalname,
-        renamedFilename: req.file.originalname,
-        mimeType: req.file.mimetype,
-        fileSize: req.file.size,
-        documentType: 'OTHER', // Will be updated during consolidation
-      },
-    });
+    // If DB creation fails after a successful upload, clean up the orphaned S3 file
+    let document;
+    try {
+      document = await prisma.document.create({
+        data: {
+          participantId: participant.id,
+          storedFilePath: storagePath,
+          originalFilename: req.file.originalname,
+          renamedFilename: req.file.originalname,
+          mimeType: req.file.mimetype,
+          fileSize: fileBuffer.length,
+          documentType: 'OTHER', // Will be updated during consolidation
+        },
+      });
+    } catch (dbError) {
+      // Upload succeeded but DB record failed — delete the orphaned file
+      storage.delete(storagePath).catch((e) => console.error('[Upload] Failed to clean up orphaned file after DB error:', e));
+      throw dbError;
+    }
 
     // Clear the consolidation flag since we have new documents
     await prisma.participant.update({
@@ -336,6 +406,20 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
     throw new ForbiddenError('Cannot modify data after approval');
   }
 
+  // AI analysis ("Build my trips") is locked until the project has ended,
+  // unless the organisation has opened it early. Participants upload before/
+  // during the project; trips are only built once the project is over.
+  const gateProject = await prisma.project.findUnique({
+    where: { id: participant.projectId },
+    select: { endDate: true, aiAnalysisUnlocked: true },
+  });
+  if (gateProject) {
+    const projectEnded = Date.now() >= gateProject.endDate.getTime();
+    if (!projectEnded && !gateProject.aiAnalysisUnlocked) {
+      throw new ForbiddenError('AI analysis opens when the project ends');
+    }
+  }
+
   // Check if there are any documents to consolidate
   const docCount = await prisma.document.count({
     where: { participantId: participant.id },
@@ -351,12 +435,25 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
     return;
   }
 
-  // Run the consolidation
-  const result = await consolidationService.consolidateParticipantJourney(participant.id);
+  // Run the consolidation ("fresh" wipes existing trips so they are rebuilt from the documents)
+  const fresh = req.query.fresh === '1' || req.body?.fresh === true;
+  const result = await consolidationService.consolidateParticipantJourney(participant.id, { fresh });
 
   // Recalculate summary after consolidation
   const aiService = getAiService();
   await aiService.recalculateParticipantSummary(participant.id);
+
+  // A failed run must be unmistakable for the client: no trips were built.
+  if (!result.success) {
+    res.status(422).json({
+      success: false,
+      message: result.message,
+      travelItems: [],
+      warnings: result.warnings,
+      unreadableDocuments: result.unreadableDocuments ?? [],
+    });
+    return;
+  }
 
   // Send email notifying the participant that analysis is complete
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -402,6 +499,51 @@ router.get('/documents/:id/url', participantAuth, ensureOwnParticipant, asyncHan
   const url = await storage.getUrl(document.storedFilePath);
 
   res.json({ url });
+}));
+
+/**
+ * PATCH /api/participant/documents/:id
+ * Correct a document's detected type (e.g. a hotel invoice detected as "Other")
+ */
+const updateDocumentSchema = z.object({
+  documentType: z.nativeEnum(DocumentType),
+});
+
+router.patch('/documents/:id', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot change documents after approval');
+  }
+
+  const result = updateDocumentSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const document = await prisma.document.findFirst({
+    where: { id: req.params.id, participantId: participant.id },
+  });
+  if (!document) {
+    throw new NotFoundError('Document not found');
+  }
+
+  const updated = await prisma.document.update({
+    where: { id: document.id },
+    data: { documentType: result.data.documentType },
+  });
+
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId: participant.id,
+      userType: 'PARTICIPANT',
+      fieldName: 'document.documentType',
+      previousValue: document.documentType,
+      newValue: updated.documentType,
+    },
+  });
+
+  res.json(updated);
 }));
 
 /**
@@ -458,6 +600,9 @@ const createTravelItemSchema = z.object({
   // Car travel specific
   distanceKm: z.number().nullable().optional(),
   isDriverCarpool: z.boolean().nullable().optional(),
+  // Company / airline name and comment
+  companyName: z.string().nullable().optional(),
+  comment: z.string().nullable().optional(),
 });
 
 /**
@@ -479,12 +624,14 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
 
   const aiService = getAiService();
 
-  // Convert currency to EUR if not already
+  // Convert currency to EUR if not already (respect the project's exchange-rate mode)
   let amountEur = result.data.amountEur as number | undefined;
   const amountOriginal = result.data.amountOriginal as number;
   const currencyOriginal = result.data.currencyOriginal as string;
   if (!amountEur && amountOriginal && currencyOriginal) {
-    amountEur = await aiService.convertToEur(
+    const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
+    amountEur = await convertToEurForParticipant(
+      participant.id,
       amountOriginal,
       currencyOriginal,
       (result.data.purchaseDate as Date | null) || undefined
@@ -523,6 +670,9 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
       // Car travel specific fields
       distanceKm: result.data.distanceKm || null,
       isDriverCarpool: result.data.isDriverCarpool ?? false,
+      // Optional fields
+      companyName: result.data.companyName || null,
+      comment: result.data.comment || null,
     },
   });
 
@@ -578,13 +728,25 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
     }
   }
 
-  // Recalculate amountEur when amountOriginal changes
-  // For EUR currency, amountEur equals amountOriginal
-  // For non-EUR, keep existing amountEur (will be recalculated by currency conversion)
-  if (result.data.amountOriginal !== undefined) {
-    const currency = result.data.currencyOriginal || current.currencyOriginal;
-    if (currency === 'EUR') {
-      updateData.amountEur = result.data.amountOriginal;
+  // Recalculate amountEur when the amount, currency, or purchase date changes.
+  const amountOrCurrencyOrDateChanged =
+    result.data.amountOriginal !== undefined ||
+    result.data.currencyOriginal !== undefined ||
+    result.data.purchaseDate !== undefined;
+  if (amountOrCurrencyOrDateChanged) {
+    const newAmount = (result.data.amountOriginal ?? current.amountOriginal) as number | null;
+    const currency = (result.data.currencyOriginal || current.currencyOriginal) as string;
+    const newPurchaseDate = (result.data.purchaseDate as Date | undefined) ?? current.purchaseDate ?? undefined;
+    if (newAmount != null) {
+      if (currency === 'EUR') {
+        updateData.amountEur = newAmount;
+      } else if (current.exchangeRateOverride != null) {
+        // Respect an org-set per-item override
+        updateData.amountEur = Math.round(newAmount * current.exchangeRateOverride * 100) / 100;
+      } else {
+        const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
+        updateData.amountEur = await convertToEurForParticipant(participant.id, newAmount, currency, newPurchaseDate);
+      }
     }
   }
 
@@ -1112,7 +1274,7 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
   }
 
   // Generate PDF
-  const { filePath, fileName } = await generateDeclarationPdf(participant.id, {
+  const { filePath, fileName, fileSize } = await generateDeclarationPdf(participant.id, {
     name: data.name,
     modeOfTransport: data.modeOfTransport,
     fromPlace: data.fromPlace,
@@ -1166,7 +1328,7 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
       originalFilename: fileName,
       renamedFilename: fileName,
       mimeType: 'application/pdf',
-      fileSize: 0, // We don't have the exact size here, it's not critical
+      fileSize,
       documentType: DocumentType.OTHER, // Declaration of travel
     },
   });
@@ -1236,13 +1398,40 @@ router.delete('/declarations-of-travel/:id', participantAuth, asyncHandler(async
       console.error('[Declaration] Failed to delete PDF from storage:', error);
     }
 
-    // Also delete the document record
-    await prisma.document.deleteMany({
+    // Delete the document record (travelItem.documentId is cleared via FK SetNull),
+    // and strip the id from any travel item's additionalDocumentIds JSON list,
+    // where the PDF may have been auto-linked on creation.
+    const pdfDocs = await prisma.document.findMany({
       where: {
         participantId: participant.id,
         storedFilePath: declaration.generatedPdfPath,
       },
+      select: { id: true },
     });
+    const pdfDocIds = pdfDocs.map((d) => d.id);
+
+    if (pdfDocIds.length > 0) {
+      const itemsWithExtras = await prisma.travelItem.findMany({
+        where: { participantId: participant.id, additionalDocumentIds: { not: null } },
+        select: { id: true, additionalDocumentIds: true },
+      });
+      for (const item of itemsWithExtras) {
+        try {
+          const ids = JSON.parse(item.additionalDocumentIds!) as string[];
+          const remaining = ids.filter((id) => !pdfDocIds.includes(id));
+          if (remaining.length !== ids.length) {
+            await prisma.travelItem.update({
+              where: { id: item.id },
+              data: { additionalDocumentIds: remaining.length > 0 ? JSON.stringify(remaining) : null },
+            });
+          }
+        } catch {
+          // Malformed JSON — leave as-is
+        }
+      }
+
+      await prisma.document.deleteMany({ where: { id: { in: pdfDocIds } } });
+    }
   }
 
   // Delete the declaration
@@ -1251,6 +1440,62 @@ router.delete('/declarations-of-travel/:id', participantAuth, asyncHandler(async
   });
 
   res.json({ success: true });
+}));
+
+/**
+ * PATCH /api/participant/declarations-of-travel/:id
+ * Update a declaration of travel (e.g. reassign to a different travel item)
+ */
+const updateDeclarationSchema = z.object({
+  travelItemId: z.string().uuid().nullable().optional(),
+});
+
+router.patch('/declarations-of-travel/:id', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Cannot modify declarations after approval');
+  }
+
+  const result = updateDeclarationSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new ValidationError(result.error.errors[0].message);
+  }
+
+  const declaration = await prisma.declarationOfTravel.findFirst({
+    where: { id: req.params.id, participantId: participant.id },
+  });
+
+  if (!declaration) {
+    throw new NotFoundError('Declaration not found');
+  }
+
+  // If travelItemId is provided, verify it belongs to this participant
+  if (result.data.travelItemId) {
+    const travelItem = await prisma.travelItem.findFirst({
+      where: { id: result.data.travelItemId, participantId: participant.id },
+    });
+    if (!travelItem) {
+      throw new NotFoundError('Travel item not found');
+    }
+  }
+
+  const updated = await prisma.declarationOfTravel.update({
+    where: { id: declaration.id },
+    data: { travelItemId: result.data.travelItemId },
+  });
+
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId: participant.id,
+      userType: 'PARTICIPANT',
+      fieldName: 'declaration.travelItemId',
+      previousValue: declaration.travelItemId ?? '(none)',
+      newValue: result.data.travelItemId ?? '(none)',
+    },
+  });
+
+  res.json(updated);
 }));
 
 /**
@@ -1294,6 +1539,12 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
       update: { totalEur: 0, amountToReimburse: 0, aiCheckOk: true },
     });
 
+    // No review needed for no-reimbursement participants
+    await prisma.participant.update({
+      where: { id: participant.id },
+      data: { aiReviewStatus: AiReviewStatus.COMPLETE },
+    });
+
     res.json({ success: true });
     return;
   }
@@ -1312,10 +1563,102 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
     return;
   }
 
+  // Green travel declaration: required at submission for green-travel
+  // participants when the project asks for it (off for pre-existing projects).
+  const bodySchema = z.object({ greenTravelSignature: z.string().min(1).optional() });
+  const body = bodySchema.safeParse(req.body ?? {});
+  const greenTravelSignature = body.success ? body.data.greenTravelSignature : undefined;
+
+  const declarationContext = await prisma.participant.findUnique({
+    where: { id: participant.id },
+    include: {
+      project: { include: { countryLimits: true, organisation: { select: { name: true } } } },
+      greenTravelDeclaration: true,
+      travelItems: { orderBy: { departureDate: 'asc' } },
+    },
+  });
+  if (declarationContext) {
+    const effective = getEffectiveLimit(declarationContext, declarationContext.project.countryLimits);
+    const needsDeclaration =
+      declarationContext.project.requireGreenTravelDeclaration &&
+      effective.greenTravel &&
+      !declarationContext.greenTravelDeclaration;
+
+    if (needsDeclaration && !greenTravelSignature) {
+      res.status(400).json({
+        success: false,
+        message: 'Cannot mark as complete - green travel declaration must be signed',
+        missingItems: [{ type: 'document', description: 'Green travel declaration must be signed', documentType: DocumentType.GREEN_TRAVEL_DECLARATION }],
+        warnings: validation.warnings,
+      });
+      return;
+    }
+
+    if (needsDeclaration && greenTravelSignature) {
+      const trips = sortTravelItemsByJourney(declarationContext.travelItems)
+        .filter((t) => !t.excludedFromReimbursement)
+        .map((t) => ({
+          modeOfTransport: t.modeOfTransport,
+          fromLocation: t.fromLocation,
+          toLocation: t.toLocation,
+          departureDate: t.departureDate,
+          companyName: t.companyName,
+          bookingReference: t.bookingReference,
+          flightNumber: t.flightNumber,
+          amountEur: t.amountIncludedInRoundTrip ? null : t.amountEur,
+        }));
+      const travelDaysClaimed =
+        suggestTravelDays(declarationContext.travelItems, declarationContext.project.startDate, declarationContext.project.endDate) || null;
+
+      const { filePath, fileName, fileSize } = await generateGreenTravelDeclarationPdf(participant.id, {
+        name: `${declarationContext.firstName} ${declarationContext.lastName}`,
+        country: declarationContext.country,
+        projectName: declarationContext.project.name,
+        projectStartDate: declarationContext.project.startDate,
+        projectEndDate: declarationContext.project.endDate,
+        organisationName: declarationContext.project.organisation.name,
+        trips,
+        travelDaysClaimed,
+        signatureDataUrl: greenTravelSignature,
+      });
+
+      const declarationDoc = await prisma.document.create({
+        data: {
+          participantId: participant.id,
+          storedFilePath: filePath,
+          originalFilename: fileName,
+          renamedFilename: fileName,
+          mimeType: 'application/pdf',
+          fileSize,
+          documentType: DocumentType.GREEN_TRAVEL_DECLARATION,
+        },
+      });
+      await prisma.greenTravelDeclaration.create({
+        data: {
+          participantId: participant.id,
+          signatureDataUrl: greenTravelSignature,
+          generatedPdfPath: filePath,
+          documentId: declarationDoc.id,
+          travelDaysClaimed,
+          summaryJson: JSON.stringify(trips),
+        },
+      });
+      await prisma.changeLogEntry.create({
+        data: {
+          participantId: participant.id,
+          userType: 'PARTICIPANT',
+          fieldName: 'greenTravelDeclaration',
+          previousValue: '',
+          newValue: `Signed green travel declaration (${trips.length} legs)`,
+        },
+      });
+    }
+  }
+
   // Update status
   await prisma.participant.update({
     where: { id: participant.id },
-    data: { status: ParticipantStatus.PARTICIPANT_COMPLETE },
+    data: { status: ParticipantStatus.PARTICIPANT_COMPLETE, aiReviewStatus: AiReviewStatus.PENDING },
   });
 
   // Update summary
@@ -1360,9 +1703,12 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
 
       if (!fullParticipant || fullParticipant.travelItems.length === 0) return;
 
+      fullParticipant.travelItems = sortTravelItemsByJourney(fullParticipant.travelItems);
+
       const countryLimit = await prisma.projectCountryLimit.findFirst({
         where: { projectId: fullParticipant.projectId, country: fullParticipant.country },
       });
+      const effectiveLimit = getEffectiveLimit(fullParticipant, countryLimit);
 
       const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
       const findings = await generateParticipantReview({
@@ -1375,7 +1721,9 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         projectCountry: fullParticipant.project.country,
         projectStartDate: fullParticipant.project.startDate.toISOString().split('T')[0],
         projectEndDate: fullParticipant.project.endDate.toISOString().split('T')[0],
-        maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+        maxReimbursementForCountry: effectiveLimit.maxReimbursement,
+        greenTravel: effectiveLimit.greenTravel,
+        greenTravelExtra: { foodEur: fullParticipant.greenTravelFoodEur, accommodationEur: fullParticipant.greenTravelAccommodationEur, note: fullParticipant.greenTravelExtraNote },
         travelItems: fullParticipant.travelItems.map((item) => ({
           id: item.id,
           modeOfTransport: item.modeOfTransport,
@@ -1394,6 +1742,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
           priceMissing: item.priceMissing,
           routeMatchesCountry: item.routeMatchesCountry,
           excludedFromReimbursement: item.excludedFromReimbursement,
+          exclusionReason: item.exclusionReason,
           numberOfPassengers: item.numberOfPassengers,
           participantPortion: item.participantPortion,
           distanceKm: item.distanceKm,
@@ -1457,9 +1806,17 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         });
       }
 
+      await prisma.participant.update({
+        where: { id: participant.id },
+        data: { aiReviewStatus: AiReviewStatus.COMPLETE },
+      });
       console.log(`[AI Review] Generated ${findings.length} findings for participant ${participant.id}`);
     } catch (error) {
       console.error(`[AI Review] Failed to generate review for participant ${participant.id}:`, error);
+      await prisma.participant.update({
+        where: { id: participant.id },
+        data: { aiReviewStatus: AiReviewStatus.FAILED },
+      }).catch(() => {}); // Don't throw if this update fails
     }
   })();
 
@@ -1510,7 +1867,9 @@ router.get('/exchange-rate', participantAuth, asyncHandler(async (req: Request, 
     return;
   }
 
-  const rate = await getExchangeRate(currencyCode, date);
+  // Use the project's exchange-rate mode + per-currency overrides
+  const { getEffectiveRateForParticipant } = await import('../../services/exchangeRate/index.js');
+  const rate = await getEffectiveRateForParticipant(req.participant!.id, currencyCode, date);
 
   res.json({
     currency: currencyCode,
@@ -1535,8 +1894,10 @@ router.post('/convert-currency', participantAuth, asyncHandler(async (req: Reque
   }
 
   const date = purchaseDate ? new Date(purchaseDate) : new Date();
-  const eurAmount = await convertToEur(amount, currency, date);
-  const rate = await getExchangeRate(currency, date);
+  // Use the project's exchange-rate mode + per-currency overrides
+  const { getEffectiveRateForParticipant } = await import('../../services/exchangeRate/index.js');
+  const rate = await getEffectiveRateForParticipant(req.participant!.id, currency, date);
+  const eurAmount = Math.round(amount * rate * 100) / 100;
 
   res.json({
     originalAmount: amount,

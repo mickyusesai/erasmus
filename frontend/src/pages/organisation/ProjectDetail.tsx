@@ -19,13 +19,19 @@ import {
   Search,
   Bell,
   Download,
+  X,
+  Archive,
+  Plus,
+  RefreshCw,
+  Info,
 } from 'lucide-react';
+import { CountryLimitRow } from '../../components/organisation/CountryLimitRow';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, OrgParticipant, ImportPreview } from '../../services/api';
+import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult, CreateOrgProjectData } from '../../services/api';
 import { clsx } from 'clsx';
 
 // Helper function to format dates as DD-MM-YYYY (European format)
@@ -44,7 +50,9 @@ type SortDirection = 'asc' | 'desc';
 export default function OrgProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [isDownloadingZip, setIsDownloadingZip] = useState(false);
 
   // Check if logged in
   useEffect(() => {
@@ -81,6 +89,30 @@ export default function OrgProjectDetail() {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to delete project');
+    },
+  });
+
+  const upgradeProjectMutation = useMutation({
+    mutationFn: () => organisationApi.upgradeTestProject(id!),
+    onSuccess: () => {
+      toast.success('Project upgraded! Participant limit removed.');
+      queryClient.invalidateQueries({ queryKey: ['org-project', id] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to upgrade project');
+    },
+  });
+
+  const expandCapacityMutation = useMutation({
+    mutationFn: () => organisationApi.expandProjectCapacity(id!),
+    onSuccess: (data) => {
+      toast.success(data.message);
+      queryClient.invalidateQueries({ queryKey: ['org-project', id] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to expand capacity');
     },
   });
 
@@ -153,27 +185,96 @@ export default function OrgProjectDetail() {
                 )}
               </p>
             </div>
-            <Button
-              variant="secondary"
-              onClick={() => organisationApi.exportProjectCsv(id!)}
-            >
-              Export CSV
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                loading={isDownloadingZip}
+                onClick={async () => {
+                  setIsDownloadingZip(true);
+                  try {
+                    await organisationApi.exportAuditZip(id!, project.name);
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'No approved participants to export');
+                  } finally {
+                    setIsDownloadingZip(false);
+                  }
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download Audit ZIPs
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    await organisationApi.exportProjectCsv(id!, project.name);
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'Failed to export CSV');
+                  }
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Export CSV
+              </Button>
+            </div>
           </div>
 
           {/* Test Project Banner */}
           {project.isTestProject && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-                <div>
-                  <h3 className="font-medium text-amber-800">Test Project</h3>
-                  <p className="text-sm text-amber-700 mt-1">
-                    This is a free test project limited to {project.maxParticipants || 10} participants.
-                    To create a full project with unlimited participants, please{' '}
-                    <Link to="/org/billing" className="underline font-medium">purchase credits</Link>.
-                  </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="font-medium text-amber-800">Test Project</h3>
+                    <p className="text-sm text-amber-700 mt-1">
+                      This is a free test project limited to {project.maxParticipants || 10} participants.
+                      Upgrade to a full project using 1 credit to get 60 participant slots, or{' '}
+                      <Link to="/org/billing" className="underline font-medium">purchase credits</Link> first.
+                    </p>
+                  </div>
                 </div>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and give you 60 participant slots.')) {
+                      upgradeProjectMutation.mutate();
+                    }
+                  }}
+                  disabled={upgradeProjectMutation.isPending}
+                  className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-60"
+                >
+                  {upgradeProjectMutation.isPending ? 'Upgrading…' : 'Upgrade (1 credit)'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Capacity Banner for full projects near or at limit */}
+          {!project.isTestProject && project.maxParticipants && participants.length >= project.maxParticipants - 5 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <Users className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="font-medium text-blue-800">
+                      {participants.length >= project.maxParticipants ? 'Participant limit reached' : 'Approaching participant limit'}
+                    </h3>
+                    <p className="text-sm text-blue-700 mt-1">
+                      {participants.length} of {project.maxParticipants} slots used. Use 1 credit to add 60 more slots.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Expand this project\'s capacity by 60 participants? This will use 1 credit.')) {
+                      expandCapacityMutation.mutate();
+                    }
+                  }}
+                  disabled={expandCapacityMutation.isPending}
+                  className="flex-shrink-0 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60"
+                >
+                  {expandCapacityMutation.isPending ? 'Expanding…' : '+60 slots (1 credit)'}
+                </button>
               </div>
             </div>
           )}
@@ -216,7 +317,12 @@ export default function OrgProjectDetail() {
               project={project}
               projectId={id!}
               countryLimits={countryLimits || []}
+              participantCountByCountry={participants.reduce<Record<string, number>>((acc, p) => {
+                acc[p.country] = (acc[p.country] || 0) + 1;
+                return acc;
+              }, {})}
               hasParticipants={participants.length > 0}
+              approvedCount={participants.filter(p => p.status === 'ADMIN_APPROVED' || p.status === 'PAID').length}
               onDelete={() => {
                 if (confirm('Are you sure you want to delete this project? This will also delete all participant data and uploaded documents.')) {
                   deleteMutation.mutate();
@@ -273,6 +379,12 @@ function OverviewTab({
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDownloadingAuditZip, setIsDownloadingAuditZip] = useState(false);
+  const auditNudgeKey = `audit-nudge-dismissed-${projectId}`;
+  const [showAuditNudge, setShowAuditNudge] = useState(
+    () => !localStorage.getItem(auditNudgeKey)
+  );
+  const queryClient = useQueryClient();
   const sortStorageKey = `participant-sort-${projectId}`;
   const [sortField, setSortField] = useState<SortField>(() => {
     try {
@@ -292,7 +404,6 @@ function OverviewTab({
     localStorage.setItem(sortStorageKey, JSON.stringify({ field: sortField, direction: sortDirection }));
   }, [sortField, sortDirection, sortStorageKey]);
   const [searchQuery, setSearchQuery] = useState('');
-  const queryClient = useQueryClient();
 
   // Form state for adding individual participant
   const [newParticipant, setNewParticipant] = useState({
@@ -310,6 +421,16 @@ function OverviewTab({
     paid: participants.filter((p) => p.status === 'PAID').length,
     totalAmount: participants.reduce(
       (sum, p) => sum + (p.reimbursementSummary?.amountToReimburse || 0),
+      0
+    ),
+    // What participants claim before country/individual limits are applied (travel + green travel extra)
+    requestedTotal: participants.reduce(
+      (sum, p) => sum + (p.reimbursementSummary?.totalEur || 0) + (p.reimbursementSummary?.greenTravelExtraEur || 0),
+      0
+    ),
+    // Budget ceiling if every participant received their maximum
+    maximumTotal: participants.reduce(
+      (sum, p) => sum + (p.reimbursementSummary?.maxReimbursementAllowed || 0),
       0
     ),
   };
@@ -537,6 +658,20 @@ function OverviewTab({
                   currency: 'EUR',
                 }).format(stats.totalAmount)}
               </p>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-500">
+                <span title="Sum of all travel costs claimed, before any limits">
+                  Requested (before limits):{' '}
+                  <span className="font-medium text-gray-700">
+                    {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(stats.requestedTotal)}
+                  </span>
+                </span>
+                <span title="If every participant received their maximum">
+                  Maximum possible:{' '}
+                  <span className="font-medium text-gray-700">
+                    {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(stats.maximumTotal)}
+                  </span>
+                </span>
+              </div>
             </div>
             <div className="text-right">
               <div className="h-2 w-32 bg-gray-200 rounded-full overflow-hidden">
@@ -554,6 +689,52 @@ function OverviewTab({
           </div>
         </CardContent>
       </Card>
+
+      {/* Audit Archive Nudge */}
+      {showAuditNudge && stats.total > 0 && stats.paid + stats.approved === stats.total && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                <Archive className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-emerald-900">Project complete — save your audit archive</h3>
+                <p className="text-emerald-800 text-sm mt-0.5">
+                  All participants have been processed. Download a ZIP of all audit PDFs to keep a personal backup — national agencies can request Erasmus+ records for up to 7 years.
+                </p>
+                <button
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
+                  disabled={isDownloadingAuditZip}
+                  onClick={async () => {
+                    setIsDownloadingAuditZip(true);
+                    try {
+                      await organisationApi.exportAuditZip(projectId, project.name);
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : 'Failed to export audit ZIPs');
+                    } finally {
+                      setIsDownloadingAuditZip(false);
+                    }
+                  }}
+                >
+                  <Download className="w-4 h-4" />
+                  {isDownloadingAuditZip ? 'Generating…' : 'Download Audit ZIPs'}
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                localStorage.setItem(auditNudgeKey, 'dismissed');
+                setShowAuditNudge(false);
+              }}
+              className="p-1 text-emerald-500 hover:text-emerald-700 rounded transition-colors flex-shrink-0"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Actions & Search */}
       <div className="flex flex-wrap items-center gap-3">
@@ -816,9 +997,28 @@ function OverviewTab({
                             Send Link
                           </button>
                         ) : (
-                          <span className="text-xs text-gray-400">
-                            {formatDate(participant.lastMagicLinkSentAt)}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-gray-400">
+                              {formatDate(participant.lastMagicLinkSentAt)}
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (checkReimbursementWarning([participant.id], 'magic')) return;
+                                organisationApi.sendMagicLink(participant.id).then(() => {
+                                  toast.success(`Magic link resent to ${participant.firstName}`);
+                                  queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+                                }).catch(() => {
+                                  toast.error('Failed to resend magic link');
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-primary-700 hover:bg-primary-50 px-1.5 py-0.5 rounded transition-colors"
+                              title="Resend magic link"
+                            >
+                              <Send className="w-3 h-3" />
+                              Resend
+                            </button>
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-3">
@@ -1097,27 +1297,82 @@ function SettingsTab({
   project,
   projectId,
   countryLimits,
+  participantCountByCountry,
   hasParticipants,
+  approvedCount,
   onDelete,
   isDeleting,
 }: {
   project: any;
   projectId: string;
   countryLimits: any[];
+  participantCountByCountry: Record<string, number>;
   hasParticipants: boolean;
+  approvedCount: number;
   onDelete: () => void;
   isDeleting: boolean;
 }) {
   const queryClient = useQueryClient();
+  const editLocked = approvedCount >= 2;
+
+  // Project detail edit state
+  const [editName, setEditName] = useState(project.name);
+  const [editCountry, setEditCountry] = useState(project.country);
+  const [editVenueAddress, setEditVenueAddress] = useState(project.venueAddress || '');
+  const [editStartDate, setEditStartDate] = useState(project.startDate ? project.startDate.slice(0, 10) : '');
+  const [editEndDate, setEditEndDate] = useState(project.endDate ? project.endDate.slice(0, 10) : '');
+
+  const updateProjectMutation = useMutation({
+    mutationFn: () => organisationApi.updateProject(projectId, {
+      name: editName,
+      country: editCountry,
+      venueAddress: editVenueAddress,
+      startDate: editStartDate,
+      endDate: editEndDate,
+    }),
+    onSuccess: () => {
+      toast.success('Project details updated');
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to update project');
+    },
+  });
+
+  const upgradeFromTestMutation = useMutation({
+    mutationFn: () => organisationApi.upgradeTestProject(projectId),
+    onSuccess: () => {
+      toast.success('Project upgraded! You now have 60 participant slots.');
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to upgrade project');
+    },
+  });
 
   const updateLimitMutation = useMutation({
     mutationFn: ({ country, amount, greenTravel }: { country: string; amount: number; greenTravel: boolean }) =>
       organisationApi.setCountryLimit(projectId, { country, maxReimbursementAmount: amount, greenTravel }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['org-country-limits'] });
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits', projectId] });
+      // Payable amounts are recalculated server-side, so refresh the totals too
+      queryClient.invalidateQueries({ queryKey: ['org-participants', projectId] });
     },
     onError: () => {
       toast.error('Failed to update country limit');
+    },
+  });
+
+  const deleteLimitMutation = useMutation({
+    mutationFn: (country: string) => organisationApi.deleteCountryLimit(projectId, country),
+    onSuccess: () => {
+      toast.success('Country removed');
+      queryClient.invalidateQueries({ queryKey: ['org-country-limits', projectId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to remove country');
     },
   });
 
@@ -1131,6 +1386,72 @@ function SettingsTab({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Project Details Edit */}
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="font-semibold text-gray-900">Project Details</h3>
+              <p className="text-sm text-gray-500 mt-1">Edit the basic information for this project.</p>
+            </div>
+            {editLocked && (
+              <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-lg">
+                Locked — 2+ participants approved
+              </span>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <Input
+                label="Project Name"
+                value={editName}
+                onChange={e => setEditName(e.target.value)}
+                disabled={editLocked}
+              />
+            </div>
+            <Input
+              label="Country / Location"
+              value={editCountry}
+              onChange={e => setEditCountry(e.target.value)}
+              disabled={editLocked}
+            />
+            <Input
+              label="Venue Address"
+              value={editVenueAddress}
+              onChange={e => setEditVenueAddress(e.target.value)}
+              disabled={editLocked}
+            />
+            <Input
+              label="Start Date"
+              type="date"
+              value={editStartDate}
+              onChange={e => setEditStartDate(e.target.value)}
+              disabled={editLocked}
+            />
+            <Input
+              label="End Date"
+              type="date"
+              value={editEndDate}
+              onChange={e => setEditEndDate(e.target.value)}
+              disabled={editLocked}
+            />
+          </div>
+          {!editLocked && (
+            <div className="mt-4 flex justify-end">
+              <Button
+                onClick={() => updateProjectMutation.mutate()}
+                loading={updateProjectMutation.isPending}
+                disabled={!editName.trim() || !editCountry.trim()}
+              >
+                Save Changes
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Country Limits - only show if there are participants */}
       {hasParticipants && countryLimits.length > 0 && (
         <Card>
@@ -1144,93 +1465,26 @@ function SettingsTab({
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {countryLimits.map((limit) => {
-                const needsAmount = limit.maxReimbursementAmount === 0;
-                return (
-                  <div
-                    key={limit.id}
-                    className={clsx(
-                      'flex items-center justify-between p-3 rounded-xl',
-                      needsAmount ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50'
-                    )}
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-gray-900">{limit.country}</span>
-                        {limit.greenTravel && (
-                          <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
-                            Green travel
-                          </span>
-                        )}
-                        {needsAmount && (
-                          <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                            Set amount
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <label className="flex items-center gap-1.5 text-xs text-gray-500">
-                        <input
-                          type="checkbox"
-                          checked={limit.greenTravel || false}
-                          onChange={() => toggleGreenTravel(limit)}
-                          className="rounded border-gray-300 w-3.5 h-3.5"
-                        />
-                        Green
-                      </label>
-                      {needsAmount ? (
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type="number"
-                            placeholder="Amount"
-                            className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                            onBlur={(e) => {
-                              const amount = parseFloat(e.target.value);
-                              if (amount > 0) {
-                                updateLimitMutation.mutate({
-                                  country: limit.country,
-                                  amount,
-                                  greenTravel: limit.greenTravel || false,
-                                });
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const amount = parseFloat((e.target as HTMLInputElement).value);
-                                if (amount > 0) {
-                                  updateLimitMutation.mutate({
-                                    country: limit.country,
-                                    amount,
-                                    greenTravel: limit.greenTravel || false,
-                                  });
-                                }
-                              }
-                            }}
-                          />
-                          <span className="text-xs text-gray-400">EUR</span>
-                        </div>
-                      ) : (
-                        <Input
-                          type="number"
-                          value={limit.maxReimbursementAmount}
-                          className="w-24 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          onChange={(e) => {
-                            const amount = parseFloat(e.target.value);
-                            if (amount >= 0) {
-                              updateLimitMutation.mutate({
-                                country: limit.country,
-                                amount,
-                                greenTravel: limit.greenTravel || false,
-                              });
-                            }
-                          }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {countryLimits.map((limit) => (
+                <CountryLimitRow
+                  key={limit.id}
+                  limit={limit}
+                  participantCount={participantCountByCountry[limit.country] || 0}
+                  onSaveAmount={(amount) =>
+                    updateLimitMutation.mutate({
+                      country: limit.country,
+                      amount,
+                      greenTravel: limit.greenTravel || false,
+                    })
+                  }
+                  onToggleGreen={() => toggleGreenTravel(limit)}
+                  onDelete={() => {
+                    if (confirm(`Remove ${limit.country} from this project's country limits?`)) {
+                      deleteLimitMutation.mutate(limit.country);
+                    }
+                  }}
+                />
+              ))}
             </div>
           </CardContent>
         </Card>
@@ -1238,6 +1492,42 @@ function SettingsTab({
 
       {/* Feature Settings */}
       <FeatureSettingsCard project={project} projectId={projectId} />
+
+      {/* Communication with participants (emails + participant page) */}
+      <ParticipantCommunicationCard project={project} projectId={projectId} />
+
+      {/* Exchange Rate Settings */}
+      <ExchangeRateSettingsCard project={project} projectId={projectId} />
+
+      {/* Upgrade Test Project */}
+      {project.isTestProject && (
+        <Card className="lg:col-span-2 border-amber-200">
+          <CardHeader>
+            <h3 className="font-semibold text-amber-800">Upgrade to Full Project</h3>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-4">
+              This is a free test project limited to {project.maxParticipants || 10} participants.
+              Use 1 credit to convert it into a full project with 60 participant slots.
+              You can purchase credits on the{' '}
+              <Link to="/org/billing" className="text-primary-600 hover:text-primary-700 underline font-medium">
+                Billing page
+              </Link>
+              {' '}first if needed.
+            </p>
+            <Button
+              onClick={() => {
+                if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and give you 60 participant slots.')) {
+                  upgradeFromTestMutation.mutate();
+                }
+              }}
+              loading={upgradeFromTestMutation.isPending}
+            >
+              Upgrade to Full Project (1 credit)
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Danger Zone */}
       <Card>
@@ -1259,12 +1549,100 @@ function SettingsTab({
   );
 }
 
+/**
+ * Instructions, document deadline and contact details that are shown in the
+ * invitation / reminder / project-ended emails and on the participant page.
+ * Each field saves on blur (same pattern as the car travel rate).
+ */
+function ParticipantCommunicationCard({ project, projectId }: { project: any; projectId: string }) {
+  const queryClient = useQueryClient();
+  const [instructions, setInstructions] = useState<string>(project.participantInstructions || '');
+  const [deadline, setDeadline] = useState<string>(project.documentDeadline ? String(project.documentDeadline).slice(0, 10) : '');
+  const [contactEmail, setContactEmail] = useState<string>(project.contactEmail || '');
+  const [contactPhone, setContactPhone] = useState<string>(project.contactPhone || '');
+
+  const saveMutation = useMutation({
+    mutationFn: (data: Partial<CreateOrgProjectData>) => organisationApi.updateProject(projectId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      toast.success('Participant communication updated');
+    },
+    onError: () => toast.error('Failed to save'),
+  });
+
+  const saveIfChanged = (field: 'participantInstructions' | 'documentDeadline' | 'contactEmail' | 'contactPhone', value: string) => {
+    const current = field === 'documentDeadline'
+      ? (project.documentDeadline ? String(project.documentDeadline).slice(0, 10) : '')
+      : (project[field] || '');
+    if (value.trim() === current) return;
+    saveMutation.mutate({ [field]: value.trim() === '' ? null : value.trim() });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <h3 className="font-semibold text-gray-900">Communication with participants</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Shown in the invitation, reminder and project-ended emails and on the participant page. Emails are sent as
+            "{'{'}your organisation{'}'} via EasyReimburse" and replies go to your organisation email.
+          </p>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Instructions for participants</label>
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              onBlur={() => saveIfChanged('participantInstructions', instructions)}
+              rows={4}
+              placeholder="e.g. Please upload your boarding passes as separate files. Only travel between your home and the venue is reimbursed."
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all text-sm"
+              disabled={saveMutation.isPending}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Input
+              label="Document deadline"
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              onBlur={() => saveIfChanged('documentDeadline', deadline)}
+              disabled={saveMutation.isPending}
+            />
+            <Input
+              label="Contact email"
+              type="email"
+              value={contactEmail}
+              onChange={(e) => setContactEmail(e.target.value)}
+              onBlur={() => saveIfChanged('contactEmail', contactEmail)}
+              placeholder="questions@your-org.eu"
+              disabled={saveMutation.isPending}
+            />
+            <Input
+              label="Contact phone"
+              type="tel"
+              value={contactPhone}
+              onChange={(e) => setContactPhone(e.target.value)}
+              onBlur={() => saveIfChanged('contactPhone', contactPhone)}
+              placeholder="+31 6 1234 5678"
+              disabled={saveMutation.isPending}
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function FeatureSettingsCard({ project, projectId }: { project: any; projectId: string }) {
   const queryClient = useQueryClient();
   const [carRate, setCarRate] = useState<string>(String(project.carRatePerKm || 0.22));
 
   const updateProjectMutation = useMutation({
-    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number }) =>
+    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number; aiAnalysisUnlocked?: boolean; requireGreenTravelDeclaration?: boolean }) =>
       organisationApi.updateProject(projectId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
@@ -1272,6 +1650,20 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
     },
     onError: () => {
       toast.error('Failed to update project settings');
+    },
+  });
+
+  // AI analysis is automatically open once the project end date has passed.
+  const projectEnded = !!project.endDate && new Date() >= new Date(project.endDate);
+  const aiOpen = projectEnded || !!project.aiAnalysisUnlocked;
+
+  const notifyEndedMutation = useMutation({
+    mutationFn: () => organisationApi.notifyProjectEnded(projectId),
+    onSuccess: (data) => {
+      toast.success(`"Build your trips" email sent to ${data.sent} participant(s)`);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to send emails');
     },
   });
 
@@ -1307,6 +1699,67 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
             />
           </label>
 
+          <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <div className="pr-4">
+              <p className="font-medium text-gray-900">Open AI analysis early</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {projectEnded
+                  ? 'The project has ended — participants can already build their trips with AI.'
+                  : 'By default participants can only build their trips after the project end date. Enable this to let them start the AI analysis now.'}
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={aiOpen}
+              onChange={(e) =>
+                updateProjectMutation.mutate({ aiAnalysisUnlocked: e.target.checked })
+              }
+              disabled={updateProjectMutation.isPending || projectEnded}
+              className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <div className="pr-4">
+              <p className="font-medium text-gray-900">Green travel declaration</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Green-travel participants sign a declaration on honour (with their trip list) when they submit. The
+                signed PDF is added to their documents and the audit file.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={project.requireGreenTravelDeclaration || false}
+              onChange={(e) => updateProjectMutation.mutate({ requireGreenTravelDeclaration: e.target.checked })}
+              disabled={updateProjectMutation.isPending}
+              className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
+            />
+          </label>
+
+          {aiOpen && (
+            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+              <div className="pr-4">
+                <p className="font-medium text-gray-900">"Build your trips" email</p>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  Sends every participant who hasn't submitted yet an email with their personal link to start the AI analysis.
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={notifyEndedMutation.isPending}
+                onClick={() => {
+                  if (window.confirm('Send the "build your trips" email to all participants who haven\'t submitted yet?')) {
+                    notifyEndedMutation.mutate();
+                  }
+                }}
+              >
+                <Send className="w-4 h-4 mr-1.5" />
+                Send
+              </Button>
+            </div>
+          )}
+
           <div className="p-3 bg-gray-50 rounded-xl">
             <div className="flex items-center justify-between">
               <div>
@@ -1332,6 +1785,251 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
                 <span className="text-sm text-gray-500">EUR/km</span>
               </div>
             </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Common currencies for the "add currency" dropdown (covers Erasmus+ regions)
+const OVERRIDE_CURRENCY_OPTIONS = [
+  'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'SEK', 'DKK', 'NOK', 'GBP', 'USD',
+  'CHF', 'TRY', 'UAH', 'RSD', 'MKD', 'ALL', 'BAM', 'GEL', 'MDL', 'ISK',
+];
+
+interface OverrideRow {
+  currencyCode: string;
+  rate: string;          // user input (empty = no override, use mode-based rate)
+  effectiveRate?: number; // current effective rate, shown as placeholder
+}
+
+function ExchangeRateSettingsCard({ project, projectId }: { project: any; projectId: string }) {
+  const queryClient = useQueryClient();
+
+  const [mode, setMode] = useState<ExchangeRateMode>(project.exchangeRateMode || 'PURCHASE_DATE');
+  const [manualDate, setManualDate] = useState<string>(
+    project.exchangeRateManualDate ? String(project.exchangeRateManualDate).slice(0, 10) : ''
+  );
+  const [rows, setRows] = useState<OverrideRow[]>([]);
+  const [addCurrency, setAddCurrency] = useState('');
+  const [lastResult, setLastResult] = useState<ProjectRecalcResult | null>(null);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['org-project-currency-rates', projectId],
+    queryFn: () => organisationApi.getProjectCurrencyRates(projectId),
+  });
+
+  // Build the editable override rows from detected currencies + saved overrides
+  useEffect(() => {
+    if (!data) return;
+    setMode(data.exchangeRateMode);
+    setManualDate(data.exchangeRateManualDate ? data.exchangeRateManualDate.slice(0, 10) : '');
+
+    const overrideByCur = new Map(data.overrides.map((o) => [o.currencyCode, o.rate]));
+    const seen = new Set<string>();
+    const next: OverrideRow[] = [];
+    for (const dc of data.detectedCurrencies) {
+      seen.add(dc.currencyCode);
+      next.push({
+        currencyCode: dc.currencyCode,
+        rate: overrideByCur.has(dc.currencyCode) ? String(overrideByCur.get(dc.currencyCode)) : '',
+        effectiveRate: dc.effectiveRate,
+      });
+    }
+    // Include overrides for currencies not (yet) present in any travel item
+    for (const o of data.overrides) {
+      if (!seen.has(o.currencyCode)) {
+        next.push({ currencyCode: o.currencyCode, rate: String(o.rate) });
+      }
+    }
+    setRows(next);
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      // Persist mode/date if it changed
+      const modeChanged =
+        mode !== (data?.exchangeRateMode || 'PURCHASE_DATE') ||
+        (manualDate || null) !== (data?.exchangeRateManualDate ? data.exchangeRateManualDate.slice(0, 10) : null);
+      let recalc: ProjectRecalcResult | undefined;
+      if (modeChanged) {
+        const resp = await organisationApi.updateProject(projectId, {
+          exchangeRateMode: mode,
+          exchangeRateManualDate: mode === 'MANUAL_DATE' ? (manualDate || null) : null,
+        });
+        recalc = resp.recalc;
+      }
+      // Persist per-currency overrides (rows with a valid positive number)
+      const overrides = rows
+        .map((r) => ({ currencyCode: r.currencyCode.toUpperCase(), rate: parseFloat(r.rate) }))
+        .filter((o) => o.currencyCode && !isNaN(o.rate) && o.rate > 0);
+      const resp2 = await organisationApi.updateProjectCurrencyRates(projectId, overrides);
+      return resp2.recalc ?? recalc;
+    },
+    onSuccess: (recalc) => {
+      setLastResult(recalc ?? null);
+      toast.success('Exchange rates saved and amounts recalculated');
+      queryClient.invalidateQueries({ queryKey: ['org-project-currency-rates', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['org-participants', projectId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to save exchange rates');
+    },
+  });
+
+  const handleSave = () => {
+    if (mode === 'MANUAL_DATE' && !manualDate) {
+      toast.error('Please choose the date to use for exchange rates');
+      return;
+    }
+    if (!window.confirm('This updates converted EUR amounts for all participants except those already marked Paid. Continue?')) {
+      return;
+    }
+    saveMutation.mutate();
+  };
+
+  const addRow = () => {
+    if (!addCurrency) return;
+    if (rows.some((r) => r.currencyCode === addCurrency)) {
+      toast.error(`${addCurrency} is already in the list`);
+      return;
+    }
+    setRows([...rows, { currencyCode: addCurrency, rate: '' }]);
+    setAddCurrency('');
+  };
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <h3 className="font-semibold text-gray-900">Exchange Rate Settings</h3>
+        <p className="text-sm text-gray-500 mt-1">
+          Control how foreign-currency receipts are converted to EUR for this project.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-5">
+          {/* Mode selector */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Conversion basis</label>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as ExchangeRateMode)}
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            >
+              <option value="PURCHASE_DATE">By purchase date (recommended)</option>
+              <option value="PROJECT_END_DATE">By project end date (one rate per currency)</option>
+              <option value="MANUAL_DATE">By a specific date (one rate per currency)</option>
+            </select>
+            {mode === 'MANUAL_DATE' && (
+              <div className="mt-3">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Exchange rate date</label>
+                <Input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="w-full sm:w-56" />
+                <p className="text-xs text-gray-500 mt-1">
+                  If this month's official rates aren't published yet, the latest available rate is used — re-save after the date to refresh.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Per-currency overrides */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Manual rate overrides</label>
+            <p className="text-xs text-gray-500 mb-3">
+              Override the rate for specific currencies. Leave blank to use the conversion basis above. 1 unit of currency = X EUR.
+            </p>
+            {mode === 'PURCHASE_DATE' && (
+              <div className="flex items-start gap-2 rounded-lg bg-blue-50 border border-blue-200 p-3 mb-3 text-xs text-blue-800">
+                <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>
+                  Each travel item is converted at the official rate for its own purchase date, so the rate differs
+                  across items — there is no single rate per currency. Add an override below only if you want to lock a
+                  specific rate for a currency (it then applies to all of that currency's items regardless of date).
+                </span>
+              </div>
+            )}
+            {isLoading ? (
+              <p className="text-sm text-gray-400">Loading currencies…</p>
+            ) : (
+              <div className="space-y-2">
+                {rows.length === 0 && (
+                  <p className="text-sm text-gray-400">No currencies detected yet. Add one below to pre-set its rate.</p>
+                )}
+                {rows.map((row, idx) => (
+                  <div key={row.currencyCode} className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-xl">
+                    <span className="font-mono font-semibold text-gray-800 w-14">{row.currencyCode}</span>
+                    <div className="flex items-center gap-2 flex-1">
+                      <span className="text-sm text-gray-500">1 {row.currencyCode} =</span>
+                      <Input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        value={row.rate}
+                        placeholder={mode !== 'PURCHASE_DATE' && row.effectiveRate != null ? row.effectiveRate.toFixed(4) : 'rate'}
+                        onChange={(e) => {
+                          const next = [...rows];
+                          next[idx] = { ...row, rate: e.target.value };
+                          setRows(next);
+                        }}
+                        className="w-32 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                      <span className="text-sm text-gray-500">EUR</span>
+                      {row.rate === '' && (
+                        mode === 'PURCHASE_DATE' ? (
+                          <span className="text-xs text-gray-400 italic">(varies by purchase date)</span>
+                        ) : row.effectiveRate != null ? (
+                          <span className="text-xs text-gray-400">(currently {row.effectiveRate.toFixed(4)})</span>
+                        ) : null
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setRows(rows.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                      title="Remove override"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+
+                {/* Add currency */}
+                <div className="flex items-center gap-2 pt-1">
+                  <select
+                    value={addCurrency}
+                    onChange={(e) => setAddCurrency(e.target.value)}
+                    className="px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  >
+                    <option value="">Add a currency…</option>
+                    {OVERRIDE_CURRENCY_OPTIONS.filter((c) => !rows.some((r) => r.currencyCode === c)).map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={addRow}
+                    disabled={!addCurrency}
+                    className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium text-primary-600 hover:bg-primary-50 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {lastResult && (
+            <div className="text-xs text-gray-500 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+              Recalculated {lastResult.itemsUpdated} travel item(s) across {lastResult.participantsUpdated} participant(s).
+              {lastResult.itemsSkippedPaid > 0 && ` ${lastResult.itemsSkippedPaid} item(s) on already-paid participants were left unchanged.`}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button onClick={handleSave} loading={saveMutation.isPending}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Save &amp; recalculate
+            </Button>
           </div>
         </div>
       </CardContent>

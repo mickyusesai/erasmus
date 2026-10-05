@@ -9,6 +9,9 @@ import {
   TransportMode,
 } from './types.js';
 import prisma from '../../utils/prisma.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
+import { normalizeCountryName, sameCountry } from '../../utils/countryName.js';
+import { computePayable } from '../../utils/reimbursementMath.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
 /**
@@ -79,7 +82,7 @@ Analyze this travel document and extract all relevant information. This could be
 
 Please respond with a JSON object (and ONLY a JSON object, no other text) with the following structure:
 {
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "OTHER",
   "confidence": 0.0-1.0,
   "ocrText": "The key text extracted from the document",
   "isRoundTrip": true/false,
@@ -268,6 +271,7 @@ Other important notes:
       FUEL_RECEIPT: DocumentType.FUEL_RECEIPT,
       GREEN_TRAVEL_DECLARATION: DocumentType.GREEN_TRAVEL_DECLARATION,
       HOTEL_INVOICE: DocumentType.HOTEL_INVOICE,
+      MEAL_RECEIPT: DocumentType.MEAL_RECEIPT,
       OTHER: DocumentType.OTHER,
     };
     return mapping[type] || DocumentType.OTHER;
@@ -305,6 +309,7 @@ Other important notes:
       FUEL_RECEIPT: 'fuel receipt',
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
       HOTEL_INVOICE: 'hotel invoice',
+      MEAL_RECEIPT: 'meal receipt',
       BANK_TRANSACTION: 'bank transaction',
       LUGGAGE_INVOICE: 'luggage invoice',
       INTERRAIL_PASS: 'interrail pass',
@@ -324,6 +329,7 @@ Other important notes:
         documents: true,
         travelItems: true,
         declarationsOnHonor: true,
+        declarationsOfTravel: true,
       },
     });
 
@@ -366,6 +372,13 @@ Other important notes:
 
     // Check travel items have required data
     for (const item of participant.travelItems) {
+      // Excluded items (e.g. paid by the hosting organisation) are not claimed,
+      // so they must not block submission.
+      if (item.excludedFromReimbursement) continue;
+
+      const route =
+        item.fromLocation && item.toLocation ? ` (${item.fromLocation} → ${item.toLocation})` : '';
+
       if (!item.fromLocation || !item.toLocation) {
         missingItems.push({
           type: 'data',
@@ -377,7 +390,7 @@ Other important notes:
       if (!item.departureDate) {
         missingItems.push({
           type: 'data',
-          description: `Travel item missing departure date`,
+          description: `Travel item missing departure date${route}`,
           travelItemId: item.id,
         });
       }
@@ -385,7 +398,7 @@ Other important notes:
       if (item.amountOriginal === null || item.amountOriginal === undefined) {
         missingItems.push({
           type: 'data',
-          description: `Travel item missing amount`,
+          description: `Travel item missing amount${route}`,
           travelItemId: item.id,
         });
       }
@@ -395,11 +408,14 @@ Other important notes:
         const hasBoardingPass = participant.documents.some(
           (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_BOARDING_PASS
         );
-        const hasDeclaration = participant.declarationsOnHonor.some(
+        const hasDeclarationOnHonor = participant.declarationsOnHonor.some(
           (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_BOARDING_PASS
         );
+        const hasDeclarationOfTravel = participant.declarationsOfTravel.some(
+          (dec: { travelItemId: string | null }) => dec.travelItemId === item.id
+        );
 
-        if (!hasBoardingPass && !hasDeclaration) {
+        if (!hasBoardingPass && !hasDeclarationOnHonor && !hasDeclarationOfTravel) {
           missingItems.push({
             type: 'document',
             description: 'Boarding pass or declaration on honor required for flight',
@@ -408,12 +424,19 @@ Other important notes:
         }
       }
 
-      // Check for invoice/ticket for flights
+      // Check for invoice/ticket for flights.
+      // A bank transaction proving the payment, or a signed declaration on honour
+      // for the missing invoice, is accepted as well.
       if (item.modeOfTransport === TransportMode.PLANE) {
         const hasInvoice = participant.documents.some(
-          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_INVOICE
+          (doc: { documentType: string }) =>
+            doc.documentType === DocumentType.FLIGHT_INVOICE ||
+            doc.documentType === DocumentType.BANK_TRANSACTION
         );
-        if (!hasInvoice) {
+        const hasInvoiceDeclaration = participant.declarationsOnHonor.some(
+          (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_INVOICE
+        );
+        if (!hasInvoice && !hasInvoiceDeclaration) {
           missingItems.push({
             type: 'document',
             description: 'Flight invoice or booking confirmation required',
@@ -479,19 +502,32 @@ Other important notes:
     for (const item of participant.travelItems) {
       if (!item.excludedFromReimbursement && item.amountEur !== null) {
         totalEur += item.amountEur;
+        if (item.luggageAmountEur !== null && item.luggageAmountEur !== undefined) {
+          totalEur += item.luggageAmountEur;
+        }
       }
     }
 
-    // Get max reimbursement for participant's country
-    const countryLimit = participant.project.countryLimits.find(
-      (limit: { country: string; maxReimbursementAmount: number }) => limit.country === participant.country
-    );
-    const maxReimbursementAllowed = countryLimit?.maxReimbursementAmount || 0;
+    // Applicable maximum: individual override, else the participant's country limit
+    const maxReimbursementAllowed = getEffectiveLimit(participant, participant.project.countryLimits).maxReimbursement;
 
-    // Calculate amount to reimburse (capped at max, or 100% if no max is configured)
-    const amountToReimburse = maxReimbursementAllowed > 0
-      ? Math.min(totalEur, maxReimbursementAllowed)
-      : totalEur;
+    // If any travel item is a multi-person booking, do not apply the per-person cap
+    const hasMultiPersonBooking = participant.travelItems.some(
+      (item) => item.numberOfPassengers !== null && item.numberOfPassengers > 1
+    );
+
+    // Organiser-decided green travel extra (food + accommodation), paid on top of the cap
+    const greenTravelExtraEur =
+      Math.round(((participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0)) * 100) / 100;
+
+    // Single shared formula (see utils/reimbursementMath.ts)
+    const amountToReimburse = computePayable({
+      travelEur: totalEur,
+      allowanceInsideCap: 0,
+      allowanceOnTop: greenTravelExtraEur,
+      maxReimbursement: maxReimbursementAllowed,
+      hasMultiPersonBooking,
+    }).total;
 
     // Validate
     const validation = await this.validateReimbursement(participantId);
@@ -504,12 +540,14 @@ Other important notes:
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
       update: {
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
     });
@@ -561,6 +599,8 @@ export async function generateParticipantReview(data: {
   projectStartDate: string;
   projectEndDate: string;
   maxReimbursementForCountry: number;
+  greenTravel?: boolean;
+  greenTravelExtra?: { foodEur: number | null; accommodationEur: number | null; note: string | null } | null;
   travelItems: Array<{
     id: string;
     modeOfTransport: string;
@@ -579,6 +619,7 @@ export async function generateParticipantReview(data: {
     priceMissing: boolean;
     routeMatchesCountry: boolean | null;
     excludedFromReimbursement: boolean;
+    exclusionReason: string | null;
     numberOfPassengers: number | null;
     participantPortion: number | null;
     distanceKm: number | null;
@@ -628,13 +669,12 @@ export async function generateParticipantReview(data: {
   } | null;
   bankDetailsComplete: boolean;
 }): Promise<(ReviewFinding & { travelItemId?: string | null })[]> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
   }
 
-  const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey });
+  const client = new Anthropic({ apiKey, maxRetries: 6 });
 
   // Build rules section from configurable rules
   const { buildRulesPrompt } = await import('./reviewRules.js');
@@ -647,8 +687,8 @@ export async function generateParticipantReview(data: {
 
 === CONTEXT (read carefully) ===
 
-PARTICIPANT'S HOME COUNTRY: ${data.participantCountry} (this is where they live and travel FROM)
-${data.detectedHomeCountry ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${(data.homeCountryConfidence! * 100).toFixed(0)}%)` : ''}
+PARTICIPANT'S HOME COUNTRY: ${normalizeCountryName(data.participantCountry)} (this is where they live and travel FROM)${normalizeCountryName(data.participantCountry) !== data.participantCountry ? ` — registered in the project as "${data.participantCountry}"; the extra word only marks a green-travel allowance row and is NOT part of the country name. Never flag this as a mismatch.` : ''}
+${data.detectedHomeCountry && !sameCountry(data.detectedHomeCountry, data.participantCountry) ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${(data.homeCountryConfidence! * 100).toFixed(0)}%)` : ''}
 PARTICIPANT NAME: ${data.participantName}
 PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ project takes place, where participants travel TO)
 PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
@@ -656,7 +696,7 @@ ${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : '
 ${data.consolidationSummary ? `\n=== CONSOLIDATION AI NOTES ===\nThe AI that processed the uploaded documents left these notes for you:\n${data.consolidationSummary}\n` : ''}
 BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
 
-The typical journey pattern is: participant travels FROM their home country (${data.participantCountry}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
+The typical journey pattern is: participant travels FROM their home country (${normalizeCountryName(data.participantCountry)}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
 
 === TRAVEL ITEMS (${data.travelItems.length}) ===
 ${data.travelItems.map((item, i) => {
@@ -667,7 +707,13 @@ ${data.travelItems.map((item, i) => {
     if (item.modeOfTransport === 'PLANE' && !item.flightNumber) flags.push('FLIGHT NUMBER NOT FILLED IN');
     if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`MULTI-PERSON BOOKING: ${item.numberOfPassengers} passengers on this booking (full amount claimed by this participant)`);
     if (item.routeMatchesCountry === false) flags.push('ROUTE MAY NOT MATCH expected home↔project travel pattern');
-    if (item.excludedFromReimbursement) flags.push('Participant excluded this from reimbursement');
+    if (item.excludedFromReimbursement) {
+      flags.push(
+        item.exclusionReason === 'HOSTING_ORG_PAID'
+          ? 'Participant excluded this from reimbursement: the hosting organisation paid for it'
+          : 'Participant excluded this from reimbursement'
+      );
+    }
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
     if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
     if (item.purchaseDateAutoFilled) flags.push('Purchase date was AUTO-FILLED from flight date (no purchase date found in documents)');
@@ -677,6 +723,12 @@ ${data.travelItems.map((item, i) => {
 
 === DOCUMENTS (${data.documents.length}) ===
 ${data.documents.map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}`).join('\n')}
+
+=== GREEN TRAVEL ===
+${data.greenTravel ? 'This participant is flagged as GREEN TRAVEL (low-emission transport for the main part of the journey).' : 'This participant is NOT flagged as green travel.'}
+${data.greenTravelExtra && ((data.greenTravelExtra.foodEur ?? 0) > 0 || (data.greenTravelExtra.accommodationEur ?? 0) > 0)
+  ? `The ORGANISATION added a green travel extra on top of the travel maximum: food €${(data.greenTravelExtra.foodEur ?? 0).toFixed(2)}, accommodation €${(data.greenTravelExtra.accommodationEur ?? 0).toFixed(2)}${data.greenTravelExtra.note ? ` (note: "${data.greenTravelExtra.note}")` : ''}. This amount was decided by the organisation — do NOT question it; only mention hotel/meal receipts that look implausible.`
+  : 'No green travel extra has been added by the organisation.'}
 
 === DECLARATIONS OF TRAVEL (${data.declarationsOfTravel.length}) ===
 These are SIGNED declarations the participant created to REPLACE missing boarding passes. Each one is a PDF with their signature. The organisation MUST manually verify each declaration is correct (check route, date, flight number match the travel item).
@@ -703,6 +755,7 @@ Return a JSON array. Each finding:
 - "travelItemIndex": The 1-based index number of the travel item this finding relates to (from the TRAVEL ITEMS list above), or null if the finding is general / not about a specific travel item.
 
 IMPORTANT RULES:
+- ACTIONABILITY TEST (apply this to every potential finding before including it): Ask yourself "What specific action must the organisation take, and do I have concrete evidence of a real problem?" If your only answer is "check" or "verify" with no actual evidence of wrongdoing, do NOT include it.
 - ONLY report PROBLEMS or things that need attention. NEVER report things that are fine/correct/matching/within limits.
 - Do NOT create findings saying "X is correct" or "X matches" or "X is within limits". The organisation only wants to see issues, not confirmations.
 - Examples of what NOT to report: "Home country matches", "Route matches expected pattern", "Bank details complete", "Total within limit", "Travel dates within range", "Document count matches", "Round-trip price counted correctly"
@@ -711,23 +764,33 @@ IMPORTANT RULES:
 - Do NOT confuse the participant's home country (${data.participantCountry}) with the project country (${data.projectCountry})
 - Declaration of Travel = the replacement document EXISTS and needs checking, NOT that something is missing
 - NEVER flag bank detail fields (IBAN, BIC, holder name, bank name, address) as manual edits — participants always fill these in themselves
+- NEVER create any finding about bank details being entered, cleared, or changed in the changelog — this is always expected participant behavior. This includes findings framed as "verify IBAN is correct" or "confirm bank details" where the ONLY source of concern is changelog activity — changelog evidence alone is NOT a valid reason to flag bank details.
 - NEVER create a "Participant Note" finding unless the PARTICIPANT'S OWN NOTE field above actually contains text
 - For route matching, use geographic knowledge: match cities to their countries (Chisinau=Moldova, Skopje=North Macedonia, Amsterdam/Eindhoven=Netherlands, etc.)
 - numberOfPassengers=1 means ONE person, which is normal. Only flag shared bookings when numberOfPassengers is GREATER than 1.
+- The no-document-linked rule ONLY applies to travel items that exist in the TRAVEL ITEMS list. Never apply it to journey legs that are not in the list.
+- Do NOT flag name variations that are transliterations of the same name (e.g., Olexandr vs Oleksandr) — these are the same person.
+- For round-trip return legs (amountIncludedInRoundTrip=true), NEVER create any finding — a €0 price on the return leg is correct expected behavior.
+- For luggage fees, create exactly ONE informational finding. Do NOT create additional "Amount Check", "Invoice Check", or similar findings about the same booking amounts.
+- Do NOT flag document type misclassifications (e.g., a bus ticket stored as TRAIN_TICKET) — the type is assigned during upload and cannot be changed by the organisation, making this unactionable.
 - If everything is fine, pick ONE of these messages at random (vary your choice for each participant — never pick the same one twice in a row): "Everything looks perfect! Nothing to review here — go grab a coffee!", "Flawless submission! All documents check out. Time for a well-deserved break!", "All clear! This participant has their travel docs in perfect order. Gold star!", "Spotless! Every document, route, and amount checks out. Enjoy the free time!", "Nothing to flag here — this reimbursement is as clean as it gets!", "A+ submission! All checks passed with flying colors. You can skip to the next one!", "Zero issues found. This participant deserves an award for organisation!", "Everything matches perfectly. We checked twice — still perfect!". Return it as: [{"severity":"info","message":"<your chosen message>","category":"All Clear"}]
 - Maximum 12 findings, prioritize critical > important > info
 - travelItemIndex MUST be a valid 1-based index from the TRAVEL ITEMS list, or null. Do NOT guess.
 - Return ONLY the JSON array`;
 
   try {
-    const response = await client.chat.completions.create({
-      model: 'gpt-5.2',
-      max_completion_tokens: 8000,
-      reasoning_effort: 'high',
+    const response = await (client.messages.create as Function)({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 10000,
+      thinking: { type: 'enabled', budget_tokens: 8000 },
       messages: [{ role: 'user', content: prompt }],
-    } as any);
+    });
 
-    const text = response.choices[0]?.message?.content?.trim() || '[]';
+    // Extended thinking returns multiple content blocks; find the text block for JSON
+    const textBlock = (response.content as Array<{ type: string; text?: string }>).find(
+      (b) => b.type === 'text',
+    );
+    const text = textBlock?.text?.trim() ?? '[]';
 
     // Parse JSON from response (handle potential markdown wrapping)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -750,6 +813,15 @@ IMPORTANT RULES:
           category: f.category,
           travelItemId,
         };
+      })
+      // "No Document" findings must reference a real travel item — never an inferred/missing leg
+      .filter((f) => !(f.category === 'No Document' && f.travelItemId === null))
+      // "Low Confidence" findings must only appear when a document actually has confidence < 0.70
+      .filter((f) => {
+        if (f.category !== 'Low Confidence') return true;
+        // Extract all percentages from the message and verify at least one is genuinely < 70
+        const pcts = [...f.message.matchAll(/(\d+(?:\.\d+)?)%/g)].map((m) => parseFloat(m[1]));
+        return pcts.length === 0 || pcts.some((p) => p < 70);
       });
     return findings;
   } catch (error) {

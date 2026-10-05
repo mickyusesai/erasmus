@@ -4,11 +4,19 @@
  * (console logging, Postmark, SMTP, SendGrid, AWS SES, etc.)
  */
 
+import type { ProjectEmailContext } from './context.js';
+
+export type { ProjectEmailContext };
+
 export interface EmailOptions {
   to: string;
   subject: string;
   text: string;
   html?: string;
+  /** Display name shown as the sender (the address stays the verified EMAIL_FROM) */
+  fromName?: string;
+  /** Where replies should go (e.g. the organisation's email) */
+  replyTo?: string;
 }
 
 export interface EmailResult {
@@ -30,7 +38,8 @@ export interface EmailService {
     to: string,
     participantName: string,
     projectName: string,
-    magicLink: string
+    magicLink: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -68,7 +77,8 @@ export interface EmailService {
     participantName: string,
     projectName: string,
     magicLink: string,
-    organisationName: string
+    organisationName: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -110,5 +120,42 @@ export interface EmailService {
     participantName: string,
     projectName: string,
     magicLink: string
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a notification that the project has ended and the participant
+   * can now let AI build their trips and complete the reimbursement
+   */
+  sendProjectEnded(
+    to: string,
+    participantName: string,
+    projectName: string,
+    magicLink: string,
+    ctx?: ProjectEmailContext
+  ): Promise<EmailResult>;
+
+  /**
+   * Notify a participant that the organisation added (or removed) a green
+   * travel extra (food / accommodation) to their reimbursement
+   */
+  sendGreenTravelExtra(
+    to: string,
+    participantName: string,
+    projectName: string,
+    amounts: { foodEur: number; accommodationEur: number; note: string | null; newTotalEur: number },
+    magicLink: string,
+    ctx?: ProjectEmailContext
+  ): Promise<EmailResult>;
+
+  /**
+   * Send a credit purchase confirmation email to an organisation
+   */
+  sendCreditPurchase(
+    to: string,
+    organisationName: string,
+    credits: number,
+    totalCredits: number,
+    dashboardUrl: string,
+    invoiceUrl?: string | null
   ): Promise<EmailResult>;
 }

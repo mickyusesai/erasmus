@@ -1,6 +1,12 @@
-import { EmailService, EmailOptions, EmailResult } from './types.js';
+import { EmailService, EmailOptions, EmailResult, ProjectEmailContext } from './types.js';
+
 import { v4 as uuidv4 } from 'uuid';
 import * as templates from './templates.js';
+/** Sender display name + Reply-To derived from the project's organisation */
+function senderFor(ctx?: ProjectEmailContext): Pick<EmailOptions, 'fromName' | 'replyTo'> {
+  if (!ctx) return {};
+  return { fromName: `${ctx.organisationName} via EasyReimburse`, replyTo: ctx.replyTo };
+}
 
 /**
  * Console email service for development
@@ -15,6 +21,8 @@ export class ConsoleEmailService implements EmailService {
     console.log('='.repeat(60));
     console.log(`Message ID: ${messageId}`);
     console.log(`To: ${options.to}`);
+    if (options.fromName) console.log(`From: "${options.fromName}"`);
+    if (options.replyTo) console.log(`Reply-To: ${options.replyTo}`);
     console.log(`Subject: ${options.subject}`);
     console.log('-'.repeat(60));
     console.log('TEXT CONTENT:');
@@ -28,12 +36,13 @@ export class ConsoleEmailService implements EmailService {
     return { success: true, messageId };
   }
 
-  async sendMagicLink(to: string, participantName: string, projectName: string, magicLink: string): Promise<EmailResult> {
+  async sendMagicLink(to: string, participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.magicLinkSubject(projectName),
-      text: templates.magicLinkText(participantName, projectName, magicLink),
-      html: templates.magicLinkHtml(participantName, projectName, magicLink),
+      text: templates.magicLinkText(participantName, projectName, magicLink, ctx),
+      html: templates.magicLinkHtml(participantName, projectName, magicLink, ctx),
+      ...senderFor(ctx),
     });
   }
 
@@ -64,12 +73,13 @@ export class ConsoleEmailService implements EmailService {
     });
   }
 
-  async sendReminder(to: string, participantName: string, projectName: string, magicLink: string, organisationName: string): Promise<EmailResult> {
+  async sendReminder(to: string, participantName: string, projectName: string, magicLink: string, organisationName: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.reminderSubject(projectName),
-      text: templates.reminderText(participantName, projectName, magicLink, organisationName),
-      html: templates.reminderHtml(participantName, projectName, magicLink, organisationName),
+      text: templates.reminderText(participantName, projectName, magicLink, organisationName, ctx),
+      html: templates.reminderHtml(participantName, projectName, magicLink, organisationName, ctx),
+      ...senderFor(ctx),
     });
   }
 
@@ -106,6 +116,42 @@ export class ConsoleEmailService implements EmailService {
       subject: templates.analysisCompleteSubject(projectName),
       text: templates.analysisCompleteText(participantName, projectName, magicLink),
       html: templates.analysisCompleteHtml(participantName, projectName, magicLink),
+    });
+  }
+
+  async sendProjectEnded(to: string, participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.projectEndedSubject(projectName),
+      text: templates.projectEndedText(participantName, projectName, magicLink, ctx),
+      html: templates.projectEndedHtml(participantName, projectName, magicLink, ctx),
+      ...senderFor(ctx),
+    });
+  }
+
+  async sendGreenTravelExtra(
+    to: string,
+    participantName: string,
+    projectName: string,
+    amounts: { foodEur: number; accommodationEur: number; note: string | null; newTotalEur: number },
+    magicLink: string,
+    ctx?: ProjectEmailContext
+  ): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.greenTravelExtraSubject(projectName, amounts),
+      text: templates.greenTravelExtraText(participantName, projectName, amounts, magicLink, ctx),
+      html: templates.greenTravelExtraHtml(participantName, projectName, amounts, magicLink, ctx),
+      ...senderFor(ctx),
+    });
+  }
+
+  async sendCreditPurchase(to: string, organisationName: string, credits: number, totalCredits: number, dashboardUrl: string, invoiceUrl?: string | null): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.creditPurchaseSubject(credits),
+      text: templates.creditPurchaseText(organisationName, credits, totalCredits, dashboardUrl, invoiceUrl),
+      html: templates.creditPurchaseHtml(organisationName, credits, totalCredits, dashboardUrl, invoiceUrl),
     });
   }
 }

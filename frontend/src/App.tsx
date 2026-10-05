@@ -17,6 +17,7 @@ import OrgProjectCreate from './pages/organisation/ProjectCreate';
 import OrgProjectDetail from './pages/organisation/ProjectDetail';
 import OrgBilling from './pages/organisation/Billing';
 import OrgSettings from './pages/organisation/Settings';
+import OrgAffiliate from './pages/organisation/AffiliatePage';
 import OrgParticipantDetail from './pages/organisation/ParticipantDetail';
 import OrgForgotPassword from './pages/organisation/ForgotPassword';
 import OrgResetPassword from './pages/organisation/ResetPassword';
@@ -24,6 +25,7 @@ import OrgResetPassword from './pages/organisation/ResetPassword';
 // Super Admin pages
 import SuperAdminLogin from './pages/superadmin/Login';
 import SuperAdminDashboard from './pages/superadmin/Dashboard';
+import SuperAdminOrgDetail from './pages/superadmin/OrgDetail';
 
 // Participant pages
 import ParticipantLayout from './components/participant/ParticipantLayout';
@@ -71,10 +73,12 @@ function App() {
       <Route path="/org/participants/:id" element={<OrgParticipantDetail />} />
       <Route path="/org/billing" element={<OrgBilling />} />
       <Route path="/org/settings" element={<OrgSettings />} />
+      <Route path="/org/affiliate" element={<OrgAffiliate />} />
 
       {/* Super Admin routes */}
       <Route path="/super-admin/login" element={<SuperAdminLogin />} />
       <Route path="/super-admin/dashboard" element={<SuperAdminDashboard />} />
+      <Route path="/super-admin/org/:id" element={<SuperAdminOrgDetail />} />
 
       {/* Participant routes */}
       <Route path="/reimbursement" element={<ParticipantLayout />}>

@@ -87,6 +87,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         startDate,
         endDate,
         isTestProject: true,
+        requireGreenTravelDeclaration: true,
         maxParticipants: TEST_PROJECT_MAX_PARTICIPANTS,
         creditSource: null, // No credit consumed for test projects
       },
@@ -258,6 +259,8 @@ router.post('/change-password', organisationAuth, asyncHandler(async (req: Reque
 const updateProfileSchema = z.object({
   name: z.string().min(2, 'Organisation name must be at least 2 characters').optional(),
   email: z.string().email('Invalid email address').optional(),
+  legalName: z.string().max(200).nullish(),
+  vatNumber: z.string().max(50).nullish(),
 });
 
 /**
@@ -272,7 +275,7 @@ router.patch('/profile', organisationAuth, asyncHandler(async (req: Request, res
     throw new ValidationError(result.error.errors[0].message);
   }
 
-  const { name, email } = result.data;
+  const { name, email, legalName, vatNumber } = result.data;
 
   // If email is being changed, check it's not already taken
   if (email && email.toLowerCase() !== organisation.email) {
@@ -291,6 +294,8 @@ router.patch('/profile', organisationAuth, asyncHandler(async (req: Request, res
     data: {
       ...(name && { name }),
       ...(email && { email: email.toLowerCase() }),
+      ...(legalName !== undefined && { legalName: legalName || null }),
+      ...(vatNumber !== undefined && { vatNumber: vatNumber || null }),
     },
   });
 
@@ -300,6 +305,8 @@ router.patch('/profile', organisationAuth, asyncHandler(async (req: Request, res
       id: updated.id,
       name: updated.name,
       email: updated.email,
+      legalName: updated.legalName,
+      vatNumber: updated.vatNumber,
     },
   });
 }));

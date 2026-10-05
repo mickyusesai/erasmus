@@ -1,9 +1,12 @@
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
 import { DocumentType, TransportMode } from './types.js';
 import { getStorageService } from '../storage/index.js';
-import { convertToEur as convertToEurService } from '../exchangeRate/infoEuroService.js';
+import { convertToEurForParticipant } from '../exchangeRate/projectRecalc.js';
+import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
+import { normalizeCountryName } from '../../utils/countryName.js';
+import { samePlace, sameTravelDay } from '../../utils/placeMatch.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -19,64 +22,52 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
  * - The full journey story: home → event location → home
  */
 export class JourneyConsolidationService {
-  private client: OpenAI;
-  private model: string = 'gpt-5.2'; // GPT-5.2 with native PDF and vision support
+  private client: Anthropic;
+  private model: string = 'claude-sonnet-4-6';
 
   constructor() {
-    this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+    this.client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: 10 * 60 * 1000, // 10-minute safety net
+      maxRetries: 6, // Retry up to 6x on rate limit (SDK respects retry-after header automatically)
     });
-    console.log(`[Consolidation Service] Using OpenAI ${this.model} for document extraction and analysis`);
+    console.log(`[Consolidation Service] Using Anthropic ${this.model} for document extraction and analysis`);
   }
 
   /**
    * Resize image if it exceeds the maximum size
    * Uses iterative approach to ensure image is under limit
    */
-  private async resizeImageIfNeeded(buffer: Buffer, mimeType: string): Promise<Buffer> {
-    // Use a slightly lower target to account for base64 encoding overhead
-    const TARGET_SIZE = MAX_IMAGE_SIZE * 0.85; // 85% of max to be safe
+  /**
+   * Normalise any uploaded image into a real JPEG the AI provider accepts.
+   *
+   * Uploads are trusted for their declared MIME type only, and the provider
+   * verifies the bytes against the declared type: a HEIC screenshot renamed
+   * ".png", a PNG we re-encoded as JPEG while resizing, or an RGBA/16-bit PNG
+   * all came back as "could not process image". Decoding with sharp and
+   * re-encoding as JPEG (resized when large) removes every such mismatch.
+   */
+  private async normalizeImage(buffer: Buffer): Promise<Buffer> {
+    const TARGET_SIZE = MAX_IMAGE_SIZE * 0.85; // headroom for base64 overhead
 
-    if (buffer.length <= TARGET_SIZE) {
-      return buffer;
-    }
-
-    console.log(`[Consolidation] Resizing image from ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
-
-    let resized = buffer;
-    let maxDimension = 1800;
-    let quality = 75;
-
-    // Iteratively reduce size until under limit
-    while (resized.length > TARGET_SIZE && quality >= 20) {
-      console.log(`[Consolidation] Attempting resize: ${maxDimension}px, quality ${quality}`);
-
-      resized = await sharp(buffer)
+    const encode = (maxDimension: number, quality: number) =>
+      sharp(buffer, { failOn: 'none' })
+        .rotate() // apply EXIF orientation so phone photos are upright
+        .flatten({ background: '#ffffff' }) // drop alpha (transparent screenshots)
         .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality, mozjpeg: true })
         .toBuffer();
 
-      console.log(`[Consolidation] Result: ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
-
-      if (resized.length > TARGET_SIZE) {
-        // Reduce quality and dimensions for next iteration
-        quality -= 15;
-        maxDimension -= 200;
-        maxDimension = Math.max(maxDimension, 800); // Don't go below 800px
-      }
+    let maxDimension = 2400;
+    let quality = 85;
+    let out = await encode(maxDimension, quality);
+    while (out.length > TARGET_SIZE && quality >= 20) {
+      quality -= 15;
+      maxDimension = Math.max(800, maxDimension - 400);
+      console.log(`[Consolidation] Image still ${(out.length / 1024 / 1024).toFixed(2)}MB, re-encoding at ${maxDimension}px q${quality}`);
+      out = await encode(maxDimension, quality);
     }
-
-    // If still too large, do one final aggressive resize
-    if (resized.length > TARGET_SIZE) {
-      console.log(`[Consolidation] Final aggressive resize`);
-      resized = await sharp(buffer)
-        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 20, mozjpeg: true })
-        .toBuffer();
-      console.log(`[Consolidation] Final result: ${(resized.length / 1024 / 1024).toFixed(2)}MB`);
-    }
-
-    return resized;
+    return out;
   }
 
   /**
@@ -93,41 +84,33 @@ export class JourneyConsolidationService {
     const isPdf = mimeType.includes('pdf');
 
     // Build the content array for the API request
-    // GPT-5.2 supports both images and PDFs natively
     type ContentPart =
-      | { type: 'image_url'; image_url: { url: string; detail: 'high' | 'low' | 'auto' } }
-      | { type: 'file'; file: { file_data: string; filename: string } }
+      | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+      | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string } }
       | { type: 'text'; text: string };
 
     const contentParts: ContentPart[] = [];
 
     if (isPdf) {
-      // Send PDF directly - GPT-5.2 has native PDF support
-      const base64Data = fileBuffer.toString('base64');
-      console.log(`[Consolidation] Sending PDF directly (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
-
+      // Repair junk before the header; a file without any header can't be sent as a PDF
+      const sanitized = sanitizePdfBuffer(fileBuffer);
+      if (!sanitized) throw new Error('File has no PDF header');
+      const base64Data = sanitized.buffer.toString('base64');
+      console.log(`[Consolidation] Sending PDF directly (${(sanitized.buffer.length / 1024).toFixed(1)}KB${sanitized.repaired ? ', header repaired' : ''})`);
       contentParts.push({
-        type: 'file',
-        file: {
-          file_data: `data:application/pdf;base64,${base64Data}`,
-          filename: 'document.pdf',
-        },
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
       });
     } else {
       // Process image - resize if needed
-      const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, mimeType);
+      // Always send a real JPEG regardless of the declared type (see normalizeImage)
+      const processedBuffer = await this.normalizeImage(fileBuffer);
       const base64Data = processedBuffer.toString('base64');
-      let mediaType = 'image/jpeg';
-      if (mimeType.includes('png')) mediaType = 'image/png';
-      else if (mimeType.includes('gif')) mediaType = 'image/gif';
-      else if (mimeType.includes('webp')) mediaType = 'image/webp';
+      console.log(`[Consolidation] Sending image as JPEG (${(processedBuffer.length / 1024).toFixed(1)}KB, declared ${mimeType})`);
 
       contentParts.push({
-        type: 'image_url',
-        image_url: {
-          url: `data:${mediaType};base64,${base64Data}`,
-          detail: 'high',
-        },
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data: base64Data },
       });
     }
 
@@ -164,9 +147,14 @@ Carefully determine the document type:
 
 3. OTHER DOCUMENTS:
    - FUEL_RECEIPT: Gas station receipt
+   - LUGGAGE_INVOICE: Separate invoice/receipt for checked baggage
+   - HOTEL_INVOICE: Hotel, hostel or other accommodation invoice/booking confirmation
+   - MEAL_RECEIPT: Restaurant, café, supermarket or other food/drink receipt
    - GREEN_TRAVEL_DECLARATION: Declaration for green travel
    - INTERRAIL_PASS: Interrail or Eurail pass (multi-day rail travel pass)
    - OTHER: Anything else
+
+For HOTEL_INVOICE and MEAL_RECEIPT still extract the total amount, currency, documentDate and merchantName.
 
 CRITICAL: Bank transactions and payment screenshots are NOT tickets!
 - If you see a bank app interface, transaction history, or payment confirmation
@@ -220,7 +208,7 @@ PRICE EXTRACTION:
 Extract ALL information you can find. Respond with ONLY a JSON object:
 {
   "documentLanguage": "Croatian" | "English" | "Dutch" | "German" | "French" | "Polish" | "Spanish" | "Italian" | "other",
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
   "confidence": 0.0-1.0,
   "reasoning": "Brief explanation: 1) What language is this document in? 2) How did you identify the document type? 3) Key information extracted",
 
@@ -274,21 +262,23 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
     try {
       console.log(`[Extraction] Quick extraction for UI feedback using ${this.model}`);
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.client.messages.create({
         model: this.model,
-        max_completion_tokens: 2000, // Light extraction - keep it fast
-        reasoning_effort: 'low',
+        max_tokens: 2000, // Light extraction - keep it fast, no extended thinking
         messages: [
           {
             role: 'user',
-            content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
+            content: contentParts as Anthropic.MessageParam['content'],
           },
         ],
       });
 
-      const responseText = response.choices[0]?.message?.content;
+      const responseText = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map(b => b.text)
+        .join('');
       if (!responseText) {
-        throw new Error('No response from OpenAI');
+        throw new Error('No response from Anthropic');
       }
 
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -393,8 +383,24 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
    * Consolidate all documents for a participant into a coherent journey
    * This is called when the participant moves from Step 1 to Step 2
    */
-  async consolidateParticipantJourney(participantId: string): Promise<ConsolidationResult> {
-    console.log(`[Consolidation] Starting journey consolidation for participant ${participantId}`);
+  /**
+   * Build the participant's trips from their documents.
+   * By default existing trips are preserved (only document links are refreshed);
+   * with `fresh: true` all trips and bookings are deleted first so the AI
+   * rebuilds everything from the current documents (e.g. after a booking
+   * confirmation with prices was added).
+   */
+  async consolidateParticipantJourney(participantId: string, options: { fresh?: boolean } = {}): Promise<ConsolidationResult> {
+    console.log(`[Consolidation] Starting journey consolidation for participant ${participantId}${options.fresh ? ' (fresh rebuild)' : ''}`);
+
+    if (options.fresh) {
+      // Declarations and review findings keep their rows (FK SetNull); documents are untouched.
+      const [items, bookings] = await prisma.$transaction([
+        prisma.travelItem.deleteMany({ where: { participantId } }),
+        prisma.travelBooking.deleteMany({ where: { participantId } }),
+      ]);
+      console.log(`[Consolidation] Fresh rebuild: removed ${items.count} travel item(s) and ${bookings.count} booking(s)`);
+    }
 
     // Get participant with all documents and extractions
     const participant = await prisma.participant.findUnique({
@@ -403,6 +409,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
         project: true,
         documents: {
           include: { extraction: true },
+          orderBy: { createdAt: 'asc' },
         },
         travelItems: true,
       },
@@ -410,61 +417,6 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!`;
 
     if (!participant) {
       throw new Error('Participant not found');
-    }
-
-    // Clean up orphaned documents: if there are 0 travel items but documents exist
-    // that are not linked to any travel item, they're orphans from a previous delete cycle.
-    // Keeping them would cause the AI to see duplicate data and create duplicate travel items.
-    const existingTravelItems = participant.travelItems || [];
-    if (existingTravelItems.length === 0 && participant.documents.length > 0) {
-      // Check which documents are NOT linked to any travel item
-      const linkedDocIds = new Set<string>();
-      for (const item of existingTravelItems) {
-        if ((item as any).documentId) linkedDocIds.add((item as any).documentId);
-        if ((item as any).additionalDocumentIds) {
-          try {
-            const ids = JSON.parse((item as any).additionalDocumentIds) as string[];
-            ids.forEach(id => linkedDocIds.add(id));
-          } catch { /* ignore */ }
-        }
-      }
-
-      const orphanedDocs = participant.documents.filter((doc: { id: string }) => !linkedDocIds.has(doc.id));
-      if (orphanedDocs.length > 0) {
-        // Check if there are also recently uploaded documents (within last 5 minutes)
-        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-        const recentDocs = participant.documents.filter((doc: any) => new Date(doc.createdAt) >= fiveMinAgo);
-        const oldOrphans = orphanedDocs.filter((doc: any) => new Date(doc.createdAt) < fiveMinAgo);
-
-        if (recentDocs.length > 0 && oldOrphans.length > 0) {
-          // There are both recent uploads AND old orphans — clean up old orphans
-          console.log(`[Consolidation] Cleaning up ${oldOrphans.length} orphaned documents from previous session`);
-          const storage = getStorageService();
-          for (const doc of oldOrphans) {
-            try {
-              await storage.delete((doc as any).storedFilePath);
-            } catch (error) {
-              console.error(`[Consolidation] Failed to delete orphaned file: ${(doc as any).storedFilePath}`, error);
-            }
-            await prisma.document.delete({ where: { id: doc.id } });
-          }
-
-          // Re-fetch participant with cleaned up documents
-          const refreshed = await prisma.participant.findUnique({
-            where: { id: participantId },
-            include: {
-              project: true,
-              documents: { include: { extraction: true } },
-              travelItems: true,
-            },
-          });
-          if (refreshed) {
-            // Update the participant reference with fresh data
-            (participant as any).documents = (refreshed as any).documents;
-            (participant as any).travelItems = (refreshed as any).travelItems;
-          }
-        }
-      }
     }
 
     // Build extraction map for quick lookup by document ID
@@ -580,7 +532,7 @@ THINK STEP BY STEP - Before generating output, reason through:
 
 PARTICIPANT INFO:
 - Name: ${participant.firstName} ${participant.lastName}
-- Country (traveling from): ${participant.country}
+- Country (traveling from): ${normalizeCountryName(participant.country)}${normalizeCountryName(participant.country) !== participant.country ? ` (registered as "${participant.country}" — the extra word only marks a green-travel allowance row, it is not part of the country name)` : ''}
 - Project location: ${participant.project.country}${participant.project.venueAddress ? `\n- Project venue address: ${participant.project.venueAddress} (Note: participants may not have tickets directly to this exact address — final leg transport like bus pickup is common in Erasmus+ projects, so the journey doesn\'t need to end exactly there, but this helps understand the general destination)` : ''}
 - Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
 - Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
@@ -678,6 +630,10 @@ After matching, check which documents remain unassigned:
   * Its route, date, or mode do NOT match any existing travel item
   * It genuinely looks like a separate trip not yet added
 - The "unassigned_documents" list should NOT include receipts you could confidently match
+
+RULE 8b: ACCOMMODATION AND FOOD ARE NOT TRAVEL
+- HOTEL_INVOICE and MEAL_RECEIPT documents are NEVER travel items and must NOT be attached to any leg
+- Always list them in "unassigned_documents" with reason "accommodation/food receipt (handled as allowance)"
 
 RULE 9: AMOUNT HANDLING
 - null = price is unknown (could not find in any document)
@@ -894,11 +850,14 @@ Do NOT include in warnings (these are handled elsewhere):
       const storageService = getStorageService();
 
       type ContentPart =
-        | { type: 'image_url'; image_url: { url: string; detail: 'high' | 'low' | 'auto' } }
-        | { type: 'file'; file: { file_data: string; filename: string } }
+        | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+        | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string } }
         | { type: 'text'; text: string };
 
       const contentParts: ContentPart[] = [];
+      // content-part index → document, so a provider error naming a part can be mapped back to the file
+      const partOwner = new Map<number, { id: string; filename: string }>();
+      const unreadableDocuments: { docId: string; filename: string }[] = [];
 
       // Load and add all document files
       for (let i = 0; i < participant.documents.length; i++) {
@@ -907,41 +866,48 @@ Do NOT include in warnings (these are handled elsewhere):
           const fileBuffer = await storageService.retrieve(doc.storedFilePath);
           const isPdf = doc.mimeType.includes('pdf');
 
-          if (isPdf) {
-            // Send PDF directly
-            const base64Data = fileBuffer.toString('base64');
-            console.log(`[Consolidation] Adding document ${i + 1}: PDF (${(fileBuffer.length / 1024).toFixed(1)}KB)`);
-            contentParts.push({
-              type: 'file',
-              file: {
-                file_data: `data:application/pdf;base64,${base64Data}`,
-                filename: `document_${i + 1}.pdf`,
-              },
-            });
-          } else {
-            // Process image - resize if needed
-            const processedBuffer = await this.resizeImageIfNeeded(fileBuffer, doc.mimeType);
-            const base64Data = processedBuffer.toString('base64');
-            let mediaType = 'image/jpeg';
-            if (doc.mimeType.includes('png')) mediaType = 'image/png';
-            else if (doc.mimeType.includes('gif')) mediaType = 'image/gif';
-            else if (doc.mimeType.includes('webp')) mediaType = 'image/webp';
-
-            console.log(`[Consolidation] Adding document ${i + 1}: ${mediaType} (${(processedBuffer.length / 1024).toFixed(1)}KB)`);
-            contentParts.push({
-              type: 'image_url',
-              image_url: {
-                url: `data:${mediaType};base64,${base64Data}`,
-                detail: 'high',
-              },
-            });
-          }
-
-          // Add a text label for this document
+          // Add the text label BEFORE the document content so the AI clearly
+          // knows which document (and UUID) it is about to see
           contentParts.push({
             type: 'text',
             text: `[Document ${i + 1} - ID: ${doc.id}]`,
           });
+
+          if (isPdf) {
+            const sanitized = sanitizePdfBuffer(fileBuffer);
+            if (!sanitized) {
+              console.warn(`[Consolidation] Document ${doc.id} (${doc.originalFilename}) has no PDF header; skipping`);
+              unreadableDocuments.push({ docId: doc.id, filename: doc.originalFilename });
+              contentParts.pop(); // remove the label pushed above
+              continue;
+            }
+            const base64Data = sanitized.buffer.toString('base64');
+            console.log(`[Consolidation] Adding document ${i + 1}: PDF (${(sanitized.buffer.length / 1024).toFixed(1)}KB${sanitized.repaired ? ', header repaired' : ''})`);
+            partOwner.set(contentParts.length, { id: doc.id, filename: doc.originalFilename });
+            contentParts.push({
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: base64Data },
+            });
+          } else {
+            // Always send a real JPEG regardless of the declared type (see normalizeImage)
+            let processedBuffer: Buffer;
+            try {
+              processedBuffer = await this.normalizeImage(fileBuffer);
+            } catch (imageError) {
+              console.warn(`[Consolidation] Document ${doc.id} (${doc.originalFilename}) is not a decodable image; skipping:`, imageError);
+              unreadableDocuments.push({ docId: doc.id, filename: doc.originalFilename });
+              contentParts.pop(); // remove the label pushed above
+              continue;
+            }
+            const base64Data = processedBuffer.toString('base64');
+
+            console.log(`[Consolidation] Adding document ${i + 1}: image/jpeg (${(processedBuffer.length / 1024).toFixed(1)}KB, declared ${doc.mimeType})`);
+            partOwner.set(contentParts.length, { id: doc.id, filename: doc.originalFilename });
+            contentParts.push({
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/jpeg', data: base64Data },
+            });
+          }
         } catch (docError) {
           console.error(`[Consolidation] Failed to load document ${doc.id}:`, docError);
           contentParts.push({
@@ -957,23 +923,62 @@ Do NOT include in warnings (these are handled elsewhere):
         text: prompt + `\n\nPREVIOUS EXTRACTION SUMMARIES (for reference - verify against actual documents above):\n${JSON.stringify(extractionSummary, null, 2)}`,
       });
 
-      console.log(`[Consolidation] Using OpenAI ${this.model} for journey consolidation with ${contentParts.length} content parts`);
+      console.log(`[Consolidation] Using Anthropic ${this.model} with extended thinking for journey consolidation with ${contentParts.length} content parts`);
 
-      const response = await this.client.chat.completions.create({
-        model: this.model,
-        max_completion_tokens: 16000,
-        reasoning_effort: 'high',
-        messages: [
-          {
-            role: 'user',
-            content: contentParts as OpenAI.Chat.Completions.ChatCompletionContentPart[],
-          },
-        ],
-      });
+      // One unreadable file (e.g. a web page saved as .pdf) must not block the
+      // other documents: when the provider rejects a specific content part, drop
+      // that document (and its label) and retry without it.
+      let activeParts = contentParts;
+      let activeOwner = partOwner;
+      let response: Anthropic.Message | undefined;
+      for (let attempt = 0; attempt <= participant.documents.length; attempt++) {
+        try {
+          response = await this.client.messages.create({
+            model: this.model,
+            max_tokens: 28000,
+            thinking: {
+              type: 'enabled',
+              budget_tokens: 12000, // ~12k for reasoning, ~16k available for the JSON response
+            } as Anthropic.ThinkingConfigParam,
+            messages: [
+              {
+                role: 'user',
+                content: activeParts as Anthropic.MessageParam['content'],
+              },
+            ],
+          });
+          break;
+        } catch (apiError) {
+          const badIndex = this.unreadablePartIndex(apiError);
+          const owner = badIndex != null ? activeOwner.get(badIndex) : undefined;
+          if (badIndex == null || !owner) throw apiError;
+          console.warn(`[Consolidation] Provider could not read document ${owner.id} (${owner.filename}); retrying without it`);
+          unreadableDocuments.push({ docId: owner.id, filename: owner.filename });
+          // Rebuild parts without this document and its preceding label
+          const rebuilt: ContentPart[] = [];
+          const rebuiltOwner = new Map<number, { id: string; filename: string }>();
+          for (let i = 0; i < activeParts.length; i++) {
+            if (i === badIndex || i === badIndex - 1) continue;
+            const o = activeOwner.get(i);
+            if (o) rebuiltOwner.set(rebuilt.length, o);
+            rebuilt.push(activeParts[i]);
+          }
+          activeParts = rebuilt;
+          activeOwner = rebuiltOwner;
+          if (rebuiltOwner.size === 0) {
+            throw new Error('None of the uploaded files could be read');
+          }
+        }
+      }
+      if (!response) throw new Error('No response from Anthropic');
 
-      const responseText = response.choices[0]?.message?.content;
+      // Filter out thinking blocks — only keep the text output
+      const responseText = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map(b => b.text)
+        .join('');
       if (!responseText) {
-        throw new Error('No response from OpenAI');
+        throw new Error('No response from Anthropic');
       }
 
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -1033,23 +1038,29 @@ Do NOT include in warnings (these are handled elsewhere):
         const currency = booking.currency || 'EUR';
         const totalAmount = booking.totalAmount ?? null;
         const totalAmountEur = totalAmount !== null && currency !== 'EUR'
-          ? await convertToEurService(totalAmount, currency)
+          ? await convertToEurForParticipant(participantId, totalAmount, currency)
           : totalAmount;
 
-        const travelBooking = await prisma.travelBooking.create({
-          data: {
-            participantId,
-            bookingReference: booking.bookingReference,
-            isRoundTrip: booking.isRoundTrip || false,
-            totalAmount: totalAmount,
-            currency: currency,
-            totalAmountEur: totalAmountEur,
-            numberOfPassengers: booking.numberOfPassengers || null,
-            documentIds: linkedDocIds.length > 0 ? JSON.stringify(linkedDocIds) : null,
-            hasPerLegPrices: booking.hasPerLegPrices || false,
-            priceSource: booking.priceSource || null,
-          },
-        });
+        let travelBooking;
+        try {
+          travelBooking = await prisma.travelBooking.create({
+            data: {
+              participantId,
+              bookingReference: booking.bookingReference,
+              isRoundTrip: booking.isRoundTrip || false,
+              totalAmount: totalAmount,
+              currency: currency,
+              totalAmountEur: totalAmountEur,
+              numberOfPassengers: booking.numberOfPassengers || null,
+              documentIds: linkedDocIds.length > 0 ? JSON.stringify(linkedDocIds) : null,
+              hasPerLegPrices: booking.hasPerLegPrices || false,
+              priceSource: booking.priceSource || null,
+            },
+          });
+        } catch (bookingError) {
+          console.error(`[Consolidation] Could not create booking ${booking.bookingReference}, continuing without it:`, bookingError);
+          continue;
+        }
 
         bookingIdMap.set(booking.bookingReference, travelBooking.id);
         console.log(`[Consolidation] Created booking ${booking.bookingReference} (round-trip: ${booking.isRoundTrip}, total: ${totalAmount} ${currency})`);
@@ -1072,12 +1083,15 @@ Do NOT include in warnings (these are handled elsewhere):
         const primaryDocId: string | null = validLinkedDocs.length > 0 ? validLinkedDocs[0] : null;
         const additionalDocIds = validLinkedDocs.slice(1);
 
-        // Check if this matches ANY existing item (same route and date)
+        // Check if this matches ANY existing item: same route (loose place match that
+        // ignores diacritics and station/airport words) and departure within a day.
         const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
         const existingMatch = existingSignatures.find(
-          (existing: { signature: string; item: { id: string; fromLocation: string; toLocation: string; documentId: string | null } }) => existing.signature === itemSignature ||
-            (existing.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
-             existing.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
+          (existing: { signature: string; item: { id: string; fromLocation: string; toLocation: string; departureDate: Date; documentId: string | null } }) =>
+            existing.signature === itemSignature ||
+            (samePlace(existing.item.fromLocation, item.fromLocation) &&
+             samePlace(existing.item.toLocation, item.toLocation) &&
+             sameTravelDay(existing.item.departureDate, item.departureDate))
         );
 
         if (existingMatch) {
@@ -1085,13 +1099,17 @@ Do NOT include in warnings (these are handled elsewhere):
           if (primaryDocId) {
             const oldDocId = existingMatch.item.documentId;
 
-            await prisma.travelItem.update({
-              where: { id: existingMatch.item.id },
-              data: {
-                documentId: primaryDocId,
-                additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
-              },
-            });
+            try {
+              await prisma.travelItem.update({
+                where: { id: existingMatch.item.id },
+                data: {
+                  documentId: primaryDocId,
+                  additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
+                },
+              });
+            } catch (updateError) {
+              console.warn(`[Consolidation] Could not update document links for ${itemSignature}, keeping existing:`, updateError);
+            }
 
             if (oldDocId !== primaryDocId) {
               console.log(`[Consolidation] Updated document link for existing item ${itemSignature}: ${oldDocId} -> ${primaryDocId}`);
@@ -1148,7 +1166,7 @@ Do NOT include in warnings (these are handled elsewhere):
         let amountEur: number | null = baseAmount;
         if (baseAmount !== null && currency !== 'EUR') {
           const purchaseDateForConversion = purchaseDateValue || new Date();
-          amountEur = await convertToEurService(baseAmount, currency, purchaseDateForConversion);
+          amountEur = await convertToEurForParticipant(participantId, baseAmount, currency, purchaseDateForConversion);
         }
 
         // Resolve price source document ID
@@ -1181,15 +1199,14 @@ Do NOT include in warnings (these are handled elsewhere):
         if (luggageAmount !== null) {
           if (luggageCurrency !== 'EUR') {
             const purchaseDateForLuggage = item.purchaseDate ? new Date(item.purchaseDate) : new Date();
-            luggageAmountEur = await convertToEurService(luggageAmount, luggageCurrency, purchaseDateForLuggage);
+            luggageAmountEur = await convertToEurForParticipant(participantId, luggageAmount, luggageCurrency, purchaseDateForLuggage);
           } else {
             luggageAmountEur = luggageAmount;
           }
         }
         const luggageDocumentId = item.luggageDocumentId ? resolveDocumentId(item.luggageDocumentId) : null;
 
-        const travelItem = await prisma.travelItem.create({
-          data: {
+        const itemData = {
             participantId,
             documentId: primaryDocId,
             additionalDocumentIds: additionalDocIds.length > 0 ? JSON.stringify(additionalDocIds) : null,
@@ -1224,8 +1241,24 @@ Do NOT include in warnings (these are handled elsewhere):
             luggageDocumentId: luggageDocumentId,
             isRoundTrip: false, // Individual legs are not round-trips; the booking is
             numberOfPassengers: item.numberOfPassengers || null,
-          },
-        });
+          };
+
+        let travelItem;
+        try {
+          travelItem = await prisma.travelItem.create({ data: itemData });
+        } catch (createError) {
+          // A linked document may have been deleted while the (multi-minute) analysis
+          // ran. Keep the trip, drop the links, never abort the whole run.
+          if (this.isForeignKeyError(createError)) {
+            console.warn(`[Consolidation] Document link vanished for ${item.fromLocation} -> ${item.toLocation}; saving trip without links`);
+            travelItem = await prisma.travelItem.create({
+              data: { ...itemData, documentId: null, additionalDocumentIds: null, priceSourceDocId: null, luggageDocumentId: null, bookingId: null },
+            });
+          } else {
+            console.error(`[Consolidation] Could not save trip ${item.fromLocation} -> ${item.toLocation}, skipping:`, createError);
+            continue;
+          }
+        }
 
         const amountInfo = amountIncludedInRoundTrip ? '0 (included in round-trip)' : `${baseAmount ?? 'null'} ${currency}`;
         console.log(`[Consolidation] Created travel item: ${item.fromLocation} -> ${item.toLocation}, amount: ${amountInfo}, priceMissing: ${item.priceMissing}`);
@@ -1273,6 +1306,7 @@ Do NOT include in warnings (these are handled elsewhere):
         success: true,
         message: result.journey_summary,
         travelItems: createdItems,
+        unreadableDocuments,
         bookings: result.bookings || [],
         warnings: result.warnings || [],
         missingDocuments: result.missing_documents || [],
@@ -1287,11 +1321,35 @@ Do NOT include in warnings (these are handled elsewhere):
       console.error('[Consolidation] Error consolidating journey:', error);
       return {
         success: false,
-        message: error instanceof Error ? error.message : 'Unknown error',
+        message: this.describeFailure(error),
         travelItems: [],
         warnings: ['Failed to consolidate journey - please check your documents'],
       };
     }
+  }
+
+  /** Index of the content part the provider rejected as unreadable, if the error names one */
+  private unreadablePartIndex(error: unknown): number | null {
+    const message = (error as { message?: string })?.message || '';
+    const m = message.match(/content\.(\d+)\.(?:pdf|image|document)\.source/i);
+    if (!m) return null;
+    if (!/not valid|could not be processed|invalid|corrupt|unsupported/i.test(message)) return null;
+    return parseInt(m[1], 10);
+  }
+
+  private isForeignKeyError(error: unknown): boolean {
+    return (error as { code?: string })?.code === 'P2003';
+  }
+
+  /** Participant-facing explanation for a failed run */
+  private describeFailure(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = (error as { status?: number })?.status;
+    if (/could not be read|not valid/i.test(message)) return 'One of your files could not be read. Please re-upload it as a photo or screenshot.';
+    if (status === 429 || status === 529 || /overloaded|rate limit/i.test(message)) return 'The analysis service is busy right now. Please try again in a minute.';
+    if (/timeout|timed out/i.test(message)) return 'The analysis took too long. Please try again.';
+    if (/too large|request_too_large|exceeds/i.test(message)) return 'Your documents are too large to analyse together. Please upload smaller files or photos.';
+    return 'The analysis could not be completed. Please try again; if it keeps failing, add your trips manually.';
   }
 
   private mapDocumentType(type: string): DocumentType {
@@ -1305,6 +1363,8 @@ Do NOT include in warnings (these are handled elsewhere):
       BANK_TRANSACTION: 'BANK_TRANSACTION',
       LUGGAGE_INVOICE: 'LUGGAGE_INVOICE',
       INTERRAIL_PASS: 'INTERRAIL_PASS',
+      HOTEL_INVOICE: 'HOTEL_INVOICE',
+      MEAL_RECEIPT: 'MEAL_RECEIPT',
     };
     return (mapping[type] || 'OTHER') as DocumentType;
   }
@@ -1336,6 +1396,8 @@ export interface ConsolidationResult {
   success: boolean;
   message: string;
   travelItems: unknown[];
+  /** Files the AI provider could not read (e.g. a web page saved as .pdf); the run continued without them */
+  unreadableDocuments?: { docId: string; filename: string }[];
   bookings?: unknown[];
   warnings: string[];
   missingDocuments?: { type: string; description: string }[];

@@ -27,13 +27,23 @@ import {
   Info,
   FileCheck,
   Users,
+  EyeOff,
+  Eye,
+  ArrowRight,
+  Repeat,
+  Lock,
+  ChevronLeft,
 } from 'lucide-react';
+import { motion, AnimatePresence, useDragControls, type PanInfo } from 'framer-motion';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
 import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
+import { SignaturePad } from '../../components/participant/SignaturePad';
+import { computePayable } from '../../utils/reimbursementMath';
+import { sameCountry, normalizeCountryName } from '../../utils/countryName';
 import DisseminationPage from './DisseminationPage';
 import {
   participantApi,
@@ -46,6 +56,19 @@ import {
   ApiError,
 } from '../../services/api';
 import { clsx } from 'clsx';
+
+/** Maximum uploads per participant (mirrors MAX_DOCUMENTS in the backend upload route) */
+const MAX_DOCUMENTS = 25;
+
+/** Documents that never become travel items (boarding passes, receipts for allowances, declarations) */
+function isNonTripDocument(d: Document): boolean {
+  return (
+    d.documentType === 'FLIGHT_BOARDING_PASS' ||
+    d.documentType === 'HOTEL_INVOICE' ||
+    d.documentType === 'MEAL_RECEIPT' ||
+    d.documentType === 'GREEN_TRAVEL_DECLARATION'
+  );
+}
 
 // Helper function to format dates as DD-MM-YYYY (European format)
 function formatDate(dateInput: string | Date): string {
@@ -266,6 +289,8 @@ export default function ReimbursementPage() {
   const queryClient = useQueryClient();
   const token = searchParams.get('token');
   const [currentStep, setCurrentStep] = useState<Step>(1);
+  // Set when Step 3's "Fix" jump sends the user back to a specific trip in Step 2
+  const [focusItemId, setFocusItemId] = useState<string | null>(null);
   const [hasSetInitialStep, setHasSetInitialStep] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('reimbursement');
   const [aiConsolidationWarnings, setAiConsolidationWarnings] = useState<string[]>([]);
@@ -331,71 +356,83 @@ export default function ReimbursementPage() {
 
   const isComplete = data.participant.status !== 'DRAFT';
   const disseminationEnabled = data.project.disseminationEnabled;
+  // AI analysis ("Build my trips") is locked until the project ends, unless the
+  // organisation opened it early. Participants upload before/during the project.
+  const aiUnlocked =
+    !!data.project.aiAnalysisUnlocked || new Date() >= new Date(data.project.endDate);
 
   return (
     <div className="min-h-screen pb-12">
-      {/* Header */}
-      <div className="bg-gradient-header text-white">
-        <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
-          <h1 className="text-2xl sm:text-3xl font-bold">
-            Hello {data.participant.firstName}!
-          </h1>
-          <p className="text-white/80 mt-2">
-            Travel reimbursement for {data.project.name}
-          </p>
-
-          {/* Tabs (when dissemination is enabled) */}
-          {disseminationEnabled && (
-            <div className="mt-6 flex gap-2">
-              <button
-                onClick={() => setActiveTab('reimbursement')}
-                className={clsx(
-                  'px-4 py-2 rounded-lg text-sm font-medium transition-all',
-                  activeTab === 'reimbursement'
-                    ? 'bg-white text-primary-600'
-                    : 'bg-white/10 text-white/80 hover:bg-white/20'
-                )}
-              >
-                <Ticket className="w-4 h-4 inline-block mr-2" />
-                Reimbursement
-              </button>
-              <button
-                onClick={() => setActiveTab('dissemination')}
-                className={clsx(
-                  'px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2',
-                  activeTab === 'dissemination'
-                    ? 'bg-white text-primary-600'
-                    : 'bg-white/10 text-white/80 hover:bg-white/20'
-                )}
-              >
-                <Share2 className="w-4 h-4" />
-                Dissemination
-                {data.disseminationStatus && (
-                  <span
-                    className={clsx(
-                      'w-2 h-2 rounded-full',
-                      data.disseminationStatus.hasDisseminationActivity &&
-                        data.disseminationStatus.hasSocialMediaPost
-                        ? 'bg-green-400'
-                        : 'bg-amber-400'
-                    )}
-                  />
-                )}
-              </button>
-            </div>
-          )}
-
-          {/* Progress Steps (only for reimbursement tab) */}
+      {/* Header — compact mockup style: title, name chip, step pill, slim progress */}
+      <div className="max-w-4xl mx-auto px-4 pt-5">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold text-gray-900">Reimbursement</h1>
           {!isComplete && activeTab === 'reimbursement' && (
-            <div className="mt-8">
-              <ProgressSteps currentStep={currentStep} />
-            </div>
+            <span className="px-3 py-1 rounded-full bg-primary-100 text-primary-700 text-sm font-semibold whitespace-nowrap">
+              Step {currentStep} of 3
+            </span>
           )}
         </div>
+        <div className="flex items-center gap-2 mt-1.5">
+          <span className="w-6 h-6 rounded-full bg-gradient-to-br from-primary-600 to-fuchsia-500 text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0">
+            {(data.participant.firstName?.[0] || '') + (data.participant.lastName?.[0] || '')}
+          </span>
+          <span className="text-sm text-gray-500 font-medium truncate">
+            {data.participant.firstName} {data.participant.lastName}
+          </span>
+        </div>
+
+        {/* Tabs (when dissemination is enabled) */}
+        {disseminationEnabled && (
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={() => setActiveTab('reimbursement')}
+              className={clsx(
+                'px-4 py-2 rounded-full text-sm font-medium transition-all',
+                activeTab === 'reimbursement'
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              )}
+            >
+              <Ticket className="w-4 h-4 inline-block mr-2" />
+              Reimbursement
+            </button>
+            <button
+              onClick={() => setActiveTab('dissemination')}
+              className={clsx(
+                'px-4 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2',
+                activeTab === 'dissemination'
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              )}
+            >
+              <Share2 className="w-4 h-4" />
+              Dissemination
+              {data.disseminationStatus && (
+                <span
+                  className={clsx(
+                    'w-2 h-2 rounded-full',
+                    data.disseminationStatus.hasDisseminationActivity &&
+                      data.disseminationStatus.hasSocialMediaPost
+                      ? 'bg-green-400'
+                      : 'bg-amber-400'
+                  )}
+                />
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* Progress Steps (only for reimbursement tab) */}
+        {!isComplete && activeTab === 'reimbursement' && (
+          <div className="mt-4">
+            <ProgressSteps currentStep={currentStep} />
+          </div>
+        )}
       </div>
 
       {/* Content */}
-      <div className="max-w-4xl mx-auto px-4 -mt-6">
+      <div className="max-w-4xl mx-auto px-4 mt-4">
         {/* Reopen banner - shown when organisation reopened the reimbursement */}
         {data.participant.reopenMessage && data.participant.status === 'DRAFT' && (
           <div className="mb-4 mt-2 bg-amber-50 border border-amber-300 rounded-xl p-4">
@@ -430,6 +467,7 @@ export default function ReimbursementPage() {
               <Step1Upload
                 data={data}
                 token={token}
+                aiUnlocked={aiUnlocked}
                 onNext={async () => {
                   if (data.participant.noReimbursement) {
                     // Skip steps 2 & 3 — mark complete directly
@@ -443,6 +481,7 @@ export default function ReimbursementPage() {
                       toast.error('Failed to submit');
                     }
                   } else {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                     setCurrentStep(2);
                   }
                 }}
@@ -453,16 +492,23 @@ export default function ReimbursementPage() {
               <Step2CheckData
                 data={data}
                 token={token}
-                onBack={() => setCurrentStep(1)}
-                onNext={() => setCurrentStep(3)}
+                onBack={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(1); }}
+                onNext={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(3); }}
                 aiWarnings={aiConsolidationWarnings}
+                focusItemId={focusItemId}
+                onFocusHandled={() => setFocusItemId(null)}
               />
             )}
             {currentStep === 3 && (
               <Step3Confirm
                 data={data}
                 token={token}
-                onBack={() => setCurrentStep(2)}
+                onBack={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setCurrentStep(2); }}
+                onFixItem={(travelItemId) => {
+                  setFocusItemId(travelItemId);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  setCurrentStep(2);
+                }}
               />
             )}
           </>
@@ -478,50 +524,139 @@ export default function ReimbursementPage() {
 }
 
 function ProgressSteps({ currentStep }: { currentStep: Step }) {
-  const steps = [
-    { num: 1, label: 'Upload Documents' },
-    { num: 2, label: 'Check Data' },
-    { num: 3, label: 'Confirm & Submit' },
-  ];
+  return (
+    <div className="flex items-center gap-1.5">
+      {[1, 2, 3].map((num) => (
+        <div
+          key={num}
+          className={clsx(
+            'h-1.5 flex-1 rounded-full transition-all duration-300',
+            currentStep >= num ? 'bg-gradient-to-r from-primary-600 to-fuchsia-500' : 'bg-gray-200'
+          )}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Horizontal swipe carousel for reviewing travel items one at a time.
+// Drag is only started when the pointer doesn't land on an interactive control,
+// so the inline edit fields inside each card keep working normally.
+function TravelSwipeCarousel({
+  slides,
+  apiRef,
+  tripCount,
+}: {
+  slides: { key: string; node: React.ReactNode }[];
+  apiRef?: React.MutableRefObject<{ goTo: (i: number) => void } | null>;
+  /** Number of leading slides that are trips; any extra slides (e.g. the cost summary) get a different label */
+  tripCount?: number;
+}) {
+  const [index, setIndex] = useState(0);
+  const controls = useDragControls();
+  const count = slides.length;
+  const clamped = Math.min(index, Math.max(0, count - 1));
+
+  useEffect(() => {
+    if (index > count - 1) setIndex(Math.max(0, count - 1));
+  }, [count, index]);
+
+  // Expose an imperative jump so the parent can navigate (e.g. to the first
+  // unconfirmed trip when "Confirm all" is tapped).
+  useEffect(() => {
+    if (apiRef) apiRef.current = { goTo: (i: number) => setIndex(Math.max(0, Math.min(count - 1, i))) };
+    return () => {
+      if (apiRef) apiRef.current = null;
+    };
+  }, [apiRef, count]);
+
+  if (count === 0) return null;
+
+  const go = (delta: number) => setIndex((i) => Math.max(0, Math.min(count - 1, i + delta)));
+
+  const startDrag = (e: React.PointerEvent) => {
+    const el = e.target as HTMLElement;
+    if (el.closest('input,select,textarea,button,a,label,[role="button"],[contenteditable="true"]')) return;
+    controls.start(e);
+  };
+
+  const handleDragEnd = (_e: unknown, info: PanInfo) => {
+    if (info.offset.x < -70 && clamped < count - 1) go(1);
+    else if (info.offset.x > 70 && clamped > 0) go(-1);
+  };
 
   return (
-    <div className="flex items-center justify-between">
-      {steps.map((step, i) => (
-        <div key={step.num} className="flex items-center flex-1">
-          <div className="flex items-center gap-3">
-            <div
-              className={clsx(
-                'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
-                currentStep >= step.num
-                  ? 'bg-white text-primary-600'
-                  : 'bg-white/20 text-white/60'
-              )}
+    <div>
+      {/* Carousel header: position + arrows */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-medium text-gray-500">
+          {tripCount != null && clamped >= tripCount
+            ? 'Cost summary'
+            : `Trip ${clamped + 1} / ${tripCount ?? count}`}
+          {count > 1 ? ' · swipe →' : ''}
+        </span>
+        {count > 1 && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              disabled={clamped === 0}
+              className="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+              aria-label="Previous trip"
             >
-              {currentStep > step.num ? (
-                <CheckCircle className="w-5 h-5" />
-              ) : (
-                step.num
-              )}
-            </div>
-            <span
-              className={clsx(
-                'text-sm hidden sm:block',
-                currentStep >= step.num ? 'text-white' : 'text-white/60'
-              )}
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => go(1)}
+              disabled={clamped === count - 1}
+              className="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+              aria-label="Next trip"
             >
-              {step.label}
-            </span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
-          {i < steps.length - 1 && (
-            <div
+        )}
+      </div>
+
+      <div className="relative overflow-hidden touch-pan-y">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={slides[clamped].key}
+            drag={count > 1 ? 'x' : false}
+            dragListener={false}
+            dragControls={controls}
+            dragConstraints={{ left: 0, right: 0 }}
+            dragElastic={0.2}
+            onDragEnd={handleDragEnd}
+            onPointerDown={count > 1 ? startDrag : undefined}
+            initial={{ opacity: 0, x: 30 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -30 }}
+            transition={{ duration: 0.18 }}
+          >
+            {slides[clamped].node}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {/* Dots */}
+      {count > 1 && (
+        <div className="flex justify-center flex-wrap gap-1.5 mt-4">
+          {slides.map((s, i) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setIndex(i)}
+              aria-label={`Go to trip ${i + 1}`}
               className={clsx(
-                'flex-1 h-0.5 mx-4',
-                currentStep > step.num ? 'bg-white' : 'bg-white/20'
+                'h-1.5 rounded-full transition-all',
+                i === clamped ? 'w-6 bg-primary-600' : 'w-1.5 bg-gray-300 hover:bg-gray-400'
               )}
             />
-          )}
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -560,11 +695,13 @@ function CompletedView({ data }: { data: ParticipantAuthResponse }) {
 function Step1Upload({
   data,
   token,
+  aiUnlocked,
   onNext,
   onAiWarnings,
 }: {
   data: ParticipantAuthResponse;
   token: string;
+  aiUnlocked: boolean;
   onNext: () => void;
   onAiWarnings: (warnings: string[]) => void;
 }) {
@@ -605,14 +742,20 @@ function Step1Upload({
     consolidatingRef.current = true;
     setConsolidating(true);
     try {
-      const result = await participantApi.consolidateJourney(token);
+      // Rebuilding after trips already exist must start from scratch, otherwise the
+      // old trips (and their missing prices) are preserved and nothing changes.
+      const result = await participantApi.consolidateJourney(token, { fresh: data.travelItems.length > 0 });
+      setAnalysisFailure(null);
 
       // Store AI warnings to display on the next step as persistent banners
-      if (result.warnings && result.warnings.length > 0) {
-        onAiWarnings(result.warnings);
-      } else {
-        onAiWarnings([]);
+      const warnings = [...(result.warnings || [])];
+      if (result.unreadableDocuments && result.unreadableDocuments.length > 0) {
+        warnings.push(
+          `We could not read ${result.unreadableDocuments.map((d) => `"${d.filename}"`).join(', ')} — please upload ${result.unreadableDocuments.length === 1 ? 'it' : 'them'} again as a photo or screenshot.`
+        );
+        toast(`${result.unreadableDocuments.length} file(s) could not be read — see the note on the next step`, { icon: '⚠️' });
       }
+      onAiWarnings(warnings);
 
       // Refresh data and move to next step
       // Use refetchQueries instead of invalidateQueries to ensure fresh data is loaded
@@ -621,7 +764,16 @@ function Step1Upload({
       onNext();
     } catch (error) {
       console.error('Consolidation error:', error);
-      toast.error('Failed to analyze journey. Please try again.');
+      const message =
+        error instanceof ApiError && error.message && error.message !== 'An error occurred'
+          ? error.message
+          : 'The analysis could not be completed. Please try again.';
+      const unreadable =
+        error instanceof ApiError && Array.isArray(error.payload?.unreadableDocuments)
+          ? (error.payload!.unreadableDocuments as { docId: string; filename: string }[])
+          : [];
+      setAnalysisFailure({ message, unreadable });
+      toast.error(message);
     } finally {
       setConsolidating(false);
       consolidatingRef.current = false;
@@ -653,8 +805,13 @@ function Step1Upload({
     }
   }, [uploadMutation]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const atDocumentLimit = data.documents.length >= MAX_DOCUMENTS;
+  // Result of the last failed analysis (shown inline so the participant knows what to fix)
+  const [analysisFailure, setAnalysisFailure] = useState<{ message: string; unreadable: { docId: string; filename: string }[] } | null>(null);
+  const { getRootProps, getInputProps, open } = useDropzone({
     onDrop,
+    disabled: atDocumentLimit || uploading,
+    noClick: true,
     accept: {
       'application/pdf': ['.pdf'],
       'image/jpeg': ['.jpg', '.jpeg'],
@@ -672,6 +829,10 @@ function Step1Upload({
     FUEL_RECEIPT: 'Fuel Receipt',
     GREEN_TRAVEL_DECLARATION: 'Green Travel',
     HOTEL_INVOICE: 'Hotel Invoice',
+    MEAL_RECEIPT: 'Meal Receipt',
+    BANK_TRANSACTION: 'Bank Transaction',
+    LUGGAGE_INVOICE: 'Luggage Invoice',
+    INTERRAIL_PASS: 'Interrail Pass',
     OTHER: 'Other',
   };
 
@@ -688,45 +849,27 @@ function Step1Upload({
     }
   };
 
+  // Toggle the "no reimbursement" opt-out with an optimistic update
+  const setNoReimbursementValue = async (newValue: boolean) => {
+    queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+      if (!old) return old;
+      return { ...old, participant: { ...old.participant, noReimbursement: newValue } };
+    });
+    try {
+      await participantApi.setNoReimbursement(token, newValue);
+    } catch {
+      queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
+        if (!old) return old;
+        return { ...old, participant: { ...old.participant, noReimbursement: !newValue } };
+      });
+      toast.error('Failed to update preference');
+    }
+  };
+
   return (
     <>
       {/* Show loading screen with Erasmus quotes during consolidation */}
       {consolidating && <ConsolidationLoading documentCount={data.documents.length} />}
-
-      {/* No-reimbursement option */}
-      <Card className="mb-4">
-        <CardContent className="py-4">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={data.participant.noReimbursement || false}
-              onChange={async (e) => {
-                const newValue = e.target.checked;
-                // Optimistic update so checkbox reacts instantly
-                queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
-                  if (!old) return old;
-                  return { ...old, participant: { ...old.participant, noReimbursement: newValue } };
-                });
-                try {
-                  await participantApi.setNoReimbursement(token, newValue);
-                } catch {
-                  // Revert on error
-                  queryClient.setQueryData(['participant-auth'], (old: typeof data | undefined) => {
-                    if (!old) return old;
-                    return { ...old, participant: { ...old.participant, noReimbursement: !newValue } };
-                  });
-                  toast.error('Failed to update preference');
-                }
-              }}
-              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-5 w-5"
-            />
-            <div>
-              <p className="font-medium text-gray-900">I don't need travel reimbursement</p>
-              <p className="text-sm text-gray-500">Select this if you didn't travel or don't need to claim travel costs.</p>
-            </div>
-          </label>
-        </CardContent>
-      </Card>
 
       {data.participant.noReimbursement ? (
         <Card>
@@ -744,126 +887,239 @@ function Step1Upload({
             >
               Continue
             </button>
+            <div className="mt-4">
+              <button
+                onClick={() => setNoReimbursementValue(false)}
+                className="text-sm text-gray-400 hover:text-gray-600"
+              >
+                Actually, I do need reimbursement
+              </button>
+            </div>
           </CardContent>
         </Card>
       ) : (
-      <Card>
-        <CardHeader>
-          <h2 className="text-xl font-bold text-gray-900">Upload Your Travel Documents</h2>
-        <p className="text-gray-500 mt-1">
-          {isGreenTravel ? (
-            <>Upload all your travel tickets, invoices, boarding passes, and <strong>hotel invoices</strong> (for green travel). For best results, upload everything at once so our AI can understand your complete journey and link related documents together.</>
-          ) : (
-            'Upload all your travel tickets, invoices, and boarding passes. For best results, upload everything at once so our AI can understand your complete journey and link related documents together.'
-          )}
-        </p>
-        {isGreenTravel && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-            <p className="text-sm text-emerald-700">
-              <strong>Green Travel:</strong> Since you're traveling by train/bus (eco-friendly), you can also upload hotel invoices for overnight stays that were needed due to the longer travel time.
+      <div className="space-y-4" {...getRootProps()}>
+        <input {...getInputProps()} />
+
+        {/* Status pill */}
+        <div className="flex items-center gap-2 bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
+          <span className={clsx('w-2.5 h-2.5 rounded-full', aiUnlocked ? 'bg-emerald-500' : 'bg-amber-500')} />
+          <span className="text-sm font-medium text-gray-700">
+            {aiUnlocked ? 'Project ended · ready to claim' : 'Project ongoing · keep uploading'}
+          </span>
+        </div>
+
+        {/* Notes from the organisation (instructions, deadline, contact) */}
+        {(data.project.participantInstructions || data.project.documentDeadline || data.project.contactEmail || data.project.contactPhone) && (
+          <div className="bg-primary-50 border border-primary-100 rounded-2xl px-4 py-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Info className="w-4 h-4 text-primary-600 flex-shrink-0" />
+              <p className="text-sm font-semibold text-primary-800">
+                Notes from {data.project.organisation?.name || 'the organisation'}
+              </p>
+            </div>
+            {data.project.documentDeadline && (
+              <p className="text-sm text-primary-900 font-medium">
+                Please upload your documents by {formatDate(data.project.documentDeadline)}.
+              </p>
+            )}
+            {data.project.participantInstructions && (
+              <p className="text-sm text-primary-900/80 whitespace-pre-wrap mt-1">{data.project.participantInstructions}</p>
+            )}
+            {(data.project.contactEmail || data.project.contactPhone) && (
+              <p className="text-xs text-primary-700 mt-2">
+                Questions?{' '}
+                {data.project.contactEmail && (
+                  <a href={`mailto:${data.project.contactEmail}`} className="underline">{data.project.contactEmail}</a>
+                )}
+                {data.project.contactEmail && data.project.contactPhone && ' · '}
+                {data.project.contactPhone && (
+                  <a href={`tel:${data.project.contactPhone}`} className="underline">{data.project.contactPhone}</a>
+                )}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Gradient hero */}
+        <div className="rounded-3xl p-6 sm:p-7 text-white bg-gradient-to-br from-primary-600 via-primary-600 to-fuchsia-500 shadow-lg">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 text-sm font-medium backdrop-blur">
+            {aiUnlocked ? '✅ Project ended' : '⏳ Project in progress'}
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-bold mt-4 leading-tight">
+            {aiUnlocked ? 'Last check before we build your trips' : 'Collect now, claim later'}
+          </h2>
+          <p className="text-white/85 mt-3 leading-relaxed">
+            {aiUnlocked ? (
+              <><strong>{data.project.name}</strong> has ended. Make sure every document is here — when you continue, our AI reads them and creates your travel items.</>
+            ) : (
+              <><strong>{data.project.name}</strong> runs until <strong>{formatDate(data.project.endDate)}</strong>. Add every ticket, receipt &amp; boarding pass as you get them — we keep them safe so nothing is lost.</>
+            )}
+          </p>
+          {isGreenTravel && (
+            <p className="text-white/85 text-sm mt-3 bg-white/10 rounded-xl px-3 py-2">
+              <strong>Green travel:</strong> also upload your hotel and meal receipts from the journey. Your organisation
+              decides the extra green-travel budget and you'll get an email once it's added to your reimbursement.
             </p>
-          </div>
-        )}
-      </CardHeader>
-      <CardContent>
-        {/* Dropzone */}
-        <div
-          {...getRootProps()}
-          className={clsx('dropzone', isDragActive && 'active')}
-        >
-          <input {...getInputProps()} />
-          {uploading ? (
-            <div className="text-center">
-              <Loader2 className="w-12 h-12 text-primary-400 animate-spin mx-auto mb-4" />
-              {uploadProgress.total > 1 ? (
-                <>
-                  <p className="text-gray-600 font-medium">
-                    Uploading {uploadProgress.current} of {uploadProgress.total}
-                  </p>
-                  <p className="text-sm text-gray-500 mt-1 truncate max-w-xs mx-auto">
-                    {uploadProgress.filename}
-                  </p>
-                  <div className="w-48 h-2 bg-gray-200 rounded-full mx-auto mt-3">
-                    <div
-                      className="h-2 bg-primary-500 rounded-full transition-all duration-300"
-                      style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
-                    />
-                  </div>
-                </>
-              ) : (
-                <p className="text-gray-600">Uploading document...</p>
-              )}
-            </div>
-          ) : (
-            <>
-              <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">
-                {isDragActive
-                  ? 'Drop the files here'
-                  : 'Drag and drop files here, or click to select'}
-              </p>
-              <p className="text-sm text-gray-400 mt-2">
-                PDF, JPG, PNG up to 10MB
-              </p>
-            </>
+          )}
+          <button
+            type="button"
+            onClick={open}
+            disabled={atDocumentLimit || uploading}
+            className="mt-5 w-full bg-white text-primary-700 rounded-2xl py-4 font-semibold text-lg hover:bg-white/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+          >
+            {uploading ? (
+              <><Loader2 className="w-5 h-5 animate-spin" /> Uploading{uploadProgress.total > 1 ? ` ${uploadProgress.current}/${uploadProgress.total}` : '…'}</>
+            ) : (
+              <><Plus className="w-5 h-5" /> Add files</>
+            )}
+          </button>
+          {atDocumentLimit && (
+            <p className="text-white/80 text-xs mt-2 text-center">
+              Document limit reached ({MAX_DOCUMENTS}/{MAX_DOCUMENTS}). Combine pages into one PDF, or add items manually after building your trips.
+            </p>
+          )}
+          {!atDocumentLimit && (
+            <p className="text-white/70 text-xs mt-2 text-center">PDF, JPG, PNG up to 10MB · or drag &amp; drop here</p>
           )}
         </div>
 
-        {/* Uploaded Documents */}
-        {data.documents.length > 0 && (
-          <div className="mt-6">
-            <h3 className="font-semibold text-gray-900 mb-4">Uploaded Documents</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {data.documents.map((doc) => {
-                return (
-                  <div key={doc.id} className="p-4 rounded-xl bg-gray-50">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0 bg-white border-gray-200">
-                        <FileText className="w-5 h-5 text-gray-400" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate text-sm">
-                          {doc.renamedFilename}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {docTypeLabels[doc.documentType] || 'Document'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex gap-3 mt-3">
-                      <button
-                        onClick={() => handleViewDocument(doc.id)}
-                        className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        View
-                      </button>
-                      <button
-                        onClick={() => deleteMutation.mutate(doc.id)}
-                        className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        Remove
-                      </button>
-                    </div>
+        {/* Uploaded list */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-900">Uploaded</h3>
+            <span className={clsx('text-sm', data.documents.length >= MAX_DOCUMENTS - 3 ? 'text-amber-600 font-medium' : 'text-gray-500')}>
+              {data.documents.length} of {MAX_DOCUMENTS} files
+            </span>
+          </div>
+          {data.documents.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-gray-400">
+              No documents yet. Tap “Add files” to upload your tickets and receipts.
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {data.documents.map((doc) => (
+                <li key={doc.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-5 h-5 text-primary-500" />
                   </div>
-                );
-              })}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-900 truncate text-sm">{doc.renamedFilename}</p>
+                    <p className="text-xs mt-0.5">
+                      {isGreenTravel ? (
+                        <select
+                          value={doc.documentType}
+                          onChange={async (e) => {
+                            try {
+                              await participantApi.updateDocumentType(token, doc.id, e.target.value as DocumentType);
+                              queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+                            } catch {
+                              toast.error('Could not change the document type');
+                            }
+                          }}
+                          className="inline-block px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 font-medium mr-1 border-0 text-xs"
+                          title="Correct the detected type"
+                        >
+                          {Object.entries(docTypeLabels).map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="inline-block px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 font-medium mr-1">
+                          {docTypeLabels[doc.documentType] || 'Document'}
+                        </span>
+                      )}
+                      <span className="text-gray-400">detected type</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleViewDocument(doc.id)}
+                    className="p-2 text-gray-400 hover:text-primary-600 transition-colors"
+                    title="View document"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => deleteMutation.mutate(doc.id)}
+                    className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                    title="Remove document"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Slim no-reimbursement opt-out */}
+        <label className="flex items-center gap-3 cursor-pointer bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
+          <input
+            type="checkbox"
+            checked={false}
+            onChange={() => setNoReimbursementValue(true)}
+            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-4 w-4"
+          />
+          <span className="text-sm text-gray-500">I didn't travel / don't need reimbursement</span>
+        </label>
+
+        {/* Last analysis failed — say why and what to do, never silently move on */}
+        {analysisFailure && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="font-semibold text-red-800">We couldn't build your trips</p>
+                <p className="text-red-700 mt-0.5">{analysisFailure.message}</p>
+                {analysisFailure.unreadable.length > 0 && (
+                  <ul className="mt-1.5 text-red-700 list-disc pl-4">
+                    {analysisFailure.unreadable.map((d) => (
+                      <li key={d.docId}>{d.filename} — remove it below and upload a screenshot or photo instead</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-red-600 text-xs mt-1.5">Nothing was lost — your documents are still here. Fix the file if needed, then tap "Build my trips" again.</p>
+              </div>
             </div>
           </div>
         )}
 
-        {/* Next Button */}
-        <div className="mt-8 flex justify-end">
-          <Button
-            onClick={() => setShowConfirmModal(true)}
-            disabled={data.documents.length === 0 || consolidating}
-            loading={consolidating}
-          >
-            {consolidating ? 'Analyzing your journey...' : 'Continue to Check Data'}
-            {!consolidating && <ChevronRight className="w-4 h-4 ml-2" />}
-          </Button>
-        </div>
+        {/* Footer CTA — locked while project ongoing, "Build my trips" once ended/unlocked */}
+        {aiUnlocked ? (
+          <div className="pt-1">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm text-gray-500">Ready to build trips</p>
+                <p className="font-bold text-gray-900">
+                  {data.documents.length} document{data.documents.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowConfirmModal(true)}
+                disabled={data.documents.length === 0 || consolidating}
+                className="px-6 py-3.5 rounded-2xl font-semibold text-white bg-gradient-to-r from-primary-600 to-fuchsia-500 shadow-lg disabled:opacity-50 flex items-center gap-2 transition-opacity flex-shrink-0"
+              >
+                {consolidating ? 'Analyzing…' : (<>Build my trips <ArrowRight className="w-5 h-5" /></>)}
+              </button>
+            </div>
+            {data.documents.length === 0 && (
+              <p className="text-xs text-gray-400 mt-2">Upload at least one document to continue.</p>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-3 bg-white rounded-2xl border border-gray-200 px-4 py-3 shadow-sm">
+              <Lock className="w-4 h-4 text-amber-500 flex-shrink-0" />
+              <span className="text-sm text-gray-600">
+                Trips are built automatically once the project ends. Keep uploading until then.
+              </span>
+            </div>
+            <div className="rounded-2xl bg-gray-100 border border-gray-200 px-4 py-4 flex items-center justify-center gap-2 text-gray-400">
+              <Lock className="w-4 h-4" />
+              <span className="text-sm font-semibold">Available when project ends · {formatDate(data.project.endDate)}</span>
+            </div>
+          </>
+        )}
 
         {/* Confirmation Modal */}
         {showConfirmModal && (
@@ -884,8 +1140,7 @@ function Step1Upload({
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
       )}
     </>
   );
@@ -905,12 +1160,16 @@ function Step2CheckData({
   onBack,
   onNext,
   aiWarnings = [],
+  focusItemId = null,
+  onFocusHandled,
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onBack: () => void;
   onNext: () => void;
   aiWarnings?: string[];
+  focusItemId?: string | null;
+  onFocusHandled?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [showAddTravelModal, setShowAddTravelModal] = useState(false);
@@ -923,6 +1182,38 @@ function Step2CheckData({
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<TravelItem | null>(null);
   const [deleteWithDocuments, setDeleteWithDocuments] = useState(false);
   const [showReuploadWarning, setShowReuploadWarning] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+
+  // Rebuild trips from the current documents without leaving Step 2
+  const rebuildNow = async () => {
+    setShowReuploadWarning(false);
+    setRebuilding(true);
+    try {
+      const result = await participantApi.consolidateJourney(token, { fresh: true });
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
+      if (result.unreadableDocuments && result.unreadableDocuments.length > 0) {
+        toast(`Rebuilt, but ${result.unreadableDocuments.length} file(s) could not be read`, { icon: '⚠️' });
+      } else {
+        toast.success('Your trips were rebuilt from your documents');
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Rebuilding failed. Please try again.');
+    } finally {
+      setRebuilding(false);
+    }
+  };
+  // Imperative handle to jump the trips carousel (e.g. to the first unconfirmed trip)
+  const carouselApiRef = useRef<{ goTo: (i: number) => void } | null>(null);
+
+  // When Step 3's "Fix" link sends the user here, open the slide with that trip
+  useEffect(() => {
+    if (!focusItemId) return;
+    const groups = groupTravelItemsByBooking(data.travelItems);
+    const idx = groups.findIndex((g) => g.items.some((i) => i.id === focusItemId));
+    if (idx >= 0) carouselApiRef.current?.goTo(idx);
+    onFocusHandled?.();
+  }, [focusItemId, data.travelItems, onFocusHandled]);
 
   // Calculate unlinked documents (uploaded but not connected to any travel item)
   // Exclude FLIGHT_BOARDING_PASS since they're associated with flights by type, not direct link
@@ -943,7 +1234,7 @@ function Step2CheckData({
     return ids;
   }, [data.travelItems]);
   const unlinkedDocs = data.documents.filter(d =>
-    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+    !linkedDocIds.has(d.id) && !isNonTripDocument(d)
   );
   const hasUnlinkedDocs = unlinkedDocs.length > 0;
 
@@ -1019,10 +1310,19 @@ function Step2CheckData({
 
         // Also optimistically update reimbursement summary
         const deletedItem = old.travelItems.find((item: TravelItem) => item.id === id);
-        const deletedAmount = (!deletedItem?.excludedFromReimbursement && deletedItem?.amountEur) ? deletedItem.amountEur : 0;
-        const newTotalEur = (old.reimbursementSummary?.totalEur || 0) - deletedAmount;
+        const deletedAmount = deletedItem && !deletedItem.excludedFromReimbursement
+          ? (deletedItem.amountEur || 0) + (deletedItem.luggageAmountEur || 0)
+          : 0;
+        const newTotalEur = Math.max(0, (old.reimbursementSummary?.totalEur || 0) - deletedAmount);
         const maxAllowed = old.reimbursementSummary?.maxReimbursementAllowed || 0;
-        const newAmountToReimburse = maxAllowed > 0 ? Math.min(newTotalEur, maxAllowed) : newTotalEur;
+        const remaining = old.travelItems.filter((item: TravelItem) => item.id !== id);
+        const newAmountToReimburse = computePayable({
+          travelEur: newTotalEur,
+          allowanceInsideCap: 0,
+          allowanceOnTop: old.reimbursementSummary?.greenTravelExtraEur || 0,
+          maxReimbursement: maxAllowed,
+          hasMultiPersonBooking: remaining.some((i: TravelItem) => (i.numberOfPassengers ?? 0) > 1),
+        }).total;
 
         return {
           ...old,
@@ -1150,16 +1450,8 @@ function Step2CheckData({
   const warnings = useMemo((): PersistentWarning[] => {
     const w: PersistentWarning[] = [];
 
-    // Add confirmation guidance notification if there are unconfirmed items
-    const unconfirmedCount = data.travelItems.filter(item => !item.checked).length;
-    if (data.travelItems.length > 0 && unconfirmedCount > 0) {
-      w.push({
-        id: 'confirmation-guidance',
-        type: 'success',
-        message: `Please review each travel item below and click "Confirm" when the information is correct. (${data.travelItems.length - unconfirmedCount}/${data.travelItems.length} confirmed)`,
-        dismissible: true,
-      });
-    }
+    // (Per-trip confirmation progress is shown on the "Total to claim" card,
+    // so no separate "review each item" banner is pushed here.)
 
     // AI consolidation warnings are internal notes for reviewers, not shown to participants
 
@@ -1189,11 +1481,11 @@ function Step2CheckData({
     // Check if AI-detected home country differs from registered country
     // This uses AI reasoning based on travel patterns (return flights, round-trip origins, etc.)
     if (data.participant.detectedHomeCountry &&
-        data.participant.detectedHomeCountry.toLowerCase() !== data.participant.country?.toLowerCase()) {
+        !sameCountry(data.participant.detectedHomeCountry, data.participant.country)) {
       w.push({
         id: 'country-mismatch',
         type: 'warning',
-        message: `Based on your travel documents, it appears you traveled from ${data.participant.detectedHomeCountry}, but your registered country is ${data.participant.country}. ${data.participant.homeCountryReasoning ? `(${data.participant.homeCountryReasoning})` : ''} Please verify this is correct.`,
+        message: `Based on your travel documents, it appears you traveled from ${data.participant.detectedHomeCountry}, but your registered country is ${normalizeCountryName(data.participant.country)}. ${data.participant.homeCountryReasoning ? `(${data.participant.homeCountryReasoning})` : ''} Please verify this is correct.`,
         dismissible: true,
       });
     }
@@ -1330,62 +1622,80 @@ function Step2CheckData({
         </div>
       )}
 
-      {/* Journey Visualization */}
-      {data.travelItems.length > 0 && (
-        <Card>
-          <CardHeader>
-            <h3 className="font-semibold text-gray-900">Your Journey</h3>
-          </CardHeader>
-          <CardContent>
-            <JourneyVisualization
-              items={data.travelItems}
-              projectStartDate={data.project.startDate}
-              projectEndDate={data.project.endDate}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Main Data Card */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-gray-900">Check Your Travel Data</h2>
-              <p className="text-gray-500 mt-1">
-                We've extracted the following information from your documents. Please verify and correct if needed.
+      {/* Gradient total card */}
+      {data.travelItems.length > 0 && (() => {
+        const confirmedCount = data.travelItems.filter((i) => i.checked).length;
+        const totalItems = data.travelItems.length;
+        const totalEur = data.travelItems.reduce(
+          (s, i) => s + (i.amountEur || 0) + (i.luggageAmountEur || 0),
+          0
+        );
+        const greenTravelExtraEur = data.reimbursementSummary?.greenTravelExtraEur || 0;
+        // Route label: origin ⇄ turnaround for round trips, origin → destination otherwise
+        const sorted = [...data.travelItems].sort(
+          (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+        );
+        const origin = sorted[0]?.fromLocation;
+        const finalDest = sorted[sorted.length - 1]?.toLocation;
+        let turnaround = finalDest;
+        if (data.project.startDate && data.project.endDate) {
+          const mid = new Date(
+            (new Date(data.project.startDate).getTime() + new Date(data.project.endDate).getTime()) / 2
+          );
+          const outbound = sorted.filter((i) => new Date(i.departureDate) <= mid);
+          if (outbound.length) turnaround = outbound[outbound.length - 1].toLocation;
+        }
+        const isRound = !!origin && origin === finalDest;
+        const routeLabel = origin ? (isRound ? `${origin} ⇄ ${turnaround}` : `${origin} → ${finalDest}`) : '';
+        return (
+          <div className="rounded-3xl p-6 text-white bg-gradient-to-br from-primary-600 to-fuchsia-500 shadow-lg">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-white/85 font-medium truncate">
+                Total to claim{routeLabel && ` · ${routeLabel}`}
               </p>
+              <span className="px-2.5 py-1 rounded-full bg-white/15 text-xs font-semibold whitespace-nowrap">
+                {confirmedCount}/{totalItems} confirmed
+              </span>
             </div>
-            <Button
-              variant="primary"
-              size="lg"
-              onClick={() => setShowAddTravelModal(true)}
-              className={hasUnlinkedDocs ? "ring-2 ring-amber-400 ring-offset-2 animate-pulse" : ""}
-            >
-              <Plus className="w-5 h-5 mr-2" />
-              Add Travel or Link Documents
-              {hasUnlinkedDocs && (
-                <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full">
-                  {unlinkedDocs.length}
-                </span>
-              )}
-            </Button>
+            <p className="text-4xl font-bold mt-2">{formatCurrency(totalEur + greenTravelExtraEur)}</p>
+            {greenTravelExtraEur > 0 && (
+              <p className="text-xs text-white/80 mt-1">
+                Travel {formatCurrency(totalEur)} + green travel extra {formatCurrency(greenTravelExtraEur)}
+              </p>
+            )}
+            <div className="flex gap-1.5 mt-4">
+              {data.travelItems.map((it) => (
+                <div
+                  key={it.id}
+                  className={clsx('h-1.5 flex-1 rounded-full transition-colors', it.checked ? 'bg-emerald-400' : 'bg-white/30')}
+                />
+              ))}
+            </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          {/* Eligibility guidance */}
-          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-800">
-              <strong>Important:</strong> Please only add travel items that are eligible for Erasmus+ reimbursement. This includes travel from your home country to the project location and back, within the approved project and travel dates. Do not add trips to other destinations, extra days, or personal travel. If a travel item is not eligible for reimbursement, it should not be added here.
-            </p>
-          </div>
+        );
+      })()}
 
-          {data.travelItems.length > 0 ? (
-            <div className="space-y-6">
-              {data.travelItems.map((item) => (
+      {/* Trips carousel — one trip per slide, cost summary as the final slide */}
+      {data.travelItems.length > 0 ? (
+        <div>
+          <div className="flex items-center justify-between mb-2 px-1">
+            <p className="text-base font-bold text-gray-900">AI-generated trips</p>
+            <button
+              type="button"
+              onClick={() => setShowReuploadWarning(true)}
+              className="text-xs font-semibold text-primary-600 hover:text-primary-700 underline underline-offset-2"
+            >
+              Regenerate my trips
+            </button>
+          </div>
+          {(() => {
+            const groups = groupTravelItemsByBooking(data.travelItems);
+            const tripSlides = groups.map((group) => {
+              const renderCard = (item: TravelItem) => (
                 <TravelItemCard
                   key={item.id}
                   item={item}
+                  allTravelItems={data.travelItems}
                   documents={data.documents}
                   declarationsOfTravel={data.declarationsOfTravel || []}
                   token={token}
@@ -1404,163 +1714,264 @@ function Step2CheckData({
                   }
                   onMissingBoardingPass={() => setMissingBoardingPassItem(item)}
                 />
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-8">
-              <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
-              <p className="text-gray-600 mb-4">
-                No travel items detected. Please upload your travel documents or add them manually.
-              </p>
-              <Button onClick={() => setShowAddTravelModal(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Travel Manually
-              </Button>
-            </div>
-          )}
+              );
 
-          {/* Participant Note */}
-          <div className="mt-8 p-4 border border-blue-200 bg-blue-50 rounded-xl">
-            <h4 className="font-semibold text-blue-800 mb-2 flex items-center gap-2">
-              <FileText className="w-4 h-4" />
-              Add a Note (Optional)
-            </h4>
-            <p className="text-sm text-blue-700 mb-3">
-              If you have any special circumstances to explain (e.g., missed a bus and had to rebook, lost a ticket,
-              had to take an alternative route), please add a note here. The project team will see this.
-            </p>
-            <textarea
-              className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              rows={3}
-              placeholder="Example: I missed the 08:00 bus due to train delay, so I had to book the 09:30 bus. Only submitting the second ticket as that's what I actually used."
-              value={participantNote}
-              onChange={(e) => {
-                setParticipantNote(e.target.value);
-                setNoteEdited(true);
-              }}
-              onBlur={() => {
-                if (noteEdited) {
-                  noteMutation.mutate(participantNote);
-                }
-              }}
-            />
-            {noteMutation.isPending && (
-              <p className="mt-1 text-xs text-blue-500">Saving...</p>
-            )}
-          </div>
+              // Single-item "groups" render as a plain card (unchanged behaviour)
+              if (group.items.length < 2) {
+                return { key: group.items[0].id, node: renderCard(group.items[0]) };
+              }
 
-          {/* Summary with Itemized Breakdown */}
-          <div className="mt-8 p-6 bg-gray-50 rounded-2xl">
-            <h4 className="font-semibold text-gray-900 mb-4">Cost Breakdown</h4>
-
-            {/* Itemized List */}
-            <div className="space-y-2 mb-4">
-              {data.travelItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex justify-between text-sm"
-                >
-                  <span className="text-gray-600">
-                    {item.fromLocation} → {item.toLocation}
-                    <span className="text-gray-400 ml-2">({item.modeOfTransport.toLowerCase()})</span>
-                    {item.comment && <span className="text-gray-400 ml-1">*</span>}
-                  </span>
-                  <span className="font-medium text-gray-900">
-                    {item.amountIncludedInRoundTrip ? (
-                      <span className="text-gray-400 text-xs italic">— (incl. in outbound)</span>
-                    ) : (
-                      <>
-                        {formatCurrency((item.amountEur || 0) + (item.luggageAmountEur || 0))}
-                        {item.luggageAmountEur ? <span className="text-xs text-sky-600 ml-1">(incl. luggage)</span> : null}
-                      </>
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {/* Divider */}
-            <div className="border-t border-gray-300 my-4" />
-
-            {/* Total with max reimbursement inline */}
-            {(() => {
-              const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
-
-              return (
-                <div className="flex items-baseline justify-between">
-                  <div className="flex items-baseline gap-3">
-                    <div>
-                      <p className="text-sm text-gray-500">Total Travel Costs</p>
-                      <p className="text-2xl font-bold text-gray-900">
-                        {formatCurrency(total)}
-                      </p>
-                    </div>
-                    {data.maxReimbursementForCountry !== undefined && data.maxReimbursementForCountry !== null && (
-                      <span className="text-sm text-blue-600 font-medium">
-                        (max: {formatCurrency(data.maxReimbursementForCountry)})
+              // Multi-leg booking — wrap the legs together so it's clear they
+              // belong to one purchase (and the price is counted only once).
+              const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
+              return {
+                key: group.key,
+                node: (
+                  <div className="rounded-2xl border-2 border-purple-200 bg-purple-50/40 p-3 sm:p-4">
+                    <div className="flex items-center gap-2 mb-3 px-1">
+                      <Repeat className="w-4 h-4 text-purple-600" />
+                      <span className="text-sm font-semibold text-purple-800">
+                        {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
                       </span>
-                    )}
+                      <span className="text-xs text-purple-500">
+                        · {group.items.length} legs · price counted once
+                      </span>
+                    </div>
+                    <div className="space-y-4">
+                      {group.items.map((item) => renderCard(item))}
+                    </div>
                   </div>
-                  {/* Show actual amount to receive if over limit */}
-                  {data.maxReimbursementForCountry && total > data.maxReimbursementForCountry && (
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">You will receive</p>
-                      <p className="text-lg font-bold text-emerald-600">
-                        {formatCurrency(data.maxReimbursementForCountry)}
+                ),
+              };
+            });
+
+            // Final slide: cost-breakdown "receipt"
+            const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
+            const max = data.maxReimbursementForCountry;
+            const greenExtra = data.greenTravelExtra;
+            const allowanceOnTop = greenExtra ? greenExtra.foodEur + greenExtra.accommodationEur : 0;
+            const hasMultiPerson = data.travelItems.some((i) => (i.numberOfPassengers ?? 0) > 1);
+            const payable = computePayable({
+              travelEur: total,
+              allowanceInsideCap: 0,
+              allowanceOnTop,
+              maxReimbursement: max ?? 0,
+              hasMultiPersonBooking: hasMultiPerson,
+            });
+            const willReceive = payable.total;
+            const receiptSlide = {
+              key: '__cost_breakdown__',
+              node: (
+                <div className="rounded-2xl bg-white border border-gray-100 shadow-sm p-5">
+                  <h4 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
+                    <Ticket className="w-4 h-4 text-primary-500" /> Cost breakdown
+                  </h4>
+                  <div className="space-y-1.5 mb-3">
+                    {data.travelItems.map((item) => (
+                      <div key={item.id} className="flex justify-between gap-3 text-sm">
+                        <span className="text-gray-600 truncate min-w-0">
+                          {item.fromLocation} → {item.toLocation}
+                          <span className="text-gray-400"> · {item.modeOfTransport.toLowerCase()}</span>
+                        </span>
+                        <span className="font-medium text-gray-900 whitespace-nowrap flex-shrink-0">
+                          {item.amountIncludedInRoundTrip ? (
+                            <span className="text-gray-400 text-xs italic">incl.</span>
+                          ) : (
+                            <>
+                              {formatCurrency((item.amountEur || 0) + (item.luggageAmountEur || 0))}
+                              {item.luggageAmountEur ? <span className="text-[11px] text-sky-600 ml-1">+lugg.</span> : null}
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {greenExtra && allowanceOnTop > 0 && (
+                    <div className="space-y-1.5 mb-3 pt-2 border-t border-dashed border-gray-200">
+                      <p className="text-[11px] font-semibold tracking-wide uppercase text-emerald-700">
+                        Green travel extra · added by {data.project.organisation?.name || 'the organisation'}
                       </p>
+                      {greenExtra.foodEur > 0 && (
+                        <div className="flex justify-between gap-3 text-sm">
+                          <span className="text-gray-600">Food</span>
+                          <span className="font-medium text-gray-900">{formatCurrency(greenExtra.foodEur)}</span>
+                        </div>
+                      )}
+                      {greenExtra.accommodationEur > 0 && (
+                        <div className="flex justify-between gap-3 text-sm">
+                          <span className="text-gray-600">Accommodation</span>
+                          <span className="font-medium text-gray-900">{formatCurrency(greenExtra.accommodationEur)}</span>
+                        </div>
+                      )}
+                      {greenExtra.note && <p className="text-xs text-gray-400 italic">“{greenExtra.note}”</p>}
                     </div>
                   )}
+                  <div className="border-t border-gray-200 my-3" />
+                  <div className="flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-xs text-gray-500">{allowanceOnTop > 0 ? 'Travel costs' : 'Total travel costs'}</p>
+                      <p className="text-xl font-bold text-gray-900">{formatCurrency(total)}</p>
+                      {max != null && (
+                        <p className="text-xs text-blue-600 font-medium mt-0.5">
+                          max {formatCurrency(max)}{allowanceOnTop > 0 ? ` + ${formatCurrency(allowanceOnTop)} on top` : ''}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">You'll receive</p>
+                      <p className="text-2xl font-bold text-emerald-600">{formatCurrency(willReceive)}</p>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-3">
+                    Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
+                  </p>
                 </div>
-              );
-            })()}
-            <p className="text-xs text-gray-400 mt-3">
-              Final reimbursement is subject to project rules and cannot exceed the maximum allowed for your country.
-            </p>
-          </div>
+              ),
+            };
 
-          {/* Navigation */}
-          <div className="mt-8">
-            {/* Check if all travel items are confirmed */}
-            {data.travelItems.length > 0 && !data.travelItems.every(item => item.checked) && (
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                <span className="text-sm text-amber-700">
-                  Please check all travel items to confirm they are correct before continuing.
-                  ({data.travelItems.filter(item => item.checked).length} of {data.travelItems.length} confirmed)
-                </span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <Button
-                variant="secondary"
+            return (
+              <TravelSwipeCarousel
+                slides={[...tripSlides, receiptSlide]}
+                tripCount={tripSlides.length}
+                apiRef={carouselApiRef}
+              />
+            );
+          })()}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="text-center py-8">
+            <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
+            <p className="text-gray-600 mb-4">
+              No travel items detected. Please upload your travel documents or add them manually.
+            </p>
+            <Button onClick={() => setShowAddTravelModal(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Add Travel Manually
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {rebuilding && <ConsolidationLoading documentCount={data.documents.length} />}
+
+      {/* Add a trip manually (also links loose documents) */}
+      <button
+        type="button"
+        onClick={() => setShowAddTravelModal(true)}
+        className={clsx(
+          'w-full border-2 border-dashed border-primary-200 rounded-2xl py-3.5 text-primary-600 font-semibold text-sm hover:bg-primary-50 transition-colors flex items-center justify-center gap-1.5',
+          hasUnlinkedDocs && 'ring-2 ring-amber-400 ring-offset-2 animate-pulse'
+        )}
+      >
+        <Plus className="w-4 h-4" />
+        Add a trip manually
+        {hasUnlinkedDocs && (
+          <span className="ml-1 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full">
+            {unlinkedDocs.length} unlinked
+          </span>
+        )}
+      </button>
+
+      {/* Navigation — per-trip confirm only; Continue unlocks when all confirmed */}
+      {data.travelItems.length > 0 && (
+        <div className="flex items-stretch gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              if (data.travelItems.length > 0) {
+                setShowReuploadWarning(true);
+              } else {
+                onBack();
+              }
+            }}
+            className="w-14 rounded-2xl bg-white border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50 transition-colors flex-shrink-0"
+            aria-label="Back to upload"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          {(() => {
+            const allChecked = data.travelItems.every((item) => item.checked);
+            const confirmedCount = data.travelItems.filter((item) => item.checked).length;
+            return (
+              <button
+                type="button"
                 onClick={() => {
-                  // Show warning if there are existing travel items
-                  if (data.travelItems.length > 0) {
-                    setShowReuploadWarning(true);
-                  } else {
-                    onBack();
-                  }
-                }}
-              >
-                Back to Upload
-              </Button>
-              <Button
-                onClick={() => {
-                  if (data.travelItems.length > 0 && !data.travelItems.every(item => item.checked)) {
-                    toast.error('Please confirm all travel items by checking the checkbox on each one.');
+                  if (!allChecked) {
+                    // Jump the carousel to the first trip that still needs confirming
+                    const groups = groupTravelItemsByBooking(data.travelItems);
+                    const idx = groups.findIndex((g) => g.items.some((i) => !i.checked));
+                    if (idx >= 0) carouselApiRef.current?.goTo(idx);
+                    toast.error(`Please confirm each trip — ${data.travelItems.length - confirmedCount} to go.`);
                     return;
                   }
                   onNext();
                 }}
-                disabled={data.travelItems.length === 0}
+                className={clsx(
+                  'flex-1 rounded-2xl py-3.5 font-semibold text-white transition-colors flex items-center justify-center gap-2',
+                  allChecked
+                    ? 'bg-gradient-to-r from-primary-600 to-fuchsia-500 hover:opacity-95'
+                    : 'bg-gray-900 hover:bg-gray-800'
+                )}
               >
-                Continue to Confirm
-                <ChevronRight className="w-4 h-4 ml-2" />
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+                {allChecked ? 'Continue to bank details' : `Confirm all (${confirmedCount}/${data.travelItems.length})`}
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Eligibility guidance */}
+      <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+        <p className="text-sm text-blue-800">
+          <strong>Important:</strong> Please only add travel items that are eligible for Erasmus+ reimbursement. This includes travel from your home country to the project location and back, within the approved project and travel dates. Do not add trips to other destinations, extra days, or personal travel.
+        </p>
+      </div>
+
+      {/* Participant Note */}
+      <div className="p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
+        <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
+          <FileText className="w-4 h-4 text-gray-400" />
+          Add a note (optional)
+        </h4>
+        <p className="text-sm text-gray-500 mb-3">
+          Special circumstances to explain (missed a bus, lost a ticket, alternative route)? The project team will see this.
+        </p>
+        <textarea
+          className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+          rows={3}
+          placeholder="Example: I missed the 08:00 bus due to a train delay, so I had to book the 09:30 bus."
+          value={participantNote}
+          onChange={(e) => {
+            setParticipantNote(e.target.value);
+            setNoteEdited(true);
+          }}
+          onBlur={() => {
+            if (noteEdited) {
+              noteMutation.mutate(participantNote);
+            }
+          }}
+        />
+        {noteMutation.isPending && (
+          <p className="mt-1 text-xs text-primary-500">Saving...</p>
+        )}
+      </div>
+
+      {/* Journey overview */}
+      {data.travelItems.length > 0 && (
+        <div className="p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-gray-400" />
+            Journey overview
+          </h4>
+          <JourneyVisualization
+            items={data.travelItems}
+            projectStartDate={data.project.startDate}
+            projectEndDate={data.project.endDate}
+          />
+        </div>
+      )}
 
       {/* Add Travel Modal */}
       <AddTravelModal
@@ -1714,35 +2125,36 @@ function Step2CheckData({
               <div className="p-2 bg-amber-100 rounded-full">
                 <AlertTriangle className="w-6 h-6 text-amber-600" />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900">Re-upload Documents?</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Regenerate your trips?</h3>
             </div>
 
             <p className="text-gray-600 mb-4">
-              Going back to the upload page will allow you to upload additional documents.
+              The AI will rebuild all your trips from your uploaded documents. Your current trips — including any
+              edits — are replaced, and you'll confirm the new ones again.
             </p>
 
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-4">
               <p className="text-sm text-amber-800">
-                <strong>Note:</strong> This will restart the AI analysis and may modify your current travel items.
-                If you just want to add a new travel item manually, you can do that here using the "Add Travel" button.
+                Missing a document (for example the booking confirmation with the price)? Add it on the upload step
+                first — the rebuild there uses the new file too. To add a single trip by hand, use "Add a trip manually".
               </p>
             </div>
 
-            <div className="flex gap-3 justify-end">
-              <Button
-                variant="secondary"
-                onClick={() => setShowReuploadWarning(false)}
-              >
-                Stay Here
+            <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+              <Button variant="secondary" onClick={() => setShowReuploadWarning(false)}>
+                Cancel
               </Button>
               <Button
-                variant="primary"
+                variant="secondary"
                 onClick={() => {
                   setShowReuploadWarning(false);
                   onBack();
                 }}
               >
-                Go to Upload
+                Add documents first
+              </Button>
+              <Button variant="primary" onClick={rebuildNow}>
+                Rebuild now
               </Button>
             </div>
           </div>
@@ -1750,6 +2162,34 @@ function Step2CheckData({
       )}
     </div>
   );
+}
+
+// Group travel items that belong to the same booking (round-trip / multi-leg).
+// Legs of one booking share a non-null bookingId. Items without a bookingId,
+// or a booking with only one leg, become their own single-item group.
+// First-appearance order is preserved so the list keeps its journey ordering.
+interface TravelItemGroup {
+  key: string;
+  items: TravelItem[];
+}
+function groupTravelItemsByBooking(items: TravelItem[]): TravelItemGroup[] {
+  const groups: TravelItemGroup[] = [];
+  const byBooking = new Map<string, TravelItemGroup>();
+  for (const item of items) {
+    const bookingId = item.bookingId || null;
+    if (bookingId) {
+      let group = byBooking.get(bookingId);
+      if (!group) {
+        group = { key: `booking-${bookingId}`, items: [] };
+        byBooking.set(bookingId, group);
+        groups.push(group);
+      }
+      group.items.push(item);
+    } else {
+      groups.push({ key: item.id, items: [item] });
+    }
+  }
+  return groups;
 }
 
 // Journey Visualization Component - Clean transport-focused design
@@ -1841,9 +2281,10 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
     if (sectionItems.length === 0) return null;
 
     return (
-      <div className={clsx("flex-1", isReturn && "border-l-2 border-gray-200 pl-4")}>
-        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">{label}</p>
-        <div className="flex items-center gap-2 flex-wrap">
+      <div>
+        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">{label}</p>
+        {/* One horizontal line per direction; scrolls sideways if the journey is long */}
+        <div className="flex items-center gap-1 flex-nowrap overflow-x-auto pb-1">
           {sectionItems.map((item, index) => {
             const Icon = transportIcons[item.modeOfTransport];
             const iconColor = transportIconColors[item.modeOfTransport];
@@ -1851,47 +2292,43 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
             const isLast = index === sectionItems.length - 1;
 
             return (
-              <div key={item.id} className="flex items-center gap-2">
-                <div className="flex flex-col items-center">
-                  {/* Subtle icon container - no heavy colored circle */}
+              <div key={item.id} className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex flex-col items-center w-16 flex-shrink-0">
                   <div className={clsx(
-                    'w-10 h-10 rounded-xl flex items-center justify-center border transition-all hover:scale-105',
+                    'w-8 h-8 rounded-lg flex items-center justify-center border',
                     bgColor,
-                    item.isReturnLeg && 'ring-2 ring-purple-300 ring-offset-1'  // Highlight return legs
+                    item.isReturnLeg && 'ring-2 ring-purple-300 ring-offset-1'
                   )}>
-                    <Icon className={clsx('w-5 h-5', iconColor)} />
+                    <Icon className={clsx('w-4 h-4', iconColor)} />
                   </div>
-                  <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
+                  <p className="text-[11px] text-gray-600 mt-1 font-medium max-w-[64px] truncate text-center">
                     {item.fromLocation}
                   </p>
-                  <p className="text-[10px] text-gray-400">
+                  <p className="text-[9px] text-gray-400 leading-tight">
                     {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
                   </p>
                 </div>
 
-                {/* Connector line with arrow */}
-                <div className="flex flex-col items-center px-1">
-                  <div className="flex items-center">
-                    <div className="w-6 h-0.5 bg-gray-300" />
-                    <div className="w-0 h-0 border-t-[3px] border-t-transparent border-b-[3px] border-b-transparent border-l-[5px] border-l-gray-300" />
-                  </div>
+                {/* Connector arrow */}
+                <div className="flex items-center flex-shrink-0">
+                  <div className="w-4 h-0.5 bg-gray-300" />
+                  <div className="w-0 h-0 border-t-[3px] border-t-transparent border-b-[3px] border-b-transparent border-l-[5px] border-l-gray-300" />
                 </div>
 
                 {isLast && (
-                  <div className="flex flex-col items-center">
-                    {/* Destination marker - subtle styling */}
+                  <div className="flex flex-col items-center w-16 flex-shrink-0">
                     <div className={clsx(
-                      'w-10 h-10 rounded-xl flex items-center justify-center border transition-all',
+                      'w-8 h-8 rounded-lg flex items-center justify-center border',
                       isReturn
                         ? 'bg-emerald-50 border-emerald-300 text-emerald-600'
                         : 'bg-gray-50 border-gray-300 text-gray-500'
                     )}>
-                      {isReturn ? <CheckCircle className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
+                      {isReturn ? <CheckCircle className="w-4 h-4" /> : <MapPin className="w-4 h-4" />}
                     </div>
-                    <p className="text-xs text-gray-600 mt-1 font-medium max-w-[70px] truncate text-center">
+                    <p className="text-[11px] text-gray-600 mt-1 font-medium max-w-[64px] truncate text-center">
                       {item.toLocation}
                     </p>
-                    <p className="text-[10px] text-gray-400">
+                    <p className="text-[9px] text-gray-400 leading-tight">
                       {item.isReturnLeg ? 'Return' : formatDate(item.departureDate)}
                     </p>
                   </div>
@@ -1905,9 +2342,9 @@ function JourneyVisualization({ items, projectStartDate, projectEndDate }: {
   };
 
   return (
-    <div className="flex gap-6">
-      {renderJourneySection(outboundItems, "Outbound Journey", false)}
-      {renderJourneySection(returnItems, "Return Journey", true)}
+    <div className="flex flex-col gap-3">
+      {renderJourneySection(outboundItems, "Outbound", false)}
+      {renderJourneySection(returnItems, "Return", true)}
     </div>
   );
 }
@@ -1981,6 +2418,7 @@ function TravelItemCard({
   item,
   documents,
   declarationsOfTravel,
+  allTravelItems,
   token,
   onUpdate,
   onDelete,
@@ -1993,6 +2431,7 @@ function TravelItemCard({
   item: TravelItem;
   documents: Document[];
   declarationsOfTravel: DeclarationOfTravel[];
+  allTravelItems: TravelItem[];
   token: string;
   onUpdate: (updates: Partial<TravelItem>) => void;
   onDelete: () => void;
@@ -2033,6 +2472,74 @@ function TravelItemCard({
   }, [allLinkedDocuments]);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
+
+  // State for move-document dropdown
+  const [movingDocId, setMovingDocId] = useState<string | null>(null);
+  // State for replace-document inline upload
+  const replaceFileInputRef = useRef<HTMLInputElement>(null);
+  const [replacingDoc, setReplacingDoc] = useState(false);
+  // Declarations linked to this specific travel item
+  const itemDeclarations = useMemo(() =>
+    declarationsOfTravel.filter(d => d.travelItemId === item.id),
+    [declarationsOfTravel, item.id]
+  );
+
+  const queryClient = useQueryClient();
+
+  // Mutation: move a document to a different travel item
+  const moveDocumentMutation = useMutation({
+    mutationFn: async ({ docId, targetItemId }: { docId: string; targetItemId: string }) => {
+      // 1. Unlink from current item
+      await participantApi.unlinkDocumentFromTravelItem(token, item.id, docId);
+      // 2. Link to target item
+      const targetItem = allTravelItems.find(t => t.id === targetItemId);
+      if (targetItem && !targetItem.documentId) {
+        // Target has no primary doc - set as primary
+        await participantApi.updateTravelItem(token, targetItemId, { documentId: docId });
+      } else {
+        // Target already has a primary doc - add as additional
+        const existingAdditional: string[] = [];
+        if (targetItem?.additionalDocumentIds) {
+          try { existingAdditional.push(...JSON.parse(targetItem.additionalDocumentIds)); } catch { /* ignore */ }
+        }
+        existingAdditional.push(docId);
+        await participantApi.updateTravelItem(token, targetItemId, {
+          additionalDocumentIds: JSON.stringify(existingAdditional),
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      setMovingDocId(null);
+      toast.success('Document moved');
+    },
+    onError: () => toast.error('Failed to move document'),
+  });
+
+  // Mutation: replace primary document
+  const replaceDocumentMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const result = await participantApi.uploadDocument(token, file);
+      await participantApi.updateTravelItem(token, item.id, { documentId: result.document.id });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      setReplacingDoc(false);
+      toast.success('Document replaced');
+    },
+    onError: () => { setReplacingDoc(false); toast.error('Failed to replace document'); },
+  });
+
+  // Mutation: move a declaration to a different travel item
+  const moveDeclarationMutation = useMutation({
+    mutationFn: ({ declarationId, targetItemId }: { declarationId: string; targetItemId: string }) =>
+      participantApi.updateDeclarationOfTravel(token, declarationId, { travelItemId: targetItemId || null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+      toast.success('Declaration moved');
+    },
+    onError: () => toast.error('Failed to move declaration'),
+  });
 
   // Local state for text inputs - prevents re-renders on every keystroke
   const [localFrom, setLocalFrom] = useState(item.fromLocation);
@@ -2145,12 +2652,197 @@ function TravelItemCard({
     };
   }, [isNonEurCurrency, item.purchaseDate, item.amountOriginal, item.currencyOriginal, triggerConversionIfNeeded]);
 
+  // Read-only card by default; the full edit form lives in a full-screen sheet.
+  const [editOpen, setEditOpen] = useState(false);
+
+  const modeLabel =
+    item.modeOfTransport.charAt(0) + item.modeOfTransport.slice(1).toLowerCase();
+  const displayEur =
+    (item.currencyOriginal === 'EUR'
+      ? (parseFloat(localAmount) || item.amountEur || 0)
+      : (item.amountEur || 0)) + (item.luggageAmountEur || 0);
+
   return (
     <div className={clsx(
-      'bg-gray-50 rounded-2xl relative overflow-hidden',
-      item.checked && 'ring-2 ring-emerald-500'
+      'rounded-2xl relative overflow-hidden bg-white border shadow-sm',
+      item.excludedFromReimbursement ? 'border-gray-200 opacity-60' : 'border-gray-100',
+      item.checked && !item.excludedFromReimbursement && 'ring-2 ring-emerald-500 border-transparent'
     )}>
-      <div className="p-6">
+      <div className="p-4 sm:p-5">
+        {/* Summary header */}
+        <div className="flex items-start gap-3">
+          <div className={clsx(
+            'w-12 h-12 rounded-2xl border flex items-center justify-center flex-shrink-0',
+            transportBgColors[item.modeOfTransport]
+          )}>
+            <Icon className={clsx('w-6 h-6', transportIconColors[item.modeOfTransport])} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-gray-900 leading-snug">
+              {item.fromLocation} → {item.toLocation}
+            </p>
+            <p className="text-sm text-gray-400 mt-0.5">
+              {modeLabel} · {formatDate(item.departureDate)}
+            </p>
+          </div>
+          <div className="text-right flex-shrink-0">
+            {item.amountIncludedInRoundTrip ? (
+              <p className="text-xs text-purple-600 italic mt-1">incl. in outbound</p>
+            ) : (
+              <>
+                <p className="text-xl font-bold text-gray-900">{formatCurrency(displayEur)}</p>
+                {item.currencyOriginal !== 'EUR' && (
+                  <p className="text-xs text-gray-400">
+                    {formatCurrency(parseFloat(localAmount) || item.amountOriginal, item.currencyOriginal)}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Chips */}
+        {(item.excludedFromReimbursement || item.isRoundTrip || (item.luggageAmount != null && item.luggageAmount > 0) || (item.numberOfPassengers != null && item.numberOfPassengers > 1)) && (
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {item.excludedFromReimbursement && (
+              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[11px] font-medium rounded-full flex items-center gap-1">
+                <EyeOff className="w-3 h-3" />
+                {item.exclusionReason === 'HOSTING_ORG_PAID' ? 'Hosting org paid' : 'Excluded'}
+              </span>
+            )}
+            {item.isRoundTrip && (
+              <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[11px] font-medium rounded-full">Round-trip</span>
+            )}
+            {item.luggageAmount != null && item.luggageAmount > 0 && (
+              <span className="px-2 py-0.5 bg-sky-100 text-sky-700 text-[11px] font-medium rounded-full">
+                Luggage incl. ({formatCurrency(item.luggageAmountEur || item.luggageAmount)})
+              </span>
+            )}
+            {item.numberOfPassengers != null && item.numberOfPassengers > 1 && (
+              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[11px] font-medium rounded-full">{item.numberOfPassengers} passengers</span>
+            )}
+          </div>
+        )}
+
+        {/* Labeled detail rows */}
+        <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 gap-x-4 gap-y-3">
+          <div className="col-span-2">
+            <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Carrier</p>
+            <p className="text-sm font-medium text-gray-900 mt-0.5 truncate">{item.companyName || '—'}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Reference</p>
+            <p className="text-sm font-medium text-gray-900 mt-0.5 truncate">{item.bookingReference || '—'}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Date</p>
+            <p className="text-sm font-medium text-gray-900 mt-0.5">{formatDate(item.departureDate)}</p>
+          </div>
+          {isPlane && (
+            <div className="col-span-2">
+              <p className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Flight no.</p>
+              <p className="text-sm font-medium text-gray-900 mt-0.5">{item.flightNumber || '—'}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Documents & declarations (compact) */}
+        <div className="mt-3 space-y-1.5">
+          {allLinkedDocuments.length > 0 ? (
+            allLinkedDocuments.map((doc) => (
+              <div key={doc.id} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-2.5 py-2">
+                <FileText className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                <span className="text-gray-600 truncate flex-1">{doc.renamedFilename}</span>
+                <button
+                  onClick={() => onViewDocument(doc)}
+                  className="text-primary-600 hover:text-primary-700 font-semibold flex-shrink-0"
+                >
+                  View
+                </button>
+              </div>
+            ))
+          ) : itemDeclarations.length === 0 ? (
+            <div className="flex items-center gap-2 text-xs bg-amber-50 rounded-lg px-2.5 py-2">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+              <span className="text-amber-700">No document linked — tap Edit to add one</span>
+            </div>
+          ) : null}
+          {itemDeclarations.map((dec) => (
+            <div key={dec.id} className="flex items-center gap-2 text-xs bg-emerald-50 rounded-lg px-2.5 py-2">
+              <FileCheck className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+              <span className="text-emerald-700 truncate">Declaration of travel · {formatDate(dec.travelDate)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Boarding pass missing (planes) */}
+        {isPlane && !hasBoardingPass && !hasDeclaration && (
+          <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200">
+            <div className="flex items-center gap-2">
+              <Ticket className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <span className="text-xs font-medium text-amber-700 flex-1">Boarding pass missing</span>
+            </div>
+            <div className="flex items-center gap-4 mt-1.5 pl-6">
+              <button onClick={onUploadBoardingPass} className="text-xs text-amber-700 font-semibold underline">
+                Upload now
+              </button>
+              <button onClick={onMissingBoardingPass} className="text-xs text-gray-500 hover:text-gray-700 underline">
+                I don't have it
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Price missing (e.g. trip built from a boarding pass) */}
+        {(item.priceMissing || item.amountOriginal == null) && !item.amountIncludedInRoundTrip && !item.excludedFromReimbursement && (
+          <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>
+              <strong>Price missing.</strong> Boarding passes don't show a price — upload the booking confirmation or invoice and rebuild, or tap Edit and type the amount.
+            </span>
+          </div>
+        )}
+
+        {/* Verify hint while unconfirmed */}
+        {!item.checked && !item.excludedFromReimbursement && (
+          <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm font-medium flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            Check the amount &amp; details match your document
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="mt-4 flex items-stretch gap-2">
+          <button
+            type="button"
+            onClick={() => onToggleChecked()}
+            className={clsx(
+              'flex-1 rounded-2xl py-3 font-semibold text-sm transition-colors flex items-center justify-center gap-1.5',
+              item.checked
+                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                : 'text-white bg-gradient-to-r from-primary-600 to-fuchsia-500 hover:opacity-95'
+            )}
+          >
+            {item.checked ? (<><CheckCircle className="w-4 h-4" /> Confirmed</>) : 'Confirm trip ✓'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditOpen(true)}
+            className="px-5 rounded-2xl py-3 font-semibold text-sm bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors"
+          >
+            Edit
+          </button>
+        </div>
+      </div>
+
+      {/* Full-screen edit sheet — every field and document action lives here */}
+      <Modal
+        isOpen={editOpen}
+        onClose={() => setEditOpen(false)}
+        title={`Edit trip · ${item.fromLocation} → ${item.toLocation}`}
+        size="lg"
+      >
+      <div>
       {/* Boarding Pass / Declaration Status Bar for Flights */}
       {isPlane && (
         <div className={clsx(
@@ -2243,85 +2935,134 @@ function TravelItemCard({
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-4">
-        <div className={clsx(
-          'w-12 h-12 rounded-xl border flex items-center justify-center',
-          transportBgColors[item.modeOfTransport]
-        )}>
-          <Icon className={clsx('w-6 h-6', transportIconColors[item.modeOfTransport])} />
-        </div>
-        <div className="flex-1">
-          <p className="font-semibold text-gray-900">
-            {item.fromLocation} → {item.toLocation}
-          </p>
-          <p className="text-sm text-gray-500">
-            {formatDate(item.departureDate)}
-            {item.flightNumber && ` • ${item.flightNumber}`}
-          </p>
-        </div>
-        <div className="text-right">
-          {item.amountIncludedInRoundTrip ? (
-            <p className="text-xs text-purple-600 italic">incl. in outbound</p>
-          ) : (
-            <>
-              <p className="font-semibold text-gray-900">
-                {formatCurrency(
-                  (item.currencyOriginal === 'EUR'
-                    ? (parseFloat(localAmount) || item.amountEur || 0)
-                    : (item.amountEur || 0)
-                  ) + (item.luggageAmountEur || 0)
-                )}
-              </p>
-              {item.currencyOriginal !== 'EUR' && (
-                <p className="text-xs text-gray-500">
-                  {formatCurrency(parseFloat(localAmount) || item.amountOriginal, item.currencyOriginal)}
-                </p>
-              )}
-            </>
-          )}
-        </div>
-        <button
-          onClick={onDelete}
-          className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-        >
-          <Trash2 className="w-5 h-5" />
-        </button>
-      </div>
-
       {/* Linked Documents */}
+      {/* Hidden file input for replace */}
+      <input
+        ref={replaceFileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            setReplacingDoc(true);
+            replaceDocumentMutation.mutate(file);
+          }
+          e.target.value = '';
+        }}
+      />
       {allLinkedDocuments.length > 0 ? (
         <div className="mb-4 space-y-2">
           {allLinkedDocuments.map((doc, index) => (
-            <div
-              key={doc.id}
-              className="p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3"
-            >
-              <FileText className="w-4 h-4 text-gray-400" />
-              <div className="flex-1 min-w-0">
-                <span className="text-sm text-gray-600 truncate block">{doc.renamedFilename}</span>
-                {index > 0 && (
-                  <span className="text-xs text-gray-400">Additional document</span>
+            <div key={doc.id} className="space-y-1">
+              <div className="p-3 bg-white rounded-lg border border-gray-200 flex items-center gap-3">
+                <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm text-gray-600 truncate block">{doc.renamedFilename}</span>
+                  {index > 0 && (
+                    <span className="text-xs text-gray-400">Additional document</span>
+                  )}
+                </div>
+                <button onClick={() => onViewDocument(doc)} className="text-xs text-primary-600 hover:text-primary-700 font-medium flex-shrink-0">
+                  View
+                </button>
+                {index === 0 && (
+                  <button
+                    onClick={() => replaceFileInputRef.current?.click()}
+                    disabled={replacingDoc}
+                    className="text-xs text-blue-500 hover:text-blue-600 font-medium flex-shrink-0"
+                    title="Replace with a new file"
+                  >
+                    {replacingDoc ? 'Replacing…' : 'Replace'}
+                  </button>
                 )}
+                <button onClick={() => onUnlinkDocument(doc.id)} className="text-xs text-red-500 hover:text-red-600 font-medium flex-shrink-0">
+                  Unlink
+                </button>
+                <button
+                  onClick={() => setMovingDocId(movingDocId === doc.id ? null : doc.id)}
+                  className="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1 flex-shrink-0"
+                  title="Move to a different travel item"
+                >
+                  <ArrowRight className="w-3 h-3" />
+                  Move
+                </button>
               </div>
-              <button
-                onClick={() => onViewDocument(doc)}
-                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
-              >
-                View
-              </button>
-              <button
-                onClick={() => onUnlinkDocument(doc.id)}
-                className="text-xs text-red-500 hover:text-red-600 font-medium"
-              >
-                Unlink
-              </button>
+              {/* Inline move-to dropdown */}
+              {movingDocId === doc.id && (
+                <div className="pl-3">
+                  <select
+                    className="text-xs border border-gray-200 rounded px-2 py-1 w-full"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        moveDocumentMutation.mutate({ docId: doc.id, targetItemId: e.target.value });
+                      }
+                    }}
+                  >
+                    <option value="" disabled>Move to travel item…</option>
+                    {allTravelItems.filter(t => t.id !== item.id).map(t => (
+                      <option key={t.id} value={t.id}>
+                        {t.fromLocation} → {t.toLocation} ({new Date(t.departureDate).toLocaleDateString()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           ))}
         </div>
       ) : (
         <div className="mb-4">
           <InlineDocumentUpload token={token} onUpdate={onUpdate} />
+        </div>
+      )}
+
+      {/* Linked Declarations of Travel */}
+      {itemDeclarations.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {itemDeclarations.map((dec) => (
+            <div key={dec.id} className="space-y-1">
+              <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200 flex items-center gap-3">
+                <FileCheck className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm text-emerald-800 truncate block">
+                    Declaration of Travel — {dec.fromPlace} → {dec.toPlace}
+                  </span>
+                  <span className="text-xs text-emerald-600">{formatDate(dec.travelDate)}</span>
+                </div>
+                <button
+                  onClick={() => setMovingDocId(movingDocId === `dec-${dec.id}` ? null : `dec-${dec.id}`)}
+                  className="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1 flex-shrink-0"
+                  title="Move to a different travel item"
+                >
+                  <ArrowRight className="w-3 h-3" />
+                  Move
+                </button>
+              </div>
+              {movingDocId === `dec-${dec.id}` && (
+                <div className="pl-3">
+                  <select
+                    className="text-xs border border-gray-200 rounded px-2 py-1 w-full"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        moveDeclarationMutation.mutate({ declarationId: dec.id, targetItemId: e.target.value });
+                        setMovingDocId(null);
+                      }
+                    }}
+                  >
+                    <option value="" disabled>Move to travel item…</option>
+                    {allTravelItems.filter(t => t.id !== item.id).map(t => (
+                      <option key={t.id} value={t.id}>
+                        {t.fromLocation} → {t.toLocation} ({new Date(t.departureDate).toLocaleDateString()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -2486,48 +3227,81 @@ function TravelItemCard({
         )}
       </div>
 
-      </div>
-
-      {/* Confirmation Bottom Bar */}
-      <div className={clsx(
-        'px-6 py-4 flex items-center justify-between border-t transition-colors',
-        item.checked
-          ? 'bg-emerald-50 border-emerald-200'
-          : 'bg-white border-gray-200'
-      )}>
-        <div className="flex items-center gap-3">
-          {item.checked ? (
+      {/* Exclude from reimbursement toggle */}
+      <div className="mt-4 pt-4 border-t border-gray-200">
+        <button
+          type="button"
+          onClick={() =>
+            onUpdate(
+              item.excludedFromReimbursement
+                ? { excludedFromReimbursement: false, exclusionReason: null }
+                : { excludedFromReimbursement: true }
+            )
+          }
+          className={clsx(
+            'flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg transition-colors',
+            item.excludedFromReimbursement
+              ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+          )}
+        >
+          {item.excludedFromReimbursement ? (
             <>
-              <CheckCircle className="w-5 h-5 text-emerald-600" />
-              <span className="text-sm font-medium text-emerald-700">
-                This travel item is confirmed
-              </span>
+              <Eye className="w-4 h-4" />
+              Re-include in reimbursement
             </>
           ) : (
             <>
-              <AlertCircle className="w-5 h-5 text-amber-500" />
-              <span className="text-sm text-gray-600">
-                Please verify the information above is correct
-              </span>
+              <EyeOff className="w-4 h-4" />
+              Exclude from reimbursement
             </>
           )}
-        </div>
+        </button>
+
+        {/* Why is it excluded? Helps the organisation understand the claim */}
+        {item.excludedFromReimbursement && (
+          <div className="mt-3 ml-1 space-y-2 p-3 bg-gray-50 rounded-xl">
+            <p className="text-xs font-medium text-gray-500">Why is this trip not claimed?</p>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name={`exclusion-reason-${item.id}`}
+                checked={item.exclusionReason === 'HOSTING_ORG_PAID'}
+                onChange={() => onUpdate({ exclusionReason: 'HOSTING_ORG_PAID' })}
+                className="text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">The hosting organisation paid this trip</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name={`exclusion-reason-${item.id}`}
+                checked={item.exclusionReason === 'OTHER' || !item.exclusionReason}
+                onChange={() => onUpdate({ exclusionReason: 'OTHER' })}
+                className="text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">Other reason (e.g. personal trip)</span>
+            </label>
+          </div>
+        )}
+      </div>
+
+      {/* Sheet actions: delete or done */}
+      <div className="mt-6 pt-4 border-t border-gray-200 flex items-center justify-between gap-3">
         <button
           type="button"
-          onClick={() => {
-            console.log('[Confirm] Button clicked for item:', item.id);
-            onToggleChecked();
-          }}
-          className={clsx(
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            item.checked
-              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-              : 'bg-emerald-600 text-white hover:bg-emerald-700'
-          )}
+          onClick={() => { setEditOpen(false); onDelete(); }}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-red-500 hover:bg-red-50 transition-colors"
         >
-          {item.checked ? 'Edit' : 'Confirm'}
+          <Trash2 className="w-4 h-4" />
+          Delete this trip
         </button>
+        <Button onClick={() => setEditOpen(false)}>
+          Done
+        </Button>
       </div>
+      </div>
+      </Modal>
     </div>
   );
 }
@@ -2561,6 +3335,7 @@ function AddTravelModal({
     currencyOriginal: 'EUR',
     flightNumber: '',
     bookingReference: '',
+    companyName: '',
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>('');
@@ -2593,7 +3368,7 @@ function AddTravelModal({
     return ids;
   }, [travelItems]);
   const unlinkedDocs = documents.filter(d =>
-    !linkedDocIds.has(d.id) && d.documentType !== 'FLIGHT_BOARDING_PASS'
+    !linkedDocIds.has(d.id) && !isNonTripDocument(d)
   );
 
   const uploadAndCreateMutation = useMutation({
@@ -2636,6 +3411,7 @@ function AddTravelModal({
         currencyOriginal: 'EUR',
         flightNumber: '',
         bookingReference: '',
+        companyName: '',
       });
       setSelectedFile(null);
       setSelectedExistingDocId('');
@@ -3027,6 +3803,13 @@ function AddTravelModal({
               />
             </div>
 
+            <Input
+              label="Company / Airline / Operator Name"
+              value={formData.companyName}
+              onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+              placeholder="e.g., KLM, Flixbus, SNCF"
+            />
+
             {/* Amount section - different for CAR mode */}
             {formData.modeOfTransport === 'CAR' ? (
               <>
@@ -3227,10 +4010,12 @@ function Step3Confirm({
   data,
   token,
   onBack,
+  onFixItem,
 }: {
   data: ParticipantAuthResponse;
   token: string;
   onBack: () => void;
+  onFixItem?: (travelItemId: string) => void;
 }) {
   const queryClient = useQueryClient();
   const [bankDetails, setBankDetails] = useState({
@@ -3246,12 +4031,17 @@ function Step3Confirm({
   const [confirmations, setConfirmations] = useState({
     dataCorrect: false,
     erasmusRules: false,
+    ibanCorrect: false,
   });
   const [showDeclarationModal, setShowDeclarationModal] = useState(false);
   const [selectedMissingDoc, setSelectedMissingDoc] = useState<DocumentType | null>(null);
   const [declarationTravelItem, setDeclarationTravelItem] = useState<TravelItem | null>(null);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  // Green travel declaration: signature captured here and sent with the submission
+  const needsGreenSignature =
+    !!data.requireGreenTravelDeclaration && !!data.greenTravel && !data.greenTravelDeclaration;
+  const [greenSignature, setGreenSignature] = useState<string | null>(null);
 
   // Find flights missing boarding passes (no linked boarding pass document and no declaration of travel)
   const declarationsOfTravel = data.declarationsOfTravel || [];
@@ -3288,13 +4078,14 @@ function Step3Confirm({
   });
 
   const markCompleteMutation = useMutation({
-    mutationFn: () => participantApi.markComplete(token),
+    mutationFn: () => participantApi.markComplete(token, greenSignature ? { greenTravelSignature: greenSignature } : undefined),
     onSuccess: (result) => {
       if ('success' in result && result.success) {
         queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
         toast.success('Reimbursement submitted successfully!');
       } else if ('missingItems' in result) {
-        toast.error('Please complete all required items');
+        const first = result.missingItems[0];
+        toast.error(first ? `Missing: ${first.description}` : 'Please complete all required items');
       }
     },
     onError: () => {
@@ -3308,9 +4099,18 @@ function Step3Confirm({
     validation.isComplete &&
     confirmations.dataCorrect &&
     confirmations.erasmusRules &&
+    confirmations.ibanCorrect &&
+    (!needsGreenSignature || !!greenSignature) &&
     bankDetails.bankAccountIban &&
     bankDetails.bankAccountHolderName &&
     bankDetails.bankAccountBic;
+
+  // Display IBAN grouped in 4-char blocks for readability (stored value stays space-free)
+  const formattedIban = (bankDetails.bankAccountIban || '')
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .replace(/(.{4})/g, '$1 ')
+    .trim();
 
   return (
     <>
@@ -3322,6 +4122,26 @@ function Step3Confirm({
           </p>
         </CardHeader>
         <CardContent>
+          {/* Amount to receive hero */}
+          <div className="rounded-3xl p-6 text-white bg-gradient-to-br from-primary-600 to-fuchsia-500 shadow-lg mb-6">
+            <p className="text-sm text-white/85 font-medium">Amount to receive</p>
+            <p className="text-4xl font-bold mt-1">
+              {formatCurrency(data.reimbursementSummary?.amountToReimburse || 0)}
+            </p>
+            {(data.reimbursementSummary?.greenTravelExtraEur || 0) > 0 ? (
+              <p className="text-white/75 text-xs mt-2">
+                Travel {formatCurrency(data.reimbursementSummary?.totalEur || 0)}
+                {data.maxReimbursementForCountry ? ` (max ${formatCurrency(data.maxReimbursementForCountry)})` : ''}
+                {' '}+ green travel extra {formatCurrency(data.reimbursementSummary?.greenTravelExtraEur || 0)}
+              </p>
+            ) : (data.reimbursementSummary?.totalEur || 0) !==
+              (data.reimbursementSummary?.amountToReimburse || 0) && (
+              <p className="text-white/75 text-xs mt-2">
+                Total travel costs {formatCurrency(data.reimbursementSummary?.totalEur || 0)} · capped at your country maximum
+              </p>
+            )}
+          </div>
+
           {/* Missing Items Warning — hide bank-related items until user tries to submit */}
           {!validation.isComplete && (() => {
             const visibleItems = validation.missingItems.filter(item => {
@@ -3339,22 +4159,41 @@ function Step3Confirm({
                 <div>
                   <h4 className="font-semibold text-amber-800">Missing Items</h4>
                   <ul className="mt-2 space-y-1">
-                    {visibleItems.map((item, i) => (
-                      <li key={i} className="text-sm text-amber-700 flex items-center gap-2">
-                        <span>• {item.description}</span>
-                        {item.type === 'document' && item.documentType && (
-                          <button
-                            onClick={() => {
-                              setSelectedMissingDoc(item.documentType!);
-                              setShowDeclarationModal(true);
-                            }}
-                            className="text-xs text-amber-600 hover:text-amber-800 underline"
-                          >
-                            Sign declaration
-                          </button>
-                        )}
-                      </li>
-                    ))}
+                    {visibleItems.map((item, i) => {
+                      // Show the trip's route so the participant knows which item to fix
+                      const linkedItem = item.travelItemId
+                        ? data.travelItems.find((t) => t.id === item.travelItemId)
+                        : undefined;
+                      return (
+                        <li key={i} className="text-sm text-amber-700 flex items-center gap-2 flex-wrap">
+                          <span>
+                            • {item.description}
+                            {linkedItem && !item.description.includes('→') && (
+                              <span className="font-medium"> ({linkedItem.fromLocation} → {linkedItem.toLocation})</span>
+                            )}
+                          </span>
+                          {item.travelItemId && onFixItem && (
+                            <button
+                              onClick={() => onFixItem(item.travelItemId!)}
+                              className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline"
+                            >
+                              Fix this trip
+                            </button>
+                          )}
+                          {item.type === 'document' && item.documentType && (
+                            <button
+                              onClick={() => {
+                                setSelectedMissingDoc(item.documentType!);
+                                setShowDeclarationModal(true);
+                              }}
+                              className="text-xs text-amber-600 hover:text-amber-800 underline"
+                            >
+                              Sign declaration
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               </div>
@@ -3405,20 +4244,29 @@ function Step3Confirm({
           )}
 
           {/* Bank Details */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Bank Account Details</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5 space-y-4">
+            <h3 className="font-bold text-gray-900">Bank details</h3>
+            <div className="space-y-4">
               <Input
-                label="IBAN"
+                label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">IBAN</span>}
                 value={bankDetails.bankAccountIban}
                 onChange={(e) =>
                   setBankDetails({ ...bankDetails, bankAccountIban: e.target.value })
                 }
-                onBlur={() => updateBankMutation.mutate()}
+                onBlur={() => {
+                  // Strip spaces so the stored IBAN is always space-free, then save.
+                  const cleaned = (bankDetails.bankAccountIban || '').replace(/\s+/g, '').toUpperCase();
+                  if (cleaned !== bankDetails.bankAccountIban) {
+                    setBankDetails({ ...bankDetails, bankAccountIban: cleaned });
+                  }
+                  // Reset the IBAN confirmation if the value changed since they last confirmed.
+                  setConfirmations((c) => ({ ...c, ibanCorrect: false }));
+                  updateBankMutation.mutate();
+                }}
                 placeholder="DE89 3704 0044 0532 0130 00"
               />
               <Input
-                label="Account Holder Name"
+                label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Account holder</span>}
                 value={bankDetails.bankAccountHolderName}
                 onChange={(e) =>
                   setBankDetails({ ...bankDetails, bankAccountHolderName: e.target.value })
@@ -3426,48 +4274,50 @@ function Step3Confirm({
                 onBlur={() => updateBankMutation.mutate()}
                 placeholder="John Doe"
               />
-              <div className="space-y-1">
-                <div className="flex items-center gap-1">
-                  <label className="block text-sm font-medium text-gray-700">
-                    BIC/SWIFT Code
-                  </label>
-                  <div className="relative group">
-                    <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
-                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
-                      The BIC (Bank Identifier Code) is an 8-11 character code. You can find it on your bank statement, in your banking app, or by searching &quot;[your bank name] BIC code&quot;.
-                      <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1">
+                    <label className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">
+                      BIC
+                    </label>
+                    <div className="relative group">
+                      <HelpCircle className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                      <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-10">
+                        The BIC (Bank Identifier Code) is an 8-11 character code. You can find it on your bank statement, in your banking app, or by searching &quot;[your bank name] BIC code&quot;.
+                        <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+                      </div>
                     </div>
                   </div>
+                  <Input
+                    value={bankDetails.bankAccountBic}
+                    onChange={(e) =>
+                      setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
+                    }
+                    onBlur={() => updateBankMutation.mutate()}
+                    placeholder="COBADEFFXXX"
+                    required
+                  />
                 </div>
                 <Input
-                  value={bankDetails.bankAccountBic}
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Bank</span>}
+                  value={bankDetails.bankName}
                   onChange={(e) =>
-                    setBankDetails({ ...bankDetails, bankAccountBic: e.target.value })
+                    setBankDetails({ ...bankDetails, bankName: e.target.value })
                   }
                   onBlur={() => updateBankMutation.mutate()}
-                  placeholder="COBADEFFXXX"
-                  required
+                  placeholder="e.g., Commerzbank"
                 />
               </div>
-              <Input
-                label="Bank Name"
-                value={bankDetails.bankName}
-                onChange={(e) =>
-                  setBankDetails({ ...bankDetails, bankName: e.target.value })
-                }
-                onBlur={() => updateBankMutation.mutate()}
-                placeholder="e.g., Deutsche Bank"
-              />
             </div>
           </div>
 
           {/* Personal Address */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Personal Address</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5 space-y-4">
+            <h3 className="font-bold text-gray-900">Personal address</h3>
+            <div className="space-y-4">
+              <div>
                 <Input
-                  label="Street Address"
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Street address</span>}
                   value={bankDetails.personalAddress}
                   onChange={(e) =>
                     setBankDetails({ ...bankDetails, personalAddress: e.target.value })
@@ -3477,7 +4327,7 @@ function Step3Confirm({
                 />
               </div>
               <Input
-                label="City"
+                label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">City</span>}
                 value={bankDetails.personalCity}
                 onChange={(e) =>
                   setBankDetails({ ...bankDetails, personalCity: e.target.value })
@@ -3487,7 +4337,7 @@ function Step3Confirm({
               />
               <div className="grid grid-cols-2 gap-4">
                 <Input
-                  label="Postal Code"
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Postal code</span>}
                   value={bankDetails.personalPostalCode}
                   onChange={(e) =>
                     setBankDetails({ ...bankDetails, personalPostalCode: e.target.value })
@@ -3496,7 +4346,7 @@ function Step3Confirm({
                   placeholder="e.g., 10115"
                 />
                 <Input
-                  label="Country"
+                  label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">Country</span>}
                   value={bankDetails.personalCountry}
                   onChange={(e) =>
                     setBankDetails({ ...bankDetails, personalCountry: e.target.value })
@@ -3508,74 +4358,112 @@ function Step3Confirm({
             </div>
           </div>
 
-          {/* Summary */}
-          <div className="mt-8 p-6 bg-gradient-header rounded-2xl text-white">
-            <h3 className="font-semibold mb-4">Reimbursement Summary</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-white/70 text-sm">Total Travel Costs</p>
-                <p className="text-2xl font-bold">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(data.reimbursementSummary?.totalEur || 0)}
-                </p>
-              </div>
-              <div>
-                <p className="text-white/70 text-sm">Amount to Receive</p>
-                <p className="text-2xl font-bold">
-                  {new Intl.NumberFormat('de-DE', {
-                    style: 'currency',
-                    currency: 'EUR',
-                  }).format(data.reimbursementSummary?.amountToReimburse || 0)}
-                </p>
-              </div>
-            </div>
+          {/* Confirmations — tappable card rows with gradient check tiles */}
+          <div className="mt-6 space-y-3">
+            {([
+              {
+                key: 'ibanCorrect' as const,
+                disabled: !bankDetails.bankAccountIban,
+                content: bankDetails.bankAccountIban ? (
+                  <>
+                    I confirm my bank account IBAN{' '}
+                    <span className="font-mono font-semibold tracking-wide">{formattedIban}</span>{' '}
+                    is correct. This is the account the reimbursement will be paid to.
+                  </>
+                ) : (
+                  <span className="text-gray-500">Enter your IBAN above to confirm it.</span>
+                ),
+              },
+              {
+                key: 'dataCorrect' as const,
+                disabled: false,
+                content: <>Information is correct to the best of my knowledge.</>,
+              },
+              {
+                key: 'erasmusRules' as const,
+                disabled: false,
+                content: <>I understand the Erasmus+ reimbursement rules.</>,
+              },
+            ]).map(({ key, disabled, content }) => (
+              <label
+                key={key}
+                className={clsx(
+                  'flex items-start gap-3 p-4 rounded-2xl border bg-white shadow-sm transition-colors',
+                  disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
+                  confirmations[key] ? 'border-primary-200' : 'border-gray-200'
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={confirmations[key]}
+                  disabled={disabled}
+                  onChange={(e) => setConfirmations({ ...confirmations, [key]: e.target.checked })}
+                  className="sr-only"
+                />
+                <span
+                  className={clsx(
+                    'w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 transition-all',
+                    confirmations[key]
+                      ? 'bg-gradient-to-br from-primary-600 to-fuchsia-500 text-white'
+                      : 'border-2 border-gray-300 bg-white'
+                  )}
+                >
+                  {confirmations[key] && <CheckCircle className="w-4 h-4" />}
+                </span>
+                <span className="text-sm text-gray-800">{content}</span>
+              </label>
+            ))}
           </div>
 
-          {/* Confirmations */}
-          <div className="mt-8 space-y-4">
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={confirmations.dataCorrect}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, dataCorrect: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <span className="text-sm text-gray-700">
-                I confirm that the above information is correct to the best of my knowledge.
-              </span>
-            </label>
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={confirmations.erasmusRules}
-                onChange={(e) =>
-                  setConfirmations({ ...confirmations, erasmusRules: e.target.checked })
-                }
-                className="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <span className="text-sm text-gray-700">
-                I understand that the reimbursement rules follow Erasmus+ guidelines.
-              </span>
-            </label>
-          </div>
+          {/* Green travel declaration — signed here, PDF generated on submit */}
+          {needsGreenSignature && (
+            <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 sm:p-5">
+              <h3 className="font-bold text-gray-900">Green travel declaration</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                You are registered as a green traveller. Please confirm by signing below; we generate a signed
+                declaration on honour with your trips and attach it to your file.
+              </p>
+              <div className="mt-3 bg-white rounded-xl border border-gray-200 p-3 text-sm text-gray-700 italic">
+                “I declare on my honour that I used low-emission means of transport (train, bus, car-pooling, bicycle)
+                for the main part of my round trip to “{data.project.name}”, as listed in my travel items, and that I keep
+                my original tickets for five years and will provide them on request.”
+              </div>
+              <ul className="mt-2 text-xs text-gray-500 space-y-0.5">
+                {data.travelItems.filter((t) => !t.excludedFromReimbursement).map((t) => (
+                  <li key={t.id}>• {formatDate(t.departureDate)} — {t.fromLocation} → {t.toLocation} ({t.modeOfTransport.toLowerCase()})</li>
+                ))}
+              </ul>
+              <div className="mt-3">
+                <SignaturePad onSignatureChange={setGreenSignature} />
+              </div>
+              {!greenSignature && (
+                <p className="text-xs text-amber-700 mt-2">Sign above to be able to submit.</p>
+              )}
+            </div>
+          )}
 
           {/* Navigation */}
-          <div className="mt-8 flex justify-between">
-            <Button variant="secondary" onClick={onBack}>
-              Back to Check Data
-            </Button>
-            <Button
-              onClick={() => { setSubmitAttempted(true); markCompleteMutation.mutate(); }}
-              loading={markCompleteMutation.isPending}
-              disabled={!canSubmit}
+          <div className="mt-8 flex items-stretch gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="w-14 rounded-2xl bg-white border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50 transition-colors flex-shrink-0"
+              aria-label="Back to travel items"
             >
-              <CheckCircle className="w-4 h-4 mr-2" />
-              Submit Reimbursement
-            </Button>
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSubmitAttempted(true); markCompleteMutation.mutate(); }}
+              disabled={!canSubmit || markCompleteMutation.isPending}
+              className="flex-1 rounded-2xl py-3.5 font-semibold text-white text-lg bg-gradient-to-r from-primary-600 to-fuchsia-500 shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 transition-opacity"
+            >
+              {markCompleteMutation.isPending ? (
+                <><Loader2 className="w-5 h-5 animate-spin" /> Submitting…</>
+              ) : (
+                'Submit reimbursement'
+              )}
+            </button>
           </div>
 
           {/* GDPR Notice */}
@@ -3766,6 +4654,10 @@ function DeclarationModal({
     FUEL_RECEIPT: 'Fuel Receipt',
     GREEN_TRAVEL_DECLARATION: 'Green Travel Declaration',
     HOTEL_INVOICE: 'Hotel Invoice',
+    MEAL_RECEIPT: 'Meal Receipt',
+    BANK_TRANSACTION: 'Bank Transaction',
+    LUGGAGE_INVOICE: 'Luggage Invoice',
+    INTERRAIL_PASS: 'Interrail Pass',
     OTHER: 'Other Document',
   };
 

@@ -37,12 +37,14 @@ import {
   Upload,
   X,
   Link2,
+  Repeat,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, type OrgParticipantDetail as OrgParticipantDetailData } from '../../services/api';
 import { clsx } from 'clsx';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -85,8 +87,10 @@ const docTypeLabels: Record<string, string> = {
   FUEL_RECEIPT: 'Fuel Receipt',
   GREEN_TRAVEL_DECLARATION: 'Green Travel',
   HOTEL_INVOICE: 'Hotel Invoice',
+  MEAL_RECEIPT: 'Meal Receipt',
   LUGGAGE_INVOICE: 'Luggage Invoice',
   BANK_TRANSACTION: 'Bank Transaction',
+  INTERRAIL_PASS: 'Interrail Pass',
   OTHER: 'Other',
 };
 
@@ -103,6 +107,32 @@ function getLinkedDocIds(item: TravelItem): string[] {
     ids.push(item.luggageDocumentId);
   }
   return ids;
+}
+
+// Group travel items belonging to the same booking (round-trip / multi-leg).
+// Legs of one booking share a non-null bookingId; everything else is standalone.
+interface OrgTravelItemGroup {
+  key: string;
+  items: TravelItem[];
+}
+function groupOrgTravelItemsByBooking(items: TravelItem[]): OrgTravelItemGroup[] {
+  const groups: OrgTravelItemGroup[] = [];
+  const byBooking = new Map<string, OrgTravelItemGroup>();
+  for (const item of items) {
+    const bookingId = item.bookingId || null;
+    if (bookingId) {
+      let group = byBooking.get(bookingId);
+      if (!group) {
+        group = { key: `booking-${bookingId}`, items: [] };
+        byBooking.set(bookingId, group);
+        groups.push(group);
+      }
+      group.items.push(item);
+    } else {
+      groups.push({ key: item.id, items: [item] });
+    }
+  }
+  return groups;
 }
 
 function parseValidationWarnings(warnings?: string): string[] {
@@ -140,6 +170,7 @@ export default function OrgParticipantDetail() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadDocType, setUploadDocType] = useState('OTHER');
+  const [downloadingAuditPdf, setDownloadingAuditPdf] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -212,6 +243,15 @@ export default function OrgParticipantDetail() {
     onError: () => toast.error('Failed to refresh AI review'),
   });
 
+  const rebuildTripsMutation = useMutation({
+    mutationFn: () => organisationApi.rebuildParticipantTrips(id!),
+    onSuccess: (r) => {
+      toast.success(`Rebuilt ${r.travelItems} trip(s) from the documents${r.unreadableDocuments.length ? ` — ${r.unreadableDocuments.length} file(s) could not be read` : ''}`);
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Rebuild failed'),
+  });
+
   const sendMagicLinkMutation = useMutation({
     mutationFn: () => organisationApi.sendMagicLink(id!),
     onSuccess: () => {
@@ -241,6 +281,20 @@ export default function OrgParticipantDetail() {
     mutationFn: (notes: string) => organisationApi.updateParticipant(id!, { notesInternal: notes }),
     onSuccess: () => toast.success('Notes saved'),
     onError: () => toast.error('Failed to save notes'),
+  });
+
+  // Individual limit overrides — the server recalculates the payable amount
+  const updateLimitOverrideMutation = useMutation({
+    mutationFn: (data: { maxReimbursementOverride?: number | null; greenTravelOverride?: boolean | null }) =>
+      organisationApi.updateParticipant(id!, data),
+    onSuccess: () => {
+      toast.success('Limit updated');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      if (participant?.project?.id) {
+        queryClient.invalidateQueries({ queryKey: ['org-participants', participant.project.id] });
+      }
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update limit'),
   });
 
   const deleteParticipantMutation = useMutation({
@@ -498,6 +552,21 @@ export default function OrgParticipantDetail() {
                 <Send className="w-4 h-4 mr-2" />
                 Send Magic Link
               </Button>
+              {participant.status !== 'ADMIN_APPROVED' && participant.status !== 'PAID' && participant.documents.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (window.confirm('Rebuild this participant\'s trips from their documents? Current trips (including edits) are replaced; documents are kept. This can take a few minutes.')) {
+                      rebuildTripsMutation.mutate();
+                    }
+                  }}
+                  loading={rebuildTripsMutation.isPending}
+                  title="Delete the current trips and let the AI rebuild them from the uploaded documents"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Rebuild trips
+                </Button>
+              )}
             </div>
           </div>
 
@@ -510,12 +579,20 @@ export default function OrgParticipantDetail() {
                   <p className="text-2xl font-bold text-white">{formatCurrency(summary?.totalEur || 0)}</p>
                 </div>
                 <div>
-                  <p className="text-white/70 text-sm">Max Allowed</p>
+                  <p className="text-white/70 text-sm">
+                    Max Allowed
+                    {participant.maxReimbursementOverride != null && (
+                      <span className="ml-2 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-semibold uppercase tracking-wide">Individual</span>
+                    )}
+                  </p>
                   <p className="text-2xl font-bold text-white">{participant.maxReimbursementForCountry ? formatCurrency(participant.maxReimbursementForCountry) : 'Not set'}</p>
                 </div>
                 <div>
                   <p className="text-white/70 text-sm">To Reimburse</p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(summary?.amountToReimburse || 0)}</p>
+                  {(summary?.greenTravelExtraEur || 0) > 0 && (
+                    <p className="text-white/70 text-xs">incl. {formatCurrency(summary?.greenTravelExtraEur || 0)} green travel extra</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-white/70 text-sm">Status</p>
@@ -533,6 +610,16 @@ export default function OrgParticipantDetail() {
               </div>
             </CardContent>
           </Card>
+
+          {/* ── Individual limit (overrides the country default) ── */}
+          <IndividualLimitCard
+            participant={participant}
+            saving={updateLimitOverrideMutation.isPending}
+            onSave={(data) => updateLimitOverrideMutation.mutate(data)}
+          />
+
+          {/* ── Green travel extra (decided by the organiser) ── */}
+          <GreenTravelExtraCard participant={participant} />
 
           {/* ── Two Column Layout ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -558,29 +645,53 @@ export default function OrgParticipantDetail() {
                 <CardContent>
                   {participant.travelItems.length > 0 ? (
                     <div className="space-y-3">
-                      {participant.travelItems.map((item) => (
-                        <TravelItemCard
-                          key={item.id}
-                          item={item}
-                          expanded={expandedItems.has(item.id)}
-                          highlighted={highlightedItemId === item.id}
-                          onToggleExpand={() => toggleExpand(item.id)}
-                          findings={findingsByItem[item.id] || []}
-                          onToggleFinding={(findingId) => toggleFindingMutation.mutate({ findingId })}
-                          docsById={docsById}
-                          participantId={participant.id}
-                          allDocuments={participant.documents}
-                          onEdit={(itemId, data) => updateTravelItemMutation.mutate({ itemId, data })}
-                          onDelete={(itemId) => {
-                            if (confirm('Delete this travel item? This cannot be undone.')) {
-                              deleteTravelItemMutation.mutate(itemId);
-                            }
-                          }}
-                          onLinkDocument={(itemId, docId) => linkDocumentMutation.mutate({ itemId, docId })}
-                          onUnlinkDocument={(itemId, docId) => unlinkDocumentMutation.mutate({ itemId, docId })}
-                          isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending}
-                        />
-                      ))}
+                      {groupOrgTravelItemsByBooking(participant.travelItems).map((group) => {
+                        const renderCard = (item: typeof group.items[number]) => (
+                          <TravelItemCard
+                            key={item.id}
+                            item={item}
+                            expanded={expandedItems.has(item.id)}
+                            highlighted={highlightedItemId === item.id}
+                            onToggleExpand={() => toggleExpand(item.id)}
+                            findings={findingsByItem[item.id] || []}
+                            onToggleFinding={(findingId) => toggleFindingMutation.mutate({ findingId })}
+                            docsById={docsById}
+                            participantId={participant.id}
+                            allDocuments={participant.documents}
+                            onEdit={(itemId, data) => updateTravelItemMutation.mutate({ itemId, data })}
+                            onDelete={(itemId) => {
+                              if (confirm('Delete this travel item? This cannot be undone.')) {
+                                deleteTravelItemMutation.mutate(itemId);
+                              }
+                            }}
+                            onLinkDocument={(itemId, docId) => linkDocumentMutation.mutate({ itemId, docId })}
+                            onUnlinkDocument={(itemId, docId) => unlinkDocumentMutation.mutate({ itemId, docId })}
+                            isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending}
+                          />
+                        );
+
+                        if (group.items.length < 2) {
+                          return renderCard(group.items[0]);
+                        }
+
+                        const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
+                        return (
+                          <div key={group.key} className="rounded-xl border-2 border-purple-200 bg-purple-50/40 p-2.5">
+                            <div className="flex items-center gap-2 mb-2 px-1">
+                              <Repeat className="w-3.5 h-3.5 text-purple-600" />
+                              <span className="text-xs font-semibold text-purple-800">
+                                {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
+                              </span>
+                              <span className="text-[11px] text-purple-500">
+                                · {group.items.length} legs · one purchase · price counted once
+                              </span>
+                            </div>
+                            <div className="space-y-3">
+                              {group.items.map((item) => renderCard(item))}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <p className="text-gray-500 text-center py-6">No travel items</p>
@@ -732,10 +843,17 @@ export default function OrgParticipantDetail() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    {reviewLoading || refreshReviewMutation.isPending ? (
+                    {reviewLoading || refreshReviewMutation.isPending || participant.aiReviewStatus === 'PENDING' ? (
                       <div className="flex items-center gap-2 text-sm text-indigo-600 py-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>{refreshReviewMutation.isPending ? 'Regenerating review...' : 'Loading review...'}</span>
+                        <span>{refreshReviewMutation.isPending ? 'Regenerating review...' : participant.aiReviewStatus === 'PENDING' ? 'AI review in progress…' : 'Loading review...'}</span>
+                      </div>
+                    ) : participant.aiReviewStatus === 'FAILED' ? (
+                      <div className="flex items-center justify-between gap-2 p-2 bg-red-50 rounded-lg text-sm text-red-700">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                          <span>AI review failed — click refresh to retry</span>
+                        </div>
                       </div>
                     ) : findings.length > 0 ? (
                       <>
@@ -788,6 +906,29 @@ export default function OrgParticipantDetail() {
                       <Button variant="secondary" className="w-full" onClick={() => setShowReopenModal(true)}>
                         <RotateCcw className="w-4 h-4 mr-2" />
                         Reopen Reimbursement
+                      </Button>
+                    )}
+                    {(participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') && (
+                      <Button
+                        variant="secondary"
+                        className="w-full"
+                        loading={downloadingAuditPdf}
+                        onClick={async () => {
+                          setDownloadingAuditPdf(true);
+                          try {
+                            await organisationApi.downloadAuditPdf(
+                              participant.id,
+                              `${participant.firstName} ${participant.lastName}`
+                            );
+                          } catch (err: unknown) {
+                            toast.error(err instanceof Error ? err.message : 'Failed to generate audit PDF');
+                          } finally {
+                            setDownloadingAuditPdf(false);
+                          }
+                        }}
+                      >
+                        <FileText className="w-4 h-4 mr-2" />
+                        Download Audit PDF
                       </Button>
                     )}
                   </div>
@@ -1358,7 +1499,9 @@ function TravelItemCard({
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Route mismatch</span>
             )}
             {item.excludedFromReimbursement && (
-              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">Excluded</span>
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">
+                {item.exclusionReason === 'HOSTING_ORG_PAID' ? 'Excluded · hosting org paid' : 'Excluded'}
+              </span>
             )}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
@@ -1712,5 +1855,198 @@ function DetailField({ label, value, highlight }: { label: string; value: string
         highlight === 'orange' ? 'text-orange-600' : highlight === 'red' ? 'text-red-600' : 'text-gray-900',
       )}>{value}</p>
     </div>
+  );
+}
+
+/**
+ * Lets the organisation give one participant their own maximum and/or
+ * green-travel status. Blank / "country default" clears the override.
+ */
+function IndividualLimitCard({
+  participant,
+  saving,
+  onSave,
+}: {
+  participant: OrgParticipantDetailData;
+  saving: boolean;
+  onSave: (data: { maxReimbursementOverride?: number | null; greenTravelOverride?: boolean | null }) => void;
+}) {
+  const serverMax = participant.maxReimbursementOverride != null ? String(participant.maxReimbursementOverride) : '';
+  const [maxValue, setMaxValue] = useState(serverMax);
+  useEffect(() => setMaxValue(serverMax), [serverMax]);
+
+  const countryMax = participant.countryMaxReimbursement || 0;
+  const countryGreen = participant.countryGreenTravel || false;
+  const greenValue =
+    participant.greenTravelOverride == null ? 'default' : participant.greenTravelOverride ? 'yes' : 'no';
+
+  const commitMax = () => {
+    const trimmed = maxValue.trim();
+    if (trimmed === '') {
+      if (participant.maxReimbursementOverride != null) onSave({ maxReimbursementOverride: null });
+      return;
+    }
+    const amount = parseFloat(trimmed);
+    if (isNaN(amount) || amount < 0) {
+      setMaxValue(serverMax);
+      return;
+    }
+    if (amount !== participant.maxReimbursementOverride) onSave({ maxReimbursementOverride: amount });
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex flex-col md:flex-row md:items-end gap-4">
+          <div className="flex-1">
+            <p className="font-semibold text-gray-900">Individual limit</p>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Overrides the {participant.country} country limit for this participant only. Leave blank to use the country default.
+            </p>
+          </div>
+          <div className="flex items-end gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Maximum (EUR)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={maxValue}
+                placeholder={countryMax > 0 ? `Country: ${countryMax}` : 'Country: not set'}
+                onChange={(e) => setMaxValue(e.target.value)}
+                onBlur={commitMax}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                }}
+                disabled={saving}
+                className="w-36 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-primary-400 focus:ring-2 focus:ring-primary-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Green travel</label>
+              <select
+                value={greenValue}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  onSave({ greenTravelOverride: v === 'default' ? null : v === 'yes' });
+                }}
+                disabled={saving}
+                className="px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="default">Country default ({countryGreen ? 'yes' : 'no'})</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The organiser decides the green travel extra (food + accommodation) for this
+ * participant. Highlighted with a suggestion for green travellers; allowed at
+ * every stage except PAID; saving emails the participant.
+ */
+function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDetailData }) {
+  const queryClient = useQueryClient();
+  const [food, setFood] = useState(participant.greenTravelFoodEur != null ? String(participant.greenTravelFoodEur) : '');
+  const [accommodation, setAccommodation] = useState(participant.greenTravelAccommodationEur != null ? String(participant.greenTravelAccommodationEur) : '');
+  const [note, setNote] = useState(participant.greenTravelExtraNote || '');
+  useEffect(() => {
+    setFood(participant.greenTravelFoodEur != null ? String(participant.greenTravelFoodEur) : '');
+    setAccommodation(participant.greenTravelAccommodationEur != null ? String(participant.greenTravelAccommodationEur) : '');
+    setNote(participant.greenTravelExtraNote || '');
+  }, [participant.greenTravelFoodEur, participant.greenTravelAccommodationEur, participant.greenTravelExtraNote]);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      organisationApi.setGreenTravelExtra(participant.id, {
+        foodEur: food.trim() === '' ? null : parseFloat(food),
+        accommodationEur: accommodation.trim() === '' ? null : parseFloat(accommodation),
+        note: note.trim() || null,
+      }),
+    onSuccess: () => {
+      toast.success('Green travel extra saved — the participant has been notified');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', participant.id] });
+      if (participant.project?.id) queryClient.invalidateQueries({ queryKey: ['org-participants', participant.project.id] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to save'),
+  });
+
+  const isPaid = participant.status === 'PAID';
+  const isGreen = !!participant.greenTravel;
+  const s = participant.greenTravelSuggestion;
+  const current = (participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0);
+  const parsedFood = food.trim() === '' ? 0 : parseFloat(food);
+  const parsedAcc = accommodation.trim() === '' ? 0 : parseFloat(accommodation);
+  const invalid = isNaN(parsedFood) || isNaN(parsedAcc) || parsedFood < 0 || parsedAcc < 0;
+  const dirty =
+    parsedFood !== (participant.greenTravelFoodEur ?? 0) ||
+    parsedAcc !== (participant.greenTravelAccommodationEur ?? 0) ||
+    (note.trim() || '') !== (participant.greenTravelExtraNote || '');
+
+  const handleSave = () => {
+    if (invalid) { toast.error('Amounts must be numbers of 0 or more'); return; }
+    if (window.confirm(`Save a green travel extra of ${formatCurrency(parsedFood + parsedAcc)}? The participant will receive an email.`)) {
+      mutation.mutate();
+    }
+  };
+
+  return (
+    <Card className={isGreen ? 'border-emerald-200' : undefined}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <p className="font-semibold text-gray-900">
+              Green travel extra
+              {isGreen && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Green traveller</span>}
+              {participant.greenTravelDeclaration?.signedAt && (
+                <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Declaration signed {formatDate(participant.greenTravelDeclaration.signedAt)}</span>
+              )}
+            </p>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Food and accommodation budget you add on top of the travel maximum. You decide the amount; the participant is emailed.
+            </p>
+          </div>
+          {current > 0 && participant.greenTravelExtraUpdatedAt && (
+            <p className="text-xs text-gray-400">Set {formatDate(participant.greenTravelExtraUpdatedAt)} · {formatCurrency(current)}</p>
+          )}
+        </div>
+
+        {isGreen && s && (
+          <div className="mt-3 p-3 rounded-xl bg-emerald-50 text-sm text-emerald-900">
+            <p>
+              Travelled <strong>{s.totalTravelDays} day{s.totalTravelDays === 1 ? '' : 's'}</strong> in total
+              {s.firstTravelDate && s.lastTravelDate && ` (${formatDate(s.firstTravelDate)} → ${formatDate(s.lastTravelDate)})`},
+              {' '}<strong>{s.extraTravelDays}</strong> beyond the project dates.
+            </p>
+            <p className="mt-1">
+              Receipts uploaded:{' '}
+              {s.receipts.length === 0
+                ? 'none'
+                : s.receipts.map((r) => `${r.documentType === 'HOTEL_INVOICE' ? 'hotel' : 'meal'} ${r.amount != null ? `${r.amount.toFixed(2)} ${r.currency || ''}`.trim() : '(amount unclear)'}`).join(', ')}
+            </p>
+            <p className="mt-1 text-emerald-700">Fill in the total amount for green travel you wish to add to their reimbursement.</p>
+          </div>
+        )}
+
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Input label="Food (€)" type="number" min="0" step="0.01" value={food} onChange={(e) => setFood(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
+          <Input label="Accommodation (€)" type="number" min="0" step="0.01" value={accommodation} onChange={(e) => setAccommodation(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
+          <Input label="Note to participant (optional)" value={note} onChange={(e) => setNote(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="e.g. 2 nights, as agreed" />
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-gray-400">
+            {isPaid ? 'This participant has been paid — the extra can no longer be changed.' : `Total extra: ${formatCurrency(invalid ? 0 : parsedFood + parsedAcc)}`}
+          </p>
+          <Button size="sm" onClick={handleSave} loading={mutation.isPending} disabled={isPaid || !dirty || invalid}>
+            Save & notify participant
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

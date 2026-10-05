@@ -8,6 +8,8 @@ import {
   TransportMode,
 } from './types.js';
 import prisma from '../../utils/prisma.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
+import { computePayable } from '../../utils/reimbursementMath.js';
 
 /**
  * Mock AI Service for development
@@ -125,6 +127,7 @@ export class MockAiService implements TravelDocumentAiService {
       FUEL_RECEIPT: 'fuel receipt',
       GREEN_TRAVEL_DECLARATION: 'green travel declaration',
       HOTEL_INVOICE: 'hotel invoice',
+      MEAL_RECEIPT: 'meal receipt',
       BANK_TRANSACTION: 'bank transaction',
       LUGGAGE_INVOICE: 'luggage invoice',
       INTERRAIL_PASS: 'interrail pass',
@@ -176,6 +179,13 @@ export class MockAiService implements TravelDocumentAiService {
 
     // Check travel items have required data
     for (const item of participant.travelItems) {
+      // Excluded items (e.g. paid by the hosting organisation) are not claimed,
+      // so they must not block submission.
+      if (item.excludedFromReimbursement) continue;
+
+      const route =
+        item.fromLocation && item.toLocation ? ` (${item.fromLocation} → ${item.toLocation})` : '';
+
       if (!item.fromLocation || !item.toLocation) {
         missingItems.push({
           type: 'data',
@@ -187,7 +197,7 @@ export class MockAiService implements TravelDocumentAiService {
       if (!item.departureDate) {
         missingItems.push({
           type: 'data',
-          description: `Travel item missing departure date`,
+          description: `Travel item missing departure date${route}`,
           travelItemId: item.id,
         });
       }
@@ -195,7 +205,7 @@ export class MockAiService implements TravelDocumentAiService {
       if (item.amountOriginal === null || item.amountOriginal === undefined) {
         missingItems.push({
           type: 'data',
-          description: `Travel item missing amount`,
+          description: `Travel item missing amount${route}`,
           travelItemId: item.id,
         });
       }
@@ -218,12 +228,19 @@ export class MockAiService implements TravelDocumentAiService {
         }
       }
 
-      // Check for invoice/ticket
+      // Check for invoice/ticket.
+      // A bank transaction proving the payment, or a signed declaration on honour
+      // for the missing invoice, is accepted as well.
       if (item.modeOfTransport === TransportMode.PLANE) {
         const hasInvoice = participant.documents.some(
-          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_INVOICE
+          (doc: { documentType: string }) =>
+            doc.documentType === DocumentType.FLIGHT_INVOICE ||
+            doc.documentType === DocumentType.BANK_TRANSACTION
         );
-        if (!hasInvoice) {
+        const hasInvoiceDeclaration = participant.declarationsOnHonor.some(
+          (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_INVOICE
+        );
+        if (!hasInvoice && !hasInvoiceDeclaration) {
           missingItems.push({
             type: 'document',
             description: 'Flight invoice or booking confirmation required',
@@ -289,17 +306,31 @@ export class MockAiService implements TravelDocumentAiService {
     for (const item of participant.travelItems) {
       if (!item.excludedFromReimbursement && item.amountEur !== null) {
         totalEur += item.amountEur;
+        if (item.luggageAmountEur !== null && item.luggageAmountEur !== undefined) {
+          totalEur += item.luggageAmountEur;
+        }
       }
     }
 
-    // Get max reimbursement for participant's country
-    const countryLimit = participant.project.countryLimits.find(
-      (limit: { country: string; maxReimbursementAmount: number }) => limit.country === participant.country
-    );
-    const maxReimbursementAllowed = countryLimit?.maxReimbursementAmount || 0;
+    // Applicable maximum: individual override, else the participant's country limit
+    const maxReimbursementAllowed = getEffectiveLimit(participant, participant.project.countryLimits).maxReimbursement;
 
-    // Calculate amount to reimburse (capped at max)
-    const amountToReimburse = Math.min(totalEur, maxReimbursementAllowed);
+    const hasMultiPersonBooking = participant.travelItems.some(
+      (item) => item.numberOfPassengers !== null && item.numberOfPassengers > 1
+    );
+
+    // Organiser-decided green travel extra (food + accommodation), paid on top of the cap
+    const greenTravelExtraEur =
+      Math.round(((participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0)) * 100) / 100;
+
+    // Single shared formula (see utils/reimbursementMath.ts)
+    const amountToReimburse = computePayable({
+      travelEur: totalEur,
+      allowanceInsideCap: 0,
+      allowanceOnTop: greenTravelExtraEur,
+      maxReimbursement: maxReimbursementAllowed,
+      hasMultiPersonBooking,
+    }).total;
 
     // Validate
     const validation = await this.validateReimbursement(participantId);
@@ -312,12 +343,14 @@ export class MockAiService implements TravelDocumentAiService {
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
       update: {
         totalEur,
         maxReimbursementAllowed,
         amountToReimburse,
+        greenTravelExtraEur,
         aiCheckOk: validation.aiCheckPassed,
       },
     });

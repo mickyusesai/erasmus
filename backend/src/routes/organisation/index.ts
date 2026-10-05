@@ -4,10 +4,17 @@ import { parse } from 'csv-parse/sync';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { organisationAuth, ensureOwnProject } from '../../middleware/auth.js';
-import { Organisation, PurchaseType, ParticipantStatus, TransportMode, DocumentType } from '@prisma/client';
+import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { getEmailService } from '../../services/email/index.js';
+import { projectEmailContext } from '../../services/email/context.js';
 import { getStorageService } from '../../services/storage/index.js';
+import { generateAuditPdf } from '../../services/pdf/index.js';
+import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
+import { summarizeTravelDays } from '../../utils/travelDays.js';
+import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
+import archiver from 'archiver';
 import multer from 'multer';
 
 const router = Router();
@@ -23,59 +30,23 @@ interface CreditStatus {
   canCreateProject: boolean;
   reason?: string;
   availableCredits: number;
-  hasAnnualLicense: boolean;
-  annualLicenseExpired: boolean;
 }
 
 function getCreditStatus(org: Organisation): CreditStatus {
-  const now = new Date();
-
-  // Check annual license
-  const hasAnnualLicense = org.hasAnnualLicense;
-  const annualLicenseExpired = org.annualLicenseExpiresAt ? org.annualLicenseExpiresAt < now : true;
-  const annualLicenseActive = hasAnnualLicense && !annualLicenseExpired;
-
-  // Calculate available credits
   const availableCredits = org.projectCredits;
+  const canCreateProject = availableCredits > 0;
+  const reason = canCreateProject ? undefined : 'No credits available. Please purchase credits to create a project.';
 
-  // Determine if can create project
-  let canCreateProject = false;
-  let reason: string | undefined;
-
-  if (annualLicenseActive) {
-    canCreateProject = true;
-  } else if (org.projectCredits > 0) {
-    canCreateProject = true;
-  } else if (hasAnnualLicense && annualLicenseExpired) {
-    reason = 'Your annual license has expired. Please renew to create new projects.';
-  } else {
-    reason = 'No credits available. Please purchase credits to create a project.';
-  }
-
-  return {
-    canCreateProject,
-    reason,
-    availableCredits,
-    hasAnnualLicense,
-    annualLicenseExpired,
-  };
+  return { canCreateProject, reason, availableCredits };
 }
 
 async function consumeCredit(org: Organisation): Promise<PurchaseType> {
-  const now = new Date();
-
-  // Check annual license first (doesn't consume credits)
-  if (org.hasAnnualLicense && org.annualLicenseExpiresAt && org.annualLicenseExpiresAt > now) {
-    return 'ANNUAL';
-  }
-
-  // Consume regular credit
   if (org.projectCredits > 0) {
     await prisma.organisation.update({
       where: { id: org.id },
       data: { projectCredits: org.projectCredits - 1 },
     });
-    return 'SINGLE'; // Could be from any pack, but we track as SINGLE
+    return 'SINGLE';
   }
 
   throw new ForbiddenError('No credits available');
@@ -125,14 +96,13 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       id: org.id,
       name: org.name,
       email: org.email,
+      isAffiliate: org.isAffiliate,
+      affiliateActive: org.affiliateActive,
     },
     credits: {
       available: creditStatus.availableCredits,
       canCreateProject: creditStatus.canCreateProject,
       reason: creditStatus.reason,
-      hasAnnualLicense: creditStatus.hasAnnualLicense,
-      annualLicenseExpired: creditStatus.annualLicenseExpired,
-      annualLicenseExpiresAt: org.annualLicenseExpiresAt,
     },
     stats: {
       projectCount: projects.length,
@@ -194,6 +164,8 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
       disseminationEnabled: p.disseminationEnabled,
       carRatePerKm: p.carRatePerKm,
       venueAddress: p.venueAddress,
+      exchangeRateMode: p.exchangeRateMode,
+      exchangeRateManualDate: p.exchangeRateManualDate,
       participantCount: p._count.participants,
       creditSource: p.creditSource,
       isTestProject: p.isTestProject,
@@ -205,6 +177,8 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+const exchangeRateModeEnum = z.enum(['PURCHASE_DATE', 'PROJECT_END_DATE', 'MANUAL_DATE']);
+
 const createProjectSchema = z.object({
   name: z.string().min(1, 'Project name is required'),
   description: z.string().optional(),
@@ -213,6 +187,8 @@ const createProjectSchema = z.object({
   endDate: z.string().transform((s) => new Date(s)),
   carRatePerKm: z.number().min(0).default(0.22),
   venueAddress: z.string().optional(),
+  exchangeRateMode: exchangeRateModeEnum.optional(),
+  exchangeRateManualDate: z.string().transform((s) => new Date(s)).nullish(),
 });
 
 /**
@@ -235,7 +211,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Consume credit and create project in a transaction
-  const { name, description, country, startDate, endDate, carRatePerKm, venueAddress } = result.data;
+  const { name, description, country, startDate, endDate, carRatePerKm, venueAddress, exchangeRateMode, exchangeRateManualDate } = result.data;
 
   // Refresh org data to get latest credit count
   const freshOrg = await prisma.organisation.findUnique({
@@ -249,7 +225,7 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
   // Consume the credit
   const creditSource = await consumeCredit(freshOrg);
 
-  // Create the project
+  // Create the project — 1 credit covers up to 60 participants
   const project = await prisma.project.create({
     data: {
       organisationId: org.id,
@@ -260,7 +236,12 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
       endDate,
       carRatePerKm,
       venueAddress,
+      ...(exchangeRateMode && { exchangeRateMode }),
+      ...(exchangeRateManualDate !== undefined && { exchangeRateManualDate: exchangeRateManualDate || null }),
       creditSource,
+      maxParticipants: 60,
+      // New projects ask green-travel participants to sign a declaration at submission
+      requireGreenTravelDeclaration: true,
     },
     include: {
       _count: {
@@ -335,6 +316,14 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       endDate: project.endDate,
       disseminationEnabled: project.disseminationEnabled,
       carRatePerKm: project.carRatePerKm,
+      exchangeRateMode: project.exchangeRateMode,
+      exchangeRateManualDate: project.exchangeRateManualDate,
+      aiAnalysisUnlocked: project.aiAnalysisUnlocked,
+      participantInstructions: project.participantInstructions,
+      documentDeadline: project.documentDeadline,
+      contactEmail: project.contactEmail,
+      contactPhone: project.contactPhone,
+      requireGreenTravelDeclaration: project.requireGreenTravelDeclaration,
       creditSource: project.creditSource,
       countryLimits: project.countryLimits,
       participants: project.participants,
@@ -354,6 +343,15 @@ const updateProjectSchema = z.object({
   disseminationEnabled: z.boolean().optional(),
   carRatePerKm: z.number().min(0).optional(),
   venueAddress: z.string().optional(),
+  exchangeRateMode: exchangeRateModeEnum.optional(),
+  exchangeRateManualDate: z.string().transform((s) => new Date(s)).nullish(),
+  aiAnalysisUnlocked: z.boolean().optional(),
+  // Communication with participants
+  participantInstructions: z.string().nullish(),
+  documentDeadline: z.string().transform((s) => new Date(s)).nullish(),
+  contactEmail: z.string().nullish(),
+  contactPhone: z.string().nullish(),
+  requireGreenTravelDeclaration: z.boolean().optional(),
 });
 
 /**
@@ -382,10 +380,21 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
     throw new ValidationError(result.error.errors[0].message);
   }
 
+  const data = { ...result.data } as Record<string, unknown>;
+  if ('exchangeRateManualDate' in data && data.exchangeRateManualDate == null) {
+    data.exchangeRateManualDate = null;
+  }
+
+  // Detect whether the exchange-rate configuration changed (triggers a recompute)
+  const exchangeRateChanged =
+    (result.data.exchangeRateMode !== undefined && result.data.exchangeRateMode !== existing.exchangeRateMode) ||
+    (result.data.exchangeRateManualDate !== undefined &&
+      (result.data.exchangeRateManualDate?.getTime() ?? null) !== (existing.exchangeRateManualDate?.getTime() ?? null));
+
   // Update project
   const project = await prisma.project.update({
     where: { id: projectId },
-    data: result.data,
+    data,
     include: {
       _count: {
         select: { participants: true },
@@ -393,8 +402,16 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
     },
   });
 
+  // Recompute EUR amounts for all non-paid participants when the FX config changed
+  let recalc: import('../../services/exchangeRate/index.js').ProjectRecalcResult | undefined;
+  if (exchangeRateChanged) {
+    const { recalculateProjectExchangeRates } = await import('../../services/exchangeRate/index.js');
+    recalc = await recalculateProjectExchangeRates(projectId);
+  }
+
   res.json({
     message: 'Project updated successfully',
+    recalc,
     project: {
       id: project.id,
       name: project.name,
@@ -405,12 +422,172 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
       endDate: project.endDate,
       disseminationEnabled: project.disseminationEnabled,
       carRatePerKm: project.carRatePerKm,
+      exchangeRateMode: project.exchangeRateMode,
+      exchangeRateManualDate: project.exchangeRateManualDate,
+      aiAnalysisUnlocked: project.aiAnalysisUnlocked,
+      participantInstructions: project.participantInstructions,
+      documentDeadline: project.documentDeadline,
+      contactEmail: project.contactEmail,
+      contactPhone: project.contactPhone,
+      requireGreenTravelDeclaration: project.requireGreenTravelDeclaration,
       creditSource: project.creditSource,
       participantCount: project._count.participants,
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     },
   });
+}));
+
+/**
+ * POST /api/organisation/projects/:id/notify-ended
+ * (Re)send the "project ended — build your trips" email to every participant
+ * who hasn't submitted yet. Only allowed once the project has ended (or the
+ * organisation opened AI analysis early).
+ */
+router.post('/projects/:id/notify-ended', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      participants: {
+        where: { status: 'DRAFT', magicLinkActive: true },
+        select: { email: true, firstName: true, magicLinkToken: true },
+      },
+    },
+  });
+  if (!project) throw new NotFoundError('Project not found');
+
+  const projectEnded = Date.now() >= project.endDate.getTime();
+  if (!projectEnded && !project.aiAnalysisUnlocked) {
+    throw new ValidationError('The project has not ended yet. Enable "Open AI analysis early" first, or wait until the end date.');
+  }
+
+  const emailService = getEmailService();
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const emailCtx = await projectEmailContext(project);
+  for (const p of project.participants) {
+    const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
+    emailService
+      .sendProjectEnded(p.email, p.firstName, project.name, magicLink, emailCtx)
+      .catch((err) => console.error(`[Project End] Failed to email ${p.email}:`, err));
+  }
+
+  // Mark as sent so the hourly job never double-sends after a manual trigger
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { endEmailSentAt: new Date() },
+  });
+
+  res.json({ sent: project.participants.length });
+}));
+
+/**
+ * GET /api/organisation/projects/:id/currency-rates
+ * Returns the project's exchange-rate mode, manual date, existing per-currency
+ * overrides, and the currencies detected in its travel items (with current
+ * effective rate) so the settings UI can pre-fill the override list.
+ */
+router.get('/projects/:id/currency-rates', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { currencyRates: true },
+  });
+  if (!project) throw new NotFoundError('Project not found');
+
+  // Distinct non-EUR currencies actually used across the project's travel items
+  const items = await prisma.travelItem.findMany({
+    where: { participant: { projectId }, currencyOriginal: { not: 'EUR' } },
+    select: { currencyOriginal: true, purchaseDate: true },
+  });
+
+  const { getEffectiveRate } = await import('../../services/exchangeRate/index.js');
+  const rateConfig = {
+    exchangeRateMode: project.exchangeRateMode,
+    exchangeRateManualDate: project.exchangeRateManualDate,
+    endDate: project.endDate,
+  };
+  const overrideMap = new Map<string, number>();
+  for (const cr of project.currencyRates) overrideMap.set(cr.currencyCode.toUpperCase(), cr.rate);
+
+  // One representative purchase date per currency (most recent) for rate preview
+  const latestDateByCurrency = new Map<string, Date | null>();
+  for (const it of items) {
+    const cur = (it.currencyOriginal || '').toUpperCase();
+    if (!cur) continue;
+    const prev = latestDateByCurrency.get(cur);
+    if (prev === undefined || (it.purchaseDate && (!prev || it.purchaseDate > prev))) {
+      latestDateByCurrency.set(cur, it.purchaseDate ?? prev ?? null);
+    }
+  }
+
+  const detected = await Promise.all(
+    Array.from(latestDateByCurrency.keys()).sort().map(async (currencyCode) => {
+      const effectiveRate = await getEffectiveRate(rateConfig, overrideMap, currencyCode, latestDateByCurrency.get(currencyCode));
+      return {
+        currencyCode,
+        effectiveRate,
+        hasOverride: overrideMap.has(currencyCode),
+      };
+    })
+  );
+
+  res.json({
+    exchangeRateMode: project.exchangeRateMode,
+    exchangeRateManualDate: project.exchangeRateManualDate,
+    overrides: project.currencyRates.map((cr) => ({ currencyCode: cr.currencyCode, rate: cr.rate })),
+    detectedCurrencies: detected,
+  });
+}));
+
+/**
+ * PUT /api/organisation/projects/:id/currency-rates
+ * Replaces the project's per-currency override set, then recomputes EUR amounts
+ * for all non-paid participants.
+ */
+const currencyRatesSchema = z.object({
+  overrides: z.array(z.object({
+    currencyCode: z.string().min(3).max(3).transform((s) => s.toUpperCase()),
+    rate: z.number().positive('Rate must be greater than 0'),
+  })),
+});
+
+router.put('/projects/:id/currency-rates', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new NotFoundError('Project not found');
+
+  const result = currencyRatesSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+
+  // De-duplicate by currency (last one wins), drop EUR (always 1:1)
+  const wanted = new Map<string, number>();
+  for (const o of result.data.overrides) {
+    if (o.currencyCode === 'EUR') continue;
+    wanted.set(o.currencyCode, o.rate);
+  }
+
+  // Replace the set: upsert wanted, delete the rest
+  await prisma.$transaction(async (tx) => {
+    await tx.projectCurrencyRate.deleteMany({
+      where: { projectId, currencyCode: { notIn: Array.from(wanted.keys()) } },
+    });
+    for (const [currencyCode, rate] of wanted) {
+      await tx.projectCurrencyRate.upsert({
+        where: { projectId_currencyCode: { projectId, currencyCode } },
+        create: { projectId, currencyCode, rate },
+        update: { rate },
+      });
+    }
+  });
+
+  const { recalculateProjectExchangeRates } = await import('../../services/exchangeRate/index.js');
+  const recalc = await recalculateProjectExchangeRates(projectId);
+
+  res.json({ message: 'Exchange rate overrides saved', recalc });
 }));
 
 /**
@@ -475,10 +652,6 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
     credits: {
       available: creditStatus.availableCredits,
       projectCredits: org.projectCredits,
-      hasAnnualLicense: creditStatus.hasAnnualLicense,
-      annualLicenseExpired: creditStatus.annualLicenseExpired,
-      annualLicenseExpiresAt: org.annualLicenseExpiresAt,
-      annualLicenseStartedAt: org.annualLicenseStartedAt,
     },
     purchases: purchases.map((p: any) => ({
       id: p.id,
@@ -491,7 +664,89 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
       createdAt: p.createdAt,
       completedAt: p.completedAt,
     })),
+    organisation: {
+      isAffiliate: org.isAffiliate,
+      affiliateActive: org.affiliateActive,
+    },
   });
+}));
+
+/**
+ * POST /api/organisation/stripe/create-checkout-session
+ * Create a Stripe Checkout session for purchasing credits
+ */
+const STRIPE_PLANS: Record<string, { productEnvKey: string; amountCents: number; credits: number; label: string }> = {
+  SINGLE:  { productEnvKey: 'STRIPE_PRODUCT_ID_SINGLE',  amountCents: 12900, credits: 1,  label: 'Single Project Credit' },
+  PACK_5:  { productEnvKey: 'STRIPE_PRODUCT_ID_PACK_5',  amountCents: 49900, credits: 5,  label: 'Pack of 5 Credits' },
+  PACK_10: { productEnvKey: 'STRIPE_PRODUCT_ID_PACK_10', amountCents: 89900, credits: 10, label: 'Pack of 10 Credits' },
+};
+
+router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const { type } = req.body as { type: string };
+
+  const plan = STRIPE_PLANS[type];
+  if (!plan) {
+    throw new ValidationError('Invalid purchase type');
+  }
+
+  const productId = process.env[plan.productEnvKey];
+  if (!productId) {
+    throw new ValidationError(`Stripe product not configured for ${type}`);
+  }
+
+  const stripe = new (require('stripe').default)(process.env.STRIPE_SECRET_KEY!);
+
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+  // Create a pending Purchase record first so we can link it via metadata
+  const purchase = await prisma.purchase.create({
+    data: {
+      organisationId: org.id,
+      type: type as PurchaseType,
+      amountCents: plan.amountCents,
+      currency: 'EUR',
+      creditsGranted: plan.credits,
+      status: 'PENDING',
+    },
+  });
+
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ['card'],
+    line_items: [{
+      price_data: {
+        currency: 'eur',
+        product: productId,
+        unit_amount: plan.amountCents,
+      },
+      quantity: 1,
+    }],
+    mode: 'payment',
+    invoice_creation: {
+      enabled: true,
+      invoice_data: {
+        footer: 'VAT reverse charged — Article 196 Council Directive 2006/112/EC. VAT to be accounted for by the recipient. VAT ID: NL002317662B92.',
+      },
+    },
+    success_url: `${frontendUrl}/org/billing?success=1`,
+    cancel_url: `${frontendUrl}/org/billing`,
+    metadata: {
+      organisationId: org.id,
+      purchaseId: purchase.id,
+      purchaseType: type,
+      creditsGranted: String(plan.credits),
+    },
+    customer_email: org.email,
+    allow_promotion_codes: true,
+  });
+
+  // Save Stripe session ID on the purchase
+  await prisma.purchase.update({
+    where: { id: purchase.id },
+    data: { stripeSessionId: session.id },
+  });
+
+  res.json({ url: session.url });
 }));
 
 // =============================================================================
@@ -511,6 +766,8 @@ router.get('/settings', asyncHandler(async (req: Request, res: Response) => {
       name: org.name,
       email: org.email,
       oid: org.oid,
+      legalName: org.legalName,
+      vatNumber: org.vatNumber,
       createdAt: org.createdAt,
     },
   });
@@ -596,10 +853,12 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
     throw new NotFoundError('Project not found');
   }
 
-  // Check test project participant limit
-  if (project.isTestProject && project.maxParticipants !== null) {
-    if (project._count.participants >= project.maxParticipants) {
-      throw new ForbiddenError(`Test project is limited to ${project.maxParticipants} participants. Please purchase credits to create a full project.`);
+  // Check participant limit (test projects and paid projects with capacity set)
+  if (project.maxParticipants !== null && project._count.participants >= project.maxParticipants) {
+    if (project.isTestProject) {
+      throw new ForbiddenError(`Test project is limited to ${project.maxParticipants} participants. Upgrade to a full project to add more.`);
+    } else {
+      throw new ForbiddenError(`This project has reached its capacity of ${project.maxParticipants} participants. Use 1 credit to expand by 60 more.`);
     }
   }
 
@@ -612,7 +871,8 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
     throw new ValidationError('A participant with this email already exists in this project');
   }
 
-  // Create participant
+  // Create participant — token expires 180 days after project end
+  const tokenExpiresAt = new Date(project.endDate.getTime() + 180 * 24 * 60 * 60 * 1000);
   const participant = await prisma.participant.create({
     data: {
       projectId,
@@ -622,6 +882,7 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
       country,
       magicLinkToken: uuidv4(),
       magicLinkActive: true,
+      tokenExpiresAt,
     },
   });
 
@@ -734,11 +995,15 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
     (r) => r.firstName && r.lastName && r.email && r.country
   );
 
-  // Check test project participant limit
-  if (project.isTestProject && project.maxParticipants !== null) {
+  // Check participant limit for test and paid projects
+  if (project.maxParticipants !== null) {
     const remainingSlots = project.maxParticipants - project._count.participants;
     if (validRecords.length > remainingSlots) {
-      throw new ForbiddenError(`Test project can only add ${remainingSlots} more participant(s) (limit: ${project.maxParticipants}). Please purchase credits to create a full project.`);
+      if (project.isTestProject) {
+        throw new ForbiddenError(`Test project can only add ${remainingSlots} more participant(s) (limit: ${project.maxParticipants}). Upgrade to a full project to add more.`);
+      } else {
+        throw new ForbiddenError(`This project can only add ${remainingSlots} more participant(s) (capacity: ${project.maxParticipants}). Use 1 credit to expand by 60 more.`);
+      }
     }
   }
 
@@ -759,7 +1024,8 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
         continue;
       }
 
-      // Create participant
+      // Create participant — token expires 180 days after project end
+      const tokenExpiresAt = new Date(project.endDate.getTime() + 180 * 24 * 60 * 60 * 1000);
       const participant = await prisma.participant.create({
         data: {
           projectId,
@@ -769,6 +1035,7 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
           country: record.country,
           magicLinkToken: uuidv4(),
           magicLinkActive: true,
+          tokenExpiresAt,
         },
       });
 
@@ -824,13 +1091,14 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
     where: { id: participantId },
     include: {
       project: true,
-      documents: true,
+      documents: { include: { extraction: { select: { amount: true, currency: true, documentDate: true } } } },
       travelItems: {
         orderBy: { departureDate: 'asc' },
       },
       declarationsOnHonor: true,
       declarationsOfTravel: true,
       reimbursementSummary: true,
+      greenTravelDeclaration: true,
       changeLogEntries: {
         orderBy: { changedAt: 'desc' },
       },
@@ -846,21 +1114,161 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
     throw new ForbiddenError('Access denied');
   }
 
-  // Get country limit
+  // Applicable limit: individual override, else the country limit
   const countryLimit = await prisma.projectCountryLimit.findFirst({
     where: {
       projectId: participant.projectId,
       country: participant.country,
     },
   });
+  const effectiveLimit = getEffectiveLimit(participant, countryLimit);
+
+  // Helps the organiser decide a green travel extra: days travelled + hotel/meal receipts
+  const travelDays = summarizeTravelDays(participant.travelItems, participant.project.startDate, participant.project.endDate);
+  const greenTravelSuggestion = {
+    ...travelDays,
+    receipts: participant.documents
+      .filter((d) => d.documentType === 'HOTEL_INVOICE' || d.documentType === 'MEAL_RECEIPT')
+      .map((d) => ({
+        id: d.id,
+        renamedFilename: d.renamedFilename,
+        documentType: d.documentType,
+        amount: d.extraction?.amount ?? null,
+        currency: d.extraction?.currency ?? null,
+        documentDate: d.extraction?.documentDate ?? null,
+      })),
+  };
 
   res.json({
     participant: {
       ...participant,
-      maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
-      greenTravel: countryLimit?.greenTravel || false,
+      travelItems: sortTravelItemsByJourney(participant.travelItems),
+      maxReimbursementForCountry: effectiveLimit.maxReimbursement,
+      greenTravel: effectiveLimit.greenTravel,
+      countryMaxReimbursement: effectiveLimit.countryMax,
+      countryGreenTravel: effectiveLimit.countryGreen,
+      greenTravelSuggestion,
     },
   });
+}));
+
+/**
+ * PATCH /api/organisation/participants/:id/green-travel-extra
+ * The organiser decides the green travel extra (food + accommodation) for a
+ * participant. Always paid on top of the maximum; allowed at any stage except
+ * PAID; the participant is emailed when an amount changes.
+ */
+const greenTravelExtraSchema = z.object({
+  foodEur: z.number().min(0).nullable(),
+  accommodationEur: z.number().min(0).nullable(),
+  note: z.string().max(500).nullish(),
+});
+
+router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+  if (!participant) throw new NotFoundError('Participant not found');
+  if (participant.project.organisationId !== org.id) throw new ForbiddenError('Access denied');
+  if (participant.status === 'PAID') throw new ForbiddenError('This participant has already been paid');
+
+  const result = greenTravelExtraSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+
+  const food = result.data.foodEur == null ? null : Math.round(result.data.foodEur * 100) / 100;
+  const accommodation = result.data.accommodationEur == null ? null : Math.round(result.data.accommodationEur * 100) / 100;
+  const note = result.data.note?.trim() || null;
+  const foodChanged = (food ?? 0) !== (participant.greenTravelFoodEur ?? 0);
+  const accommodationChanged = (accommodation ?? 0) !== (participant.greenTravelAccommodationEur ?? 0);
+
+  const updated = await prisma.participant.update({
+    where: { id: participantId },
+    data: {
+      greenTravelFoodEur: food,
+      greenTravelAccommodationEur: accommodation,
+      greenTravelExtraNote: note,
+      greenTravelExtraUpdatedAt: new Date(),
+    },
+  });
+
+  for (const [field, changed, before, after] of [
+    ['food', foodChanged, participant.greenTravelFoodEur, food],
+    ['accommodation', accommodationChanged, participant.greenTravelAccommodationEur, accommodation],
+  ] as const) {
+    if (!changed) continue;
+    await prisma.changeLogEntry.create({
+      data: {
+        participantId,
+        userType: 'ORGANISATION',
+        fieldName: `greenTravelExtra.${field}`,
+        previousValue: String(before ?? ''),
+        newValue: String(after ?? ''),
+      },
+    });
+  }
+
+  const { getAiService } = await import('../../services/ai/index.js');
+  await getAiService().recalculateParticipantSummary(participantId);
+  const summary = await prisma.reimbursementSummary.findUnique({ where: { participantId } });
+
+  if (foodChanged || accommodationChanged) {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
+    getEmailService()
+      .sendGreenTravelExtra(
+        participant.email,
+        participant.firstName,
+        participant.project.name,
+        { foodEur: food ?? 0, accommodationEur: accommodation ?? 0, note, newTotalEur: summary?.amountToReimburse ?? 0 },
+        magicLink,
+        await projectEmailContext(participant.project)
+      )
+      .catch((err: unknown) => console.error('[Email] Failed to send green travel extra notification:', err));
+  }
+
+  res.json({
+    participant: {
+      greenTravelFoodEur: updated.greenTravelFoodEur,
+      greenTravelAccommodationEur: updated.greenTravelAccommodationEur,
+      greenTravelExtraNote: updated.greenTravelExtraNote,
+      greenTravelExtraUpdatedAt: updated.greenTravelExtraUpdatedAt,
+    },
+    reimbursementSummary: summary,
+  });
+}));
+
+/**
+ * GET /api/organisation/participants/:id/audit-pdf
+ * Generate and download the National Agency Audit PDF for a single approved participant.
+ * Only available once the participant's file has been approved (ADMIN_APPROVED or PAID).
+ */
+router.get('/participants/:id/audit-pdf', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true },
+  });
+
+  if (!participant) throw new NotFoundError('Participant not found');
+  if (participant.project.organisationId !== org.id) throw new ForbiddenError('Access denied');
+
+  if (participant.status !== 'ADMIN_APPROVED' && participant.status !== 'PAID') {
+    throw new ForbiddenError('Audit PDF can only be generated for approved participants');
+  }
+
+  const pdfBuffer = await generateAuditPdf(participantId);
+
+  const safeName = `${participant.firstName}_${participant.lastName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Audit_${safeName}.pdf"`);
+  res.setHeader('Content-Length', pdfBuffer.length);
+  res.send(pdfBuffer);
 }));
 
 /**
@@ -968,8 +1376,11 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     throw new ForbiddenError('Access denied');
   }
 
-  // Delete all existing findings
-  await prisma.aiReviewFinding.deleteMany({ where: { participantId } });
+  // Delete all existing findings and mark review as pending
+  await Promise.all([
+    prisma.aiReviewFinding.deleteMany({ where: { participantId } }),
+    prisma.participant.update({ where: { id: participantId }, data: { aiReviewStatus: AiReviewStatus.PENDING } }),
+  ]);
 
   // Check if there's enough data to review
   if (participant.travelItems.length === 0 && participant.documents.length === 0) {
@@ -977,10 +1388,12 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     return;
   }
 
-  // Get country limit
+  participant.travelItems = sortTravelItemsByJourney(participant.travelItems);
+
   const countryLimit = await prisma.projectCountryLimit.findFirst({
     where: { projectId: participant.projectId, country: participant.country },
   });
+  const effectiveLimit = getEffectiveLimit(participant, countryLimit);
 
   const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
   const findings = await generateParticipantReview({
@@ -993,7 +1406,9 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     projectCountry: participant.project.country,
     projectStartDate: participant.project.startDate.toISOString().split('T')[0],
     projectEndDate: participant.project.endDate.toISOString().split('T')[0],
-    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || 0,
+    maxReimbursementForCountry: effectiveLimit.maxReimbursement,
+    greenTravel: effectiveLimit.greenTravel,
+    greenTravelExtra: { foodEur: participant.greenTravelFoodEur, accommodationEur: participant.greenTravelAccommodationEur, note: participant.greenTravelExtraNote },
     travelItems: participant.travelItems.map((item) => ({
       id: item.id,
       modeOfTransport: item.modeOfTransport,
@@ -1015,12 +1430,15 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       priceMissing: item.priceMissing,
       routeMatchesCountry: item.routeMatchesCountry,
       excludedFromReimbursement: item.excludedFromReimbursement,
+      exclusionReason: item.exclusionReason,
       numberOfPassengers: item.numberOfPassengers,
       participantPortion: item.participantPortion,
       distanceKm: item.distanceKm,
       validationWarnings: item.validationWarnings,
       documentId: item.documentId,
       amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
+      isRoundTrip: item.isRoundTrip,
+      bookingId: item.bookingId,
       luggageAmount: item.luggageAmount,
       luggageAmountEur: item.luggageAmountEur,
       purchaseDateAutoFilled: item.purchaseDateAutoFilled,
@@ -1087,6 +1505,9 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
   const severityOrder: Record<string, number> = { critical: 0, important: 1, info: 2 };
   storedFindings.sort((a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3));
 
+  // Mark review as complete
+  await prisma.participant.update({ where: { id: participantId }, data: { aiReviewStatus: AiReviewStatus.COMPLETE } });
+
   res.json({ findings: storedFindings });
 }));
 
@@ -1100,6 +1521,9 @@ const updateParticipantSchema = z.object({
   email: z.string().email().optional(),
   country: z.string().min(1).optional(),
   notesInternal: z.string().optional(),
+  // Individual limit overrides (null = back to the country default)
+  maxReimbursementOverride: z.number().min(0).nullable().optional(),
+  greenTravelOverride: z.boolean().nullable().optional(),
 });
 
 router.patch('/participants/:id', asyncHandler(async (req: Request, res: Response) => {
@@ -1128,6 +1552,28 @@ router.patch('/participants/:id', asyncHandler(async (req: Request, res: Respons
     where: { id: participantId },
     data: result.data,
   });
+
+  // Anything that changes the applicable limit must recompute the payable
+  // amount and leave a trace in the change log.
+  const limitFields = ['country', 'maxReimbursementOverride', 'greenTravelOverride'] as const;
+  const changedLimitFields = limitFields.filter(
+    (f) => f in result.data && (result.data as Record<string, unknown>)[f] !== (participant as Record<string, unknown>)[f]
+  );
+  if (changedLimitFields.length > 0) {
+    for (const field of changedLimitFields) {
+      await prisma.changeLogEntry.create({
+        data: {
+          participantId,
+          userType: 'ORGANISATION',
+          fieldName: `participant.${field}`,
+          previousValue: String((participant as Record<string, unknown>)[field] ?? ''),
+          newValue: String((result.data as Record<string, unknown>)[field] ?? ''),
+        },
+      });
+    }
+    const { getAiService } = await import('../../services/ai/index.js');
+    await getAiService().recalculateParticipantSummary(participantId);
+  }
 
   res.json({ participant: updated });
 }));
@@ -1241,16 +1687,62 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
     participant.email,
     participant.firstName,
     participant.project.name,
-    magicLink
+    magicLink,
+    await projectEmailContext(participant.project)
   );
 
-  // Update last sent timestamp
+  // Update last sent timestamp and refresh token expiry (180 days from project end, or 180 days from now if past end)
+  const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
   await prisma.participant.update({
     where: { id: participantId },
-    data: { lastMagicLinkSentAt: new Date() },
+    data: { lastMagicLinkSentAt: new Date(), tokenExpiresAt: newExpiry },
   });
 
   res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/:id/rebuild-trips
+ * Rebuild a participant's trips from their current documents: existing trips
+ * and bookings are deleted, documents are kept, the AI runs again. For
+ * participants who are not yet approved.
+ */
+router.post('/participants/:id/rebuild-trips', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+
+  const participant = await prisma.participant.findUnique({
+    where: { id: participantId },
+    include: { project: true, _count: { select: { documents: true } } },
+  });
+  if (!participant) throw new NotFoundError('Participant not found');
+  if (participant.project.organisationId !== org.id) throw new ForbiddenError('Access denied');
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('Trips can no longer be rebuilt after approval');
+  }
+  if (participant._count.documents === 0) throw new ValidationError('This participant has no documents to rebuild from');
+
+  const { JourneyConsolidationService } = await import('../../services/ai/journeyConsolidationService.js');
+  const result = await new JourneyConsolidationService().consolidateParticipantJourney(participantId, { fresh: true });
+
+  const { getAiService } = await import('../../services/ai/index.js');
+  await getAiService().recalculateParticipantSummary(participantId);
+
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId,
+      userType: 'ORGANISATION',
+      fieldName: 'travelItems.rebuilt',
+      previousValue: '',
+      newValue: result.success ? `Rebuilt ${result.travelItems.length} trip(s) from documents` : `Rebuild failed: ${result.message}`,
+    },
+  });
+
+  if (!result.success) {
+    res.status(422).json({ success: false, message: result.message, unreadableDocuments: result.unreadableDocuments ?? [] });
+    return;
+  }
+  res.json({ success: true, travelItems: result.travelItems.length, unreadableDocuments: result.unreadableDocuments ?? [] });
 }));
 
 /**
@@ -1330,7 +1822,8 @@ router.post('/participants/:id/reset', asyncHandler(async (req: Request, res: Re
     participant.email,
     participant.firstName,
     participant.project.name,
-    magicLink
+    magicLink,
+    await projectEmailContext(participant.project)
   );
   await prisma.participant.update({
     where: { id: participantId },
@@ -1374,12 +1867,14 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
         participant.email,
         participant.firstName,
         participant.project.name,
-        magicLink
+        magicLink,
+        await projectEmailContext(participant.project)
       );
 
+      const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
       await prisma.participant.update({
         where: { id },
-        data: { lastMagicLinkSentAt: new Date() },
+        data: { lastMagicLinkSentAt: new Date(), tokenExpiresAt: newExpiry },
       });
 
       results.push({ id, success: true });
@@ -1426,7 +1921,8 @@ router.post('/participants/:id/send-reminder', asyncHandler(async (req: Request,
     participant.firstName,
     participant.project.name,
     magicLink,
-    participant.project.organisation.name
+    participant.project.organisation.name,
+    await projectEmailContext(participant.project)
   );
 
   res.json({ success: true });
@@ -1466,7 +1962,8 @@ router.post('/participants/send-reminders-bulk', asyncHandler(async (req: Reques
         participant.firstName,
         participant.project.name,
         magicLink,
-        participant.project.organisation.name
+        participant.project.organisation.name,
+        await projectEmailContext(participant.project)
       );
 
       results.push({ id, success: true });
@@ -1687,6 +2184,7 @@ const orgUpdateTravelItemSchema = z.object({
   amountEur: z.number().optional(),
   comment: z.string().nullable().optional(),
   excludedFromReimbursement: z.boolean().optional(),
+  exclusionReason: z.enum(['HOSTING_ORG_PAID', 'OTHER']).nullable().optional(),
   exchangeRateOverride: z.number().nullable().optional(),
   companyName: z.string().nullable().optional(),
 });
@@ -1757,10 +2255,9 @@ router.patch('/participants/:id/travel-items/:itemId', asyncHandler(async (req: 
       // Manual override: amountEur = amountOriginal * overrideRate
       updateData.amountEur = current.amountOriginal * result.data.exchangeRateOverride;
     } else if (result.data.exchangeRateOverride === null && current.amountOriginal != null && current.currencyOriginal !== 'EUR') {
-      // Cleared override: recalculate with auto rate
-      const { getAiService: getAi } = await import('../../services/ai/index.js');
-      const ai = getAi();
-      updateData.amountEur = await ai.convertToEur(current.amountOriginal, current.currencyOriginal, current.purchaseDate ?? undefined);
+      // Cleared override: recalculate using the project's exchange-rate mode + overrides
+      const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
+      updateData.amountEur = await convertToEurForParticipant(participantId, current.amountOriginal, current.currencyOriginal, current.purchaseDate ?? undefined);
     }
   }
 
@@ -1835,10 +2332,19 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
   if (!req.file) throw new ValidationError('No file uploaded');
 
   const documentType = (req.body.documentType as string) || 'OTHER';
+
+  // Repair PDFs with junk before the header; refuse files that aren't PDFs at all
+  let fileBuffer = req.file.buffer;
+  if (req.file.mimetype.includes('pdf')) {
+    const sanitized = sanitizePdfBuffer(fileBuffer);
+    if (!sanitized) throw new ValidationError("This file isn't a readable PDF — please re-download it or upload a screenshot or photo instead.");
+    fileBuffer = sanitized.buffer;
+  }
+
   const storage = getStorageService();
   const storedPath = `participants/${participantId}/documents/${uuidv4()}-${req.file.originalname}`;
   await storage.store(
-    { buffer: req.file.buffer, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size },
+    { buffer: fileBuffer, originalname: req.file.originalname, mimetype: req.file.mimetype, size: fileBuffer.length },
     storedPath
   );
 
@@ -1849,7 +2355,7 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
       originalFilename: req.file.originalname,
       renamedFilename: req.file.originalname,
       mimeType: req.file.mimetype,
-      fileSize: req.file.size,
+      fileSize: fileBuffer.length,
       documentType: documentType as DocumentType,
     },
   });
@@ -2121,16 +2627,19 @@ router.post('/projects/:id/country-limits', ensureOwnProject, asyncHandler(async
     },
   });
 
-  // Update reimbursement summaries for participants from this country
+  // The cap changed: recompute each affected participant's max AND payable
+  // amount through the canonical calculator (participants with an individual
+  // override are unaffected by design).
   const participants = await prisma.participant.findMany({
     where: { projectId, country },
+    select: { id: true },
   });
-
-  for (const p of participants) {
-    await prisma.reimbursementSummary.updateMany({
-      where: { participantId: p.id },
-      data: { maxReimbursementAllowed: maxReimbursementAmount },
-    });
+  if (participants.length > 0) {
+    const { getAiService } = await import('../../services/ai/index.js');
+    const aiService = getAiService();
+    for (const p of participants) {
+      await aiService.recalculateParticipantSummary(p.id);
+    }
   }
 
   res.json(limit);
@@ -2143,11 +2652,20 @@ router.post('/projects/:id/country-limits', ensureOwnProject, asyncHandler(async
 router.delete('/projects/:id/country-limits/:country', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
   const { id: projectId, country } = req.params;
 
-  await prisma.projectCountryLimit.delete({
-    where: {
-      projectId_country: { projectId, country },
-    },
+  // Never orphan participants: their cap/green-travel status comes from this row
+  const inUse = await prisma.participant.count({ where: { projectId, country } });
+  if (inUse > 0) {
+    throw new ValidationError(
+      `${inUse} participant(s) still use "${country}" — change their country first, then remove it`
+    );
+  }
+
+  const existing = await prisma.projectCountryLimit.findUnique({
+    where: { projectId_country: { projectId, country } },
   });
+  if (!existing) throw new NotFoundError('Country limit not found');
+
+  await prisma.projectCountryLimit.delete({ where: { id: existing.id } });
 
   res.json({ success: true });
 }));
@@ -2179,29 +2697,23 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
   const headers = [
     'First Name',
     'Last Name',
-    'Email',
     'Country',
-    'Status',
-    'Total EUR',
-    'Max Reimbursement',
-    'Amount to Reimburse',
-    'IBAN',
-    'Account Holder',
-    'BIC',
+    'Email',
+    'Reimbursement Status',
+    'Reimbursement Amount (EUR)',
+    'Travel (EUR)',
+    'Green travel extra (EUR)',
   ];
 
   const rows = project.participants.map((p: any) => [
     p.firstName,
     p.lastName,
-    p.email,
     p.country,
+    p.email,
     p.status,
-    p.reimbursementSummary?.totalEur || 0,
-    p.reimbursementSummary?.maxReimbursementAllowed || 0,
-    p.reimbursementSummary?.amountToReimburse || 0,
-    p.bankAccountIban || '',
-    p.bankAccountHolderName || '',
-    p.bankAccountBic || '',
+    p.reimbursementSummary?.amountToReimburse ?? '',
+    p.reimbursementSummary?.totalEur ?? '',
+    p.reimbursementSummary?.greenTravelExtraEur ?? '',
   ]);
 
   const csvContent = [
@@ -2212,6 +2724,225 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-z0-9]/gi, '_')}_participants.csv"`);
   res.send(csvContent);
+}));
+
+/**
+ * GET /api/organisation/projects/:id/export/audit-zip
+ * Download a ZIP of audit PDFs for all approved/paid participants in a project
+ */
+router.get('/projects/:id/export/audit-zip', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      participants: {
+        where: { status: { in: ['ADMIN_APPROVED', 'PAID'] } },
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      },
+    },
+  });
+
+  if (!project) throw new NotFoundError('Project not found');
+
+  if (project.participants.length === 0) {
+    res.status(404).json({ error: 'No approved participants to export' });
+    return;
+  }
+
+  const safeProjectName = project.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="Audit_${safeProjectName}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.pipe(res);
+
+  for (const participant of project.participants) {
+    try {
+      const pdfBuffer = await generateAuditPdf(participant.id);
+      const safeName = `${participant.lastName}_${participant.firstName}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+      archive.append(pdfBuffer, { name: `Audit_${safeName}.pdf` });
+    } catch (err) {
+      console.error(`audit-zip: failed to generate PDF for participant ${participant.id}:`, err);
+      // Skip this participant and continue with the rest
+    }
+  }
+
+  await archive.finalize();
+}));
+
+/**
+ * POST /api/organisation/projects/:id/expand-capacity
+ * Expand a full project's participant capacity by 60, consuming 1 credit
+ */
+router.post('/projects/:id/expand-capacity', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new NotFoundError('Project not found');
+  if (project.isTestProject) throw new ValidationError('Upgrade to a full project before expanding capacity.');
+
+  const freshOrg = await prisma.organisation.findUnique({ where: { id: org.id } });
+  if (!freshOrg) throw new NotFoundError('Organisation not found');
+  if (freshOrg.projectCredits < 1) throw new ForbiddenError('No credits available. Purchase credits to expand capacity.');
+
+  const currentMax = project.maxParticipants ?? 60;
+  const newMax = currentMax + 60;
+
+  await prisma.$transaction([
+    prisma.organisation.update({
+      where: { id: org.id },
+      data: { projectCredits: freshOrg.projectCredits - 1 },
+    }),
+    prisma.project.update({
+      where: { id: projectId },
+      data: { maxParticipants: newMax },
+    }),
+  ]);
+
+  res.json({ success: true, newLimit: newMax, message: `Capacity expanded to ${newMax} participants. 1 credit used.` });
+}));
+
+/**
+ * POST /api/organisation/projects/:id/upgrade-from-test
+ * Convert a test project to a full project, consuming 1 credit
+ */
+router.post('/projects/:id/upgrade-from-test', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const projectId = req.params.id;
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new NotFoundError('Project not found');
+  if (!project.isTestProject) throw new ValidationError('This project is not a test project');
+
+  // Refresh org for latest credit count
+  const freshOrg = await prisma.organisation.findUnique({ where: { id: org.id } });
+  if (!freshOrg) throw new NotFoundError('Organisation not found');
+  if (freshOrg.projectCredits < 1) throw new ForbiddenError('No credits available to upgrade this project');
+
+  await prisma.$transaction([
+    prisma.organisation.update({
+      where: { id: org.id },
+      data: { projectCredits: freshOrg.projectCredits - 1 },
+    }),
+    prisma.project.update({
+      where: { id: projectId },
+      data: { isTestProject: false, maxParticipants: null, creditSource: 'SINGLE' },
+    }),
+  ]);
+
+  res.json({ success: true, message: 'Project upgraded to full project. 1 credit used.' });
+}));
+
+// =============================================================================
+// AFFILIATE DASHBOARD
+// =============================================================================
+
+/**
+ * GET /api/organisation/affiliate
+ * Get affiliate dashboard data (affiliate orgs only)
+ */
+router.get('/affiliate', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  if (!org.isAffiliate) {
+    res.status(403).json({ error: 'This organisation is not an affiliate' });
+    return;
+  }
+
+  const links = await prisma.affiliateLink.findMany({
+    where: { affiliateId: org.id },
+    include: {
+      customer: { select: { name: true } },
+      commissions: {
+        include: {
+          purchase: { select: { amountCents: true, completedAt: true, type: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const linkedCustomers = links.map((link) => ({
+    orgName: link.customer.name,
+    linkedAt: link.createdAt,
+    purchases: link.commissions.map((c) => ({
+      purchaseId: c.purchaseId,
+      completedAt: c.purchase.completedAt,
+      purchaseType: c.purchase.type,
+      amountCents: c.purchase.amountCents,
+      commissionCents: c.amountCents,
+      commissionStatus: c.status,
+    })),
+  }));
+
+  const allCommissions = links.flatMap((l) => l.commissions);
+  const totalEarnedCents = allCommissions
+    .filter((c) => c.status !== 'REVERSED')
+    .reduce((s, c) => s + c.amountCents, 0);
+  const pendingBalanceCents = allCommissions
+    .filter((c) => c.status === 'PENDING')
+    .reduce((s, c) => s + c.amountCents, 0);
+
+  res.json({
+    affiliateCode: org.affiliateCode,
+    commissionRate: org.commissionRate,
+    affiliateActive: org.affiliateActive,
+    linkedCustomers,
+    totalEarnedCents,
+    pendingBalanceCents,
+    minPayoutCents: 10000,
+  });
+}));
+
+/**
+ * POST /api/organisation/affiliate/request-payout
+ * Request a payout (min €100 pending balance)
+ */
+router.post('/affiliate/request-payout', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  if (!org.isAffiliate) {
+    res.status(403).json({ error: 'This organisation is not an affiliate' });
+    return;
+  }
+
+  const links = await prisma.affiliateLink.findMany({
+    where: { affiliateId: org.id },
+    include: { commissions: { where: { status: 'PENDING' } } },
+  });
+  const pendingCents = links.flatMap((l) => l.commissions).reduce((s, c) => s + c.amountCents, 0);
+
+  if (pendingCents < 10000) {
+    res.status(400).json({
+      error: `Minimum payout is €100. Your pending balance is €${(pendingCents / 100).toFixed(2)}.`,
+    });
+    return;
+  }
+
+  await getEmailService().send({
+    to: 'micky@easyreimburse.ai',
+    subject: `Affiliate Payout Request — ${org.name} (€${(pendingCents / 100).toFixed(2)})`,
+    text: [
+      'Affiliate payout request received.',
+      '',
+      `Organisation: ${org.name}`,
+      `Email: ${org.email}`,
+      `Affiliate Code: ${org.affiliateCode ?? '—'}`,
+      `Pending Balance: €${(pendingCents / 100).toFixed(2)}`,
+      '',
+      'To confirm this payout, go to the Super Admin → Affiliates panel.',
+    ].join('\n'),
+    html: `<p>Payout request from <strong>${org.name}</strong> (${org.email}), code <code>${org.affiliateCode ?? '—'}</code>.</p><p>Pending: <strong>€${(pendingCents / 100).toFixed(2)}</strong></p><p>Confirm via the Super Admin → Affiliates panel.</p>`,
+  });
+
+  console.log(`[Affiliate] Payout request from ${org.name} (${org.email}): €${(pendingCents / 100).toFixed(2)}`);
+
+  res.json({
+    success: true,
+    pendingBalanceCents: pendingCents,
+    message: 'Your payout request has been submitted. We will process it within a few business days.',
+  });
 }));
 
 export default router;

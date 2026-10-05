@@ -3,7 +3,7 @@ const API_BASE = import.meta.env.VITE_API_URL
   : '/api';
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public payload?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
   }
@@ -12,7 +12,7 @@ export class ApiError extends Error {
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, data.error?.message || 'An error occurred');
+    throw new ApiError(response.status, data.error?.message || data.message || 'An error occurred', data);
   }
   return response.json();
 }
@@ -139,7 +139,7 @@ export const adminApi = {
   },
 
   deleteCountryLimit: async (projectId: string, country: string) => {
-    const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits/${country}`, {
+    const res = await fetch(`${API_BASE}/admin/projects/${projectId}/country-limits/${encodeURIComponent(country)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
@@ -339,6 +339,16 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  // Correct a mis-detected document type (e.g. a hotel invoice detected as "Other")
+  updateDocumentType: async (token: string, documentId: string, documentType: DocumentType) => {
+    const res = await fetch(`${API_BASE}/participant/documents/${documentId}?token=${token}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentType }),
+    });
+    return handleResponse<Document>(res);
+  },
+
   getDocumentUrl: async (token: string, documentId: string) => {
     const res = await fetch(`${API_BASE}/participant/documents/${documentId}/url?token=${token}`);
     return handleResponse<{ url: string }>(res);
@@ -421,9 +431,11 @@ export const participantApi = {
     return handleResponse<{ noReimbursement: boolean }>(res);
   },
 
-  markComplete: async (token: string) => {
+  markComplete: async (token: string, body?: { greenTravelSignature?: string }) => {
     const res = await fetch(`${API_BASE}/participant/mark-complete?token=${token}`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
     });
     return handleResponse<{ success: boolean } | { success: false; missingItems: MissingItem[] }>(res);
   },
@@ -437,8 +449,8 @@ export const participantApi = {
    * Consolidate all uploaded documents into a coherent journey
    * This should be called when moving from Step 1 (Upload) to Step 2 (Review)
    */
-  consolidateJourney: async (token: string) => {
-    const res = await fetch(`${API_BASE}/participant/consolidate?token=${token}`, {
+  consolidateJourney: async (token: string, options?: { fresh?: boolean }) => {
+    const res = await fetch(`${API_BASE}/participant/consolidate?token=${token}${options?.fresh ? '&fresh=1' : ''}`, {
       method: 'POST',
     });
     return handleResponse<ConsolidationResult>(res);
@@ -515,6 +527,15 @@ export const participantApi = {
       method: 'DELETE',
     });
     return handleResponse<{ success: boolean }>(res);
+  },
+
+  updateDeclarationOfTravel: async (token: string, declarationId: string, data: { travelItemId?: string | null }) => {
+    const res = await fetch(`${API_BASE}/participant/declarations-of-travel/${declarationId}?token=${token}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<DeclarationOfTravel>(res);
   },
 
   // Dissemination Activities
@@ -674,13 +695,13 @@ export const organisationApi = {
     return handleResponse<{ message: string }>(res);
   },
 
-  updateProfile: async (data: { name?: string; email?: string }) => {
+  updateProfile: async (data: { name?: string; email?: string; legalName?: string | null; vatNumber?: string | null }) => {
     const res = await fetch(`${API_BASE}/auth/profile`, {
       method: 'PATCH',
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ message: string; organisation: { id: string; name: string; email: string } }>(res);
+    return handleResponse<{ message: string; organisation: { id: string; name: string; email: string; legalName?: string | null; vatNumber?: string | null } }>(res);
   },
 
   // Dashboard
@@ -721,7 +742,49 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ message: string; project: OrgProject }>(res);
+    return handleResponse<{ message: string; project: OrgProject; recalc?: ProjectRecalcResult }>(res);
+  },
+
+  // (Re)send the "project ended — build your trips" email to unsubmitted participants
+  notifyProjectEnded: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}/notify-ended`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ sent: number }>(res);
+  },
+
+  // Exchange-rate per-currency overrides
+  getProjectCurrencyRates: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}/currency-rates`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<ProjectCurrencyRates>(res);
+  },
+
+  updateProjectCurrencyRates: async (id: string, overrides: { currencyCode: string; rate: number }[]) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${id}/currency-rates`, {
+      method: 'PUT',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ overrides }),
+    });
+    return handleResponse<{ message: string; recalc: ProjectRecalcResult }>(res);
+  },
+
+  // Organiser-decided green travel extra for one participant (emails the participant)
+  setGreenTravelExtra: async (
+    participantId: string,
+    data: { foodEur: number | null; accommodationEur: number | null; note?: string | null }
+  ) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/green-travel-extra`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{
+      participant: { greenTravelFoodEur: number | null; greenTravelAccommodationEur: number | null; greenTravelExtraNote: string | null; greenTravelExtraUpdatedAt: string | null };
+      reimbursementSummary: ReimbursementSummary | null;
+    }>(res);
   },
 
   deleteProject: async (id: string) => {
@@ -738,6 +801,20 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
     });
     return handleResponse<OrgBillingData>(res);
+  },
+
+  // Affiliate
+  getAffiliate: async () => {
+    const res = await fetch(`${API_BASE}/organisation/affiliate`, { headers: getOrgAuthHeaders() });
+    return handleResponse<AffiliateDashboardData>(res);
+  },
+
+  requestAffiliatePayout: async () => {
+    const res = await fetch(`${API_BASE}/organisation/affiliate/request-payout`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; pendingBalanceCents: number; message: string }>(res);
   },
 
   // Settings
@@ -798,7 +875,7 @@ export const organisationApi = {
     return handleResponse<{ participant: OrgParticipantDetail }>(res);
   },
 
-  updateParticipant: async (id: string, data: Partial<{ firstName: string; lastName: string; email: string; country: string; notesInternal: string }>) => {
+  updateParticipant: async (id: string, data: Partial<{ firstName: string; lastName: string; email: string; country: string; notesInternal: string; maxReimbursementOverride: number | null; greenTravelOverride: boolean | null }>) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${id}`, {
       method: 'PATCH',
       headers: getOrgAuthHeaders(),
@@ -813,6 +890,15 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
     });
     return handleResponse<{ success: boolean }>(res);
+  },
+
+  // Rebuild a participant's trips from their documents (deletes current trips, keeps documents)
+  rebuildParticipantTrips: async (id: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${id}/rebuild-trips`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; travelItems: number; unreadableDocuments: { docId: string; filename: string }[] }>(res);
   },
 
   resetParticipant: async (id: string) => {
@@ -830,6 +916,25 @@ export const organisationApi = {
       body: JSON.stringify({ ids }),
     });
     return handleResponse<{ success: boolean; deletedCount: number }>(res);
+  },
+
+  downloadAuditPdf: async (participantId: string, participantName: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/audit-pdf`, {
+      headers: getOrgAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || 'Failed to generate audit PDF');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Audit_${participantName.replace(/\s+/g, '_')}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 
   sendMagicLink: async (participantId: string) => {
@@ -1024,18 +1129,76 @@ export const organisationApi = {
   },
 
   deleteCountryLimit: async (projectId: string, country: string) => {
-    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits/${country}`, {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/country-limits/${encodeURIComponent(country)}`, {
       method: 'DELETE',
       headers: getOrgAuthHeaders(),
     });
     return handleResponse<{ success: boolean }>(res);
   },
 
+  // Stripe
+  createCheckoutSession: async (type: 'SINGLE' | 'PACK_5' | 'PACK_10') => {
+    const res = await fetch(`${API_BASE}/organisation/stripe/create-checkout-session`, {
+      method: 'POST',
+      headers: { ...getOrgAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type }),
+    });
+    return handleResponse<{ url: string }>(res);
+  },
+
+  upgradeTestProject: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/upgrade-from-test`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; message: string }>(res);
+  },
+
+  expandProjectCapacity: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/expand-capacity`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ success: boolean; newLimit: number; message: string }>(res);
+  },
+
   // Export
-  exportProjectCsv: (projectId: string) => {
-    const url = `${API_BASE}/organisation/projects/${projectId}/export/csv`;
-    // Open in new tab - CSV export handles auth via token in URL or session
-    window.open(url, '_blank');
+  exportProjectCsv: async (projectId: string, projectName: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/export/csv`, {
+      headers: getOrgAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || 'Failed to export CSV');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${projectName.replace(/[^a-z0-9]/gi, '_')}_participants.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+
+  exportAuditZip: async (projectId: string, projectName: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/export/audit-zip`, {
+      headers: getOrgAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || 'Failed to export audit ZIP');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Audit_${projectName.replace(/[^a-z0-9]/gi, '_')}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 };
 
@@ -1045,6 +1208,8 @@ export interface OrganisationInfo {
   name: string;
   email: string;
   oid?: string;
+  legalName?: string | null;
+  vatNumber?: string | null;
   projectCredits: number;
   hasAnnualLicense: boolean;
   annualLicenseExpiresAt?: string;
@@ -1056,9 +1221,6 @@ export interface OrgCreditStatus {
   available: number;
   canCreateProject: boolean;
   reason?: string;
-  hasAnnualLicense: boolean;
-  annualLicenseExpired: boolean;
-  annualLicenseExpiresAt?: string;
 }
 
 export interface OrgProject {
@@ -1071,6 +1233,14 @@ export interface OrgProject {
   endDate: string;
   disseminationEnabled: boolean;
   carRatePerKm: number;
+  exchangeRateMode?: ExchangeRateMode;
+  exchangeRateManualDate?: string | null;
+  aiAnalysisUnlocked?: boolean;
+  participantInstructions?: string | null;
+  documentDeadline?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  requireGreenTravelDeclaration?: boolean;
   participantCount: number;
   creditSource?: string;
   isTestProject: boolean;
@@ -1084,8 +1254,30 @@ export interface OrgProjectDetail extends OrgProject {
   participants: { id: string; firstName: string; lastName: string; email: string; country: string; status: string; createdAt: string }[];
 }
 
+export interface GreenTravelDeclarationSummary {
+  id: string;
+  signedAt: string;
+  documentId: string | null;
+}
+
+/** Organiser-decided green travel extra (food + accommodation), paid on top of the maximum */
+export interface GreenTravelExtra {
+  foodEur: number;
+  accommodationEur: number;
+  note: string | null;
+  updatedAt: string | null;
+}
+
+export interface GreenTravelSuggestion {
+  totalTravelDays: number;
+  extraTravelDays: number;
+  firstTravelDate: string | null;
+  lastTravelDate: string | null;
+  receipts: { id: string; renamedFilename: string; documentType: DocumentType; amount: number | null; currency: string | null; documentDate: string | null }[];
+}
+
 export interface OrgDashboardData {
-  organisation: { id: string; name: string; email: string };
+  organisation: { id: string; name: string; email: string; isAffiliate?: boolean; affiliateActive?: boolean };
   credits: OrgCreditStatus;
   stats: { projectCount: number; totalParticipants: number };
   projects: OrgProject[];
@@ -1107,7 +1299,48 @@ export interface OrgPurchase {
 export interface OrgBillingData {
   credits: OrgCreditStatus & { projectCredits: number };
   purchases: OrgPurchase[];
+  organisation?: { isAffiliate: boolean; affiliateActive: boolean };
 }
+
+export interface AffiliateCustomerPurchase {
+  purchaseId: string;
+  completedAt: string | null;
+  purchaseType: string;
+  amountCents: number;
+  commissionCents: number;
+  commissionStatus: 'PENDING' | 'PAID' | 'REVERSED';
+}
+
+export interface AffiliateCustomer {
+  orgName: string;
+  linkedAt: string;
+  purchases: AffiliateCustomerPurchase[];
+}
+
+export interface AffiliateDashboardData {
+  affiliateCode: string | null;
+  commissionRate: number | null;
+  affiliateActive: boolean;
+  linkedCustomers: AffiliateCustomer[];
+  totalEarnedCents: number;
+  pendingBalanceCents: number;
+  minPayoutCents: number;
+}
+
+export interface SuperAdminAffiliate {
+  id: string;
+  name: string;
+  email: string;
+  affiliateCode: string | null;
+  affiliateActive: boolean;
+  commissionRate: number | null;
+  linkedCustomerCount: number;
+  totalEarnedCents: number;
+  pendingBalanceCents: number;
+  createdAt: string;
+}
+
+export type ExchangeRateMode = 'PURCHASE_DATE' | 'PROJECT_END_DATE' | 'MANUAL_DATE';
 
 export interface CreateOrgProjectData {
   name: string;
@@ -1117,6 +1350,28 @@ export interface CreateOrgProjectData {
   startDate: string;
   endDate: string;
   carRatePerKm?: number;
+  exchangeRateMode?: ExchangeRateMode;
+  exchangeRateManualDate?: string | null;
+  aiAnalysisUnlocked?: boolean;
+  participantInstructions?: string | null;
+  documentDeadline?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  requireGreenTravelDeclaration?: boolean;
+}
+
+export interface ProjectRecalcResult {
+  participantsUpdated: number;
+  itemsUpdated: number;
+  itemsSkippedPaid: number;
+  itemsSkippedOverride: number;
+}
+
+export interface ProjectCurrencyRates {
+  exchangeRateMode: ExchangeRateMode;
+  exchangeRateManualDate: string | null;
+  overrides: { currencyCode: string; rate: number }[];
+  detectedCurrencies: { currencyCode: string; effectiveRate: number; hasOverride: boolean }[];
 }
 
 export interface OrgParticipant {
@@ -1143,6 +1398,7 @@ export interface OrgParticipant {
 export interface OrgParticipantDetail extends OrgParticipant {
   magicLinkToken: string;
   magicLinkActive: boolean;
+  aiReviewStatus: 'NOT_STARTED' | 'PENDING' | 'COMPLETE' | 'FAILED';
   bankAccountIban?: string;
   bankAccountHolderName?: string;
   bankAccountBic?: string;
@@ -1158,8 +1414,20 @@ export interface OrgParticipantDetail extends OrgParticipant {
   declarationsOnHonor: Declaration[];
   declarationsOfTravel: DeclarationOfTravel[];
   changeLogEntries: ChangeLogEntry[];
+  /** Effective values (individual override if set, else the country limit) */
   maxReimbursementForCountry?: number;
   greenTravel?: boolean;
+  /** Raw overrides (null = country default) and the country defaults themselves */
+  maxReimbursementOverride?: number | null;
+  greenTravelOverride?: boolean | null;
+  countryMaxReimbursement?: number;
+  countryGreenTravel?: boolean;
+  greenTravelFoodEur?: number | null;
+  greenTravelAccommodationEur?: number | null;
+  greenTravelExtraNote?: string | null;
+  greenTravelExtraUpdatedAt?: string | null;
+  greenTravelSuggestion?: GreenTravelSuggestion;
+  greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
   project: {
     id: string;
     name: string;
@@ -1176,6 +1444,8 @@ export interface ConsolidationResult {
   message: string;
   travelItems: TravelItem[];
   warnings: string[];
+  /** Files the AI could not read; the analysis ran without them */
+  unreadableDocuments?: { docId: string; filename: string }[];
   missingDocuments?: { type: string; description: string }[];
   documentLinks?: { invoiceDocId: string; boardingPassDocId: string; reason: string }[];
 }
@@ -1322,6 +1592,7 @@ export interface ReimbursementSummary {
   totalEur: number;
   maxReimbursementAllowed: number;
   amountToReimburse: number;
+  greenTravelExtraEur?: number;
   adminNotes?: string;
   aiCheckOk: boolean;
   adminApproved: boolean;
@@ -1349,6 +1620,10 @@ export type DocumentType =
   | 'FUEL_RECEIPT'
   | 'GREEN_TRAVEL_DECLARATION'
   | 'HOTEL_INVOICE'
+  | 'MEAL_RECEIPT'
+  | 'BANK_TRANSACTION'
+  | 'LUGGAGE_INVOICE'
+  | 'INTERRAIL_PASS'
   | 'OTHER';
 
 export interface TravelItem {
@@ -1375,6 +1650,7 @@ export interface TravelItem {
   priceMissing?: boolean;
   // Round-trip bookings
   isRoundTrip?: boolean;
+  bookingId?: string | null;  // Shared by all legs of the same booking (round-trip / multi-leg)
   tripGroupId?: string;  // Legacy
   priceAllocation?: number;  // Legacy
   totalGroupPrice?: number;  // Legacy
@@ -1397,6 +1673,7 @@ export interface TravelItem {
   checked?: boolean;
   // Exclusion from reimbursement
   excludedFromReimbursement?: boolean;
+  exclusionReason?: 'HOSTING_ORG_PAID' | 'OTHER' | null;
   // Currency and company info
   originalCurrencyFromAi?: string | null;
   exchangeRateOverride?: number | null;
@@ -1542,6 +1819,11 @@ export interface ParticipantAuthResponse {
     endDate: string;
     disseminationEnabled?: boolean;
     carRatePerKm?: number;
+    aiAnalysisUnlocked?: boolean;
+    participantInstructions?: string | null;
+    documentDeadline?: string | null;
+    contactEmail?: string | null;
+    contactPhone?: string | null;
     organisation?: {
       id: string;
       name: string;
@@ -1555,6 +1837,9 @@ export interface ParticipantAuthResponse {
   declarationsOfTravel?: DeclarationOfTravel[];
   maxReimbursementForCountry?: number;
   greenTravel?: boolean;
+  greenTravelExtra?: GreenTravelExtra | null;
+  greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
+  requireGreenTravelDeclaration?: boolean;
   validation: ValidationResult;
   disseminationStatus?: {
     hasDisseminationActivity: boolean;
@@ -1704,3 +1989,186 @@ export interface SocialMediaPost {
   description?: string;
   uploadedAt: string;
 }
+
+// =============================================================================
+// Super Admin API
+// =============================================================================
+
+function getSuperAdminHeaders(): HeadersInit {
+  const token = localStorage.getItem('super-admin-token');
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+export interface SuperAdminParticipantSummary {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  status: string;
+  magicLinkToken: string;
+  magicLinkActive: boolean;
+  tokenExpiresAt?: string;
+  createdAt: string;
+}
+
+export interface SuperAdminProject {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  participants: SuperAdminParticipantSummary[];
+}
+
+export interface SuperAdminPurchase {
+  id: string;
+  type: string;
+  amountCents: number;
+  currency: string;
+  creditsGranted: number;
+  status: string;
+  completedAt?: string;
+  createdAt: string;
+}
+
+export interface SuperAdminOrg {
+  id: string;
+  name: string;
+  email: string;
+  projectCredits: number;
+  hasAnnualLicense: boolean;
+  annualLicenseExpiresAt?: string;
+  isActive: boolean;
+  createdAt: string;
+  projects: SuperAdminProject[];
+  purchases: SuperAdminPurchase[];
+}
+
+export const superAdminApi = {
+  getOrganisations: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ organisations: SuperAdminOrg[]; stats: { totalOrganisations: number; totalProjects: number; totalCreditsOutstanding: number } }>(res);
+  },
+
+  getOrganisation: async (id: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${id}`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ organisation: SuperAdminOrg }>(res);
+  },
+
+  updateOrgEmail: async (id: string, email: string, reason: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${id}`, {
+      method: 'PATCH',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ email, reason }),
+    });
+    return handleResponse<{ message: string; organisation: SuperAdminOrg }>(res);
+  },
+
+  grantCredits: async (orgId: string, credits: number) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${orgId}/grant-credits`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ credits }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  toggleOrgActive: async (orgId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${orgId}/toggle-active`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; organisation: SuperAdminOrg }>(res);
+  },
+
+  forceReopenParticipant: async (participantId: string, message?: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${participantId}/force-reopen`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ message }),
+    });
+    return handleResponse<{ message: string; previousStatus: string }>(res);
+  },
+
+  regenerateParticipantToken: async (participantId: string, sendEmail: boolean) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${participantId}/regenerate-token`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ sendEmail }),
+    });
+    return handleResponse<{ message: string; newToken: string; magicLink: string; tokenExpiresAt: string }>(res);
+  },
+
+  mergeParticipants: async (targetId: string, sourceId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${targetId}/merge-from/${sourceId}`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; targetId: string; sourceDeleted: string }>(res);
+  },
+
+  transferParticipant: async (participantId: string, targetProjectId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/participants/${participantId}/transfer-to-project`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ targetProjectId }),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  recalculateTokenExpiry: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/projects/${projectId}/recalculate-token-expiry`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; participantsUpdated: number; newTokenExpiresAt: string }>(res);
+  },
+
+  refundPurchase: async (purchaseId: string, reason: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/purchases/${purchaseId}/refund`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ reason }),
+    });
+    return handleResponse<{ message: string; creditsRestored: number }>(res);
+  },
+
+  // Affiliates
+  getAffiliates: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ affiliates: SuperAdminAffiliate[] }>(res);
+  },
+
+  createAffiliate: async (data: { organisationId: string; affiliateCode: string; commissionRate: number }) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  toggleAffiliateActive: async (orgId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/${orgId}/toggle-active`, {
+      method: 'PATCH',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string; affiliateActive: boolean }>(res);
+  },
+
+  getAffiliatePayoutRequests: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/payout-requests`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ affiliates: Array<{ id: string; name: string; email: string; affiliateCode: string | null; pendingBalanceCents: number }> }>(res);
+  },
+
+  confirmAffiliatePayout: async (orgId: string, notes?: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/${orgId}/confirm-payout`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ notes }),
+    });
+    return handleResponse<{ payout: { id: string; amountCents: number }; commissionsUpdated: number; totalCents: number }>(res);
+  },
+};

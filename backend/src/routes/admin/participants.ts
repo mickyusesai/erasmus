@@ -4,11 +4,14 @@ import multer from 'multer';
 import { parse } from 'csv-parse/sync';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
+import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { NotFoundError, ValidationError } from '../../middleware/errorHandler.js';
 import { getEmailService } from '../../services/email/index.js';
+import { projectEmailContext } from '../../services/email/context.js';
 import { getAiService } from '../../services/ai/index.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { ParticipantStatus, DocumentType, TransportMode } from '@prisma/client';
+import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -149,10 +152,8 @@ router.get('/:id', async (req: Request, res: Response) => {
     throw new NotFoundError('Participant not found');
   }
 
-  // Get country limit for this participant
-  const countryLimit = participant.project.countryLimits.find(
-    (limit: { country: string }) => limit.country === participant.country
-  );
+  // Applicable limit: individual override, else the country limit
+  const effectiveLimit = getEffectiveLimit(participant, participant.project.countryLimits);
 
   // Get dissemination status
   let disseminationStatus = {
@@ -178,7 +179,9 @@ router.get('/:id', async (req: Request, res: Response) => {
 
   res.json({
     ...participant,
-    maxReimbursementForCountry: countryLimit?.maxReimbursementAmount || null,
+    travelItems: sortTravelItemsByJourney(participant.travelItems),
+    maxReimbursementForCountry: effectiveLimit.maxReimbursement || null,
+    greenTravel: effectiveLimit.greenTravel,
     disseminationStatus,
   });
 });
@@ -490,7 +493,8 @@ router.post('/:id/send-magic-link', async (req: Request, res: Response) => {
     participant.email,
     participant.firstName,
     participant.project.name,
-    magicLink
+    magicLink,
+    await projectEmailContext(participant.project)
   );
 
   // Update last sent timestamp
@@ -530,7 +534,8 @@ router.post('/send-magic-links-bulk', async (req: Request, res: Response) => {
         participant.email,
         participant.firstName,
         participant.project.name,
-        magicLink
+        magicLink,
+        await projectEmailContext(participant.project)
       );
 
       await prisma.participant.update({
