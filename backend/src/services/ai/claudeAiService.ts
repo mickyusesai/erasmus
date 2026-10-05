@@ -10,6 +10,7 @@ import {
 } from './types.js';
 import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
+import { normalizeCountryName, sameCountry } from '../../utils/countryName.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
@@ -423,12 +424,19 @@ Other important notes:
         }
       }
 
-      // Check for invoice/ticket for flights
+      // Check for invoice/ticket for flights.
+      // A bank transaction proving the payment, or a signed declaration on honour
+      // for the missing invoice, is accepted as well.
       if (item.modeOfTransport === TransportMode.PLANE) {
         const hasInvoice = participant.documents.some(
-          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_INVOICE
+          (doc: { documentType: string }) =>
+            doc.documentType === DocumentType.FLIGHT_INVOICE ||
+            doc.documentType === DocumentType.BANK_TRANSACTION
         );
-        if (!hasInvoice) {
+        const hasInvoiceDeclaration = participant.declarationsOnHonor.some(
+          (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_INVOICE
+        );
+        if (!hasInvoice && !hasInvoiceDeclaration) {
           missingItems.push({
             type: 'document',
             description: 'Flight invoice or booking confirmation required',
@@ -679,8 +687,8 @@ export async function generateParticipantReview(data: {
 
 === CONTEXT (read carefully) ===
 
-PARTICIPANT'S HOME COUNTRY: ${data.participantCountry} (this is where they live and travel FROM)
-${data.detectedHomeCountry ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${(data.homeCountryConfidence! * 100).toFixed(0)}%)` : ''}
+PARTICIPANT'S HOME COUNTRY: ${normalizeCountryName(data.participantCountry)} (this is where they live and travel FROM)${normalizeCountryName(data.participantCountry) !== data.participantCountry ? ` — registered in the project as "${data.participantCountry}"; the extra word only marks a green-travel allowance row and is NOT part of the country name. Never flag this as a mismatch.` : ''}
+${data.detectedHomeCountry && !sameCountry(data.detectedHomeCountry, data.participantCountry) ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${(data.homeCountryConfidence! * 100).toFixed(0)}%)` : ''}
 PARTICIPANT NAME: ${data.participantName}
 PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ project takes place, where participants travel TO)
 PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
@@ -688,7 +696,7 @@ ${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : '
 ${data.consolidationSummary ? `\n=== CONSOLIDATION AI NOTES ===\nThe AI that processed the uploaded documents left these notes for you:\n${data.consolidationSummary}\n` : ''}
 BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
 
-The typical journey pattern is: participant travels FROM their home country (${data.participantCountry}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
+The typical journey pattern is: participant travels FROM their home country (${normalizeCountryName(data.participantCountry)}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
 
 === TRAVEL ITEMS (${data.travelItems.length}) ===
 ${data.travelItems.map((item, i) => {

@@ -5,6 +5,8 @@ import { DocumentType, TransportMode } from './types.js';
 import { getStorageService } from '../storage/index.js';
 import { convertToEurForParticipant } from '../exchangeRate/projectRecalc.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
+import { normalizeCountryName } from '../../utils/countryName.js';
+import { samePlace, sameTravelDay } from '../../utils/placeMatch.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -530,7 +532,7 @@ THINK STEP BY STEP - Before generating output, reason through:
 
 PARTICIPANT INFO:
 - Name: ${participant.firstName} ${participant.lastName}
-- Country (traveling from): ${participant.country}
+- Country (traveling from): ${normalizeCountryName(participant.country)}${normalizeCountryName(participant.country) !== participant.country ? ` (registered as "${participant.country}" — the extra word only marks a green-travel allowance row, it is not part of the country name)` : ''}
 - Project location: ${participant.project.country}${participant.project.venueAddress ? `\n- Project venue address: ${participant.project.venueAddress} (Note: participants may not have tickets directly to this exact address — final leg transport like bus pickup is common in Erasmus+ projects, so the journey doesn\'t need to end exactly there, but this helps understand the general destination)` : ''}
 - Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
 - Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
@@ -1081,12 +1083,15 @@ Do NOT include in warnings (these are handled elsewhere):
         const primaryDocId: string | null = validLinkedDocs.length > 0 ? validLinkedDocs[0] : null;
         const additionalDocIds = validLinkedDocs.slice(1);
 
-        // Check if this matches ANY existing item (same route and date)
+        // Check if this matches ANY existing item: same route (loose place match that
+        // ignores diacritics and station/airport words) and departure within a day.
         const itemSignature = `${(item.fromLocation || 'unknown').toLowerCase()}-${(item.toLocation || 'unknown').toLowerCase()}-${item.departureDate || ''}`;
         const existingMatch = existingSignatures.find(
-          (existing: { signature: string; item: { id: string; fromLocation: string; toLocation: string; documentId: string | null } }) => existing.signature === itemSignature ||
-            (existing.item.fromLocation.toLowerCase().includes(item.fromLocation?.toLowerCase() || '') &&
-             existing.item.toLocation.toLowerCase().includes(item.toLocation?.toLowerCase() || ''))
+          (existing: { signature: string; item: { id: string; fromLocation: string; toLocation: string; departureDate: Date; documentId: string | null } }) =>
+            existing.signature === itemSignature ||
+            (samePlace(existing.item.fromLocation, item.fromLocation) &&
+             samePlace(existing.item.toLocation, item.toLocation) &&
+             sameTravelDay(existing.item.departureDate, item.departureDate))
         );
 
         if (existingMatch) {

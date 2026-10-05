@@ -43,6 +43,7 @@ import { Modal } from '../../components/ui/Modal';
 import { MissingBoardingPassModal } from '../../components/participant/MissingBoardingPassModal';
 import { SignaturePad } from '../../components/participant/SignaturePad';
 import { computePayable } from '../../utils/reimbursementMath';
+import { sameCountry, normalizeCountryName } from '../../utils/countryName';
 import DisseminationPage from './DisseminationPage';
 import {
   participantApi,
@@ -1480,11 +1481,11 @@ function Step2CheckData({
     // Check if AI-detected home country differs from registered country
     // This uses AI reasoning based on travel patterns (return flights, round-trip origins, etc.)
     if (data.participant.detectedHomeCountry &&
-        data.participant.detectedHomeCountry.toLowerCase() !== data.participant.country?.toLowerCase()) {
+        !sameCountry(data.participant.detectedHomeCountry, data.participant.country)) {
       w.push({
         id: 'country-mismatch',
         type: 'warning',
-        message: `Based on your travel documents, it appears you traveled from ${data.participant.detectedHomeCountry}, but your registered country is ${data.participant.country}. ${data.participant.homeCountryReasoning ? `(${data.participant.homeCountryReasoning})` : ''} Please verify this is correct.`,
+        message: `Based on your travel documents, it appears you traveled from ${data.participant.detectedHomeCountry}, but your registered country is ${normalizeCountryName(data.participant.country)}. ${data.participant.homeCountryReasoning ? `(${data.participant.homeCountryReasoning})` : ''} Please verify this is correct.`,
         dismissible: true,
       });
     }

@@ -228,12 +228,19 @@ export class MockAiService implements TravelDocumentAiService {
         }
       }
 
-      // Check for invoice/ticket
+      // Check for invoice/ticket.
+      // A bank transaction proving the payment, or a signed declaration on honour
+      // for the missing invoice, is accepted as well.
       if (item.modeOfTransport === TransportMode.PLANE) {
         const hasInvoice = participant.documents.some(
-          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_INVOICE
+          (doc: { documentType: string }) =>
+            doc.documentType === DocumentType.FLIGHT_INVOICE ||
+            doc.documentType === DocumentType.BANK_TRANSACTION
         );
-        if (!hasInvoice) {
+        const hasInvoiceDeclaration = participant.declarationsOnHonor.some(
+          (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_INVOICE
+        );
+        if (!hasInvoice && !hasInvoiceDeclaration) {
           missingItems.push({
             type: 'document',
             description: 'Flight invoice or booking confirmation required',
