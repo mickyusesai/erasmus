@@ -1166,21 +1166,21 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
       setPreview(data);
       setStep('preview');
     },
-    onError: () => {
-      toast.error('Failed to parse CSV file');
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to read the CSV file');
     },
   });
 
   const importMutation = useMutation({
     mutationFn: (file: File) => organisationApi.importParticipants(projectId, file),
     onSuccess: (data) => {
-      toast.success(`Imported ${data.created} participants`);
+      toast.success(`Imported ${data.created} participant${data.created === 1 ? '' : 's'}`);
       queryClient.invalidateQueries({ queryKey: ['org-participants'] });
       queryClient.invalidateQueries({ queryKey: ['org-country-limits'] });
       handleClose();
     },
-    onError: () => {
-      toast.error('Failed to import participants');
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to import participants');
     },
   });
 
@@ -1194,9 +1194,21 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { 'text/csv': ['.csv'] },
+    // Excel saves "Unicode text" as .txt and some tools use .tsv; the parser reads all of them
+    accept: { 'text/csv': ['.csv'], 'text/tab-separated-values': ['.tsv'], 'text/plain': ['.txt'] },
     maxFiles: 1,
+    onDropRejected: (rejections) => {
+      const name = rejections[0]?.file?.name || '';
+      toast.error(
+        /\.xlsx?$/i.test(name)
+          ? 'This is an Excel workbook. In Excel choose File → Save as → CSV, then upload that file.'
+          : 'Please upload a CSV file.'
+      );
+    },
   });
+
+  const remaining = preview?.remainingSlots ?? null;
+  const overCapacity = !!preview && remaining !== null && preview.totalRows > remaining;
 
   const handleClose = () => {
     setFile(null);
@@ -1226,6 +1238,9 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
             <p className="text-sm text-gray-400 mt-2">
               Required columns: first_name, last_name, email, country
             </p>
+            <p className="text-xs text-gray-400 mt-1">
+              Files saved by Excel or Google Sheets work, with commas or semicolons and column names in your own language.
+            </p>
           </div>
 
           <div className="p-4 bg-gray-50 rounded-xl">
@@ -1241,12 +1256,59 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
 
       {step === 'preview' && preview && (
         <div className="space-y-6">
-          <div className="p-4 bg-emerald-50 rounded-xl">
-            <p className="text-emerald-700">
-              Found {preview.totalRows} participants to import
-            </p>
-          </div>
+          {preview.totalRows > 0 ? (
+            <div className="p-4 bg-emerald-50 rounded-xl">
+              <p className="text-emerald-700">
+                Found {preview.totalRows} {preview.alreadyInProject ? 'new ' : ''}participant{preview.totalRows === 1 ? '' : 's'} to import
+              </p>
+              {!!preview.alreadyInProject && (
+                <p className="text-sm text-emerald-700/80 mt-1">
+                  {preview.alreadyInProject} {preview.alreadyInProject === 1 ? 'person is' : 'people are'} already in this project and will be skipped.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-800">
+              <p className="font-medium">No participants could be imported from this file.</p>
+              {preview.missingColumns && preview.missingColumns.length > 0 ? (
+                <p className="mt-1">
+                  No column found for {preview.missingColumns.join(', ')}.
+                  {preview.columns.length > 0 && <> Columns in your file: {preview.columns.join(', ')}.</>}{' '}
+                  Rename them to first_name, last_name, email and country, or start from the template.
+                </p>
+              ) : preview.alreadyInProject ? (
+                <p className="mt-1">Everyone in this file is already in the project.</p>
+              ) : (
+                <p className="mt-1">No row has a first name, last name, email and country filled in.</p>
+              )}
+            </div>
+          )}
 
+          {overCapacity && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+              {preview.isTestProject
+                ? `Your test project has room for ${remaining} more participant${remaining === 1 ? '' : 's'}. Remove some rows, or upgrade the project with a credit to add more.`
+                : `This project has room for ${remaining} more participant${remaining === 1 ? '' : 's'}. Expand the capacity with a credit, or remove some rows.`}
+            </div>
+          )}
+
+          {!!preview.skippedCount && preview.skippedCount > 0 && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+              <p className="font-medium">
+                {preview.skippedCount} row{preview.skippedCount === 1 ? '' : 's'} skipped
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {(preview.skipped || []).map((s) => (
+                  <li key={s.row}>Row {s.row}: {s.reason}</li>
+                ))}
+              </ul>
+              {preview.skippedCount > (preview.skipped?.length || 0) && (
+                <p className="mt-1 text-amber-700">…and {preview.skippedCount - (preview.skipped?.length || 0)} more</p>
+              )}
+            </div>
+          )}
+
+          {preview.totalRows > 0 && (
           <div className="overflow-x-auto max-h-64">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 sticky top-0">
@@ -1269,6 +1331,7 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
               </tbody>
             </table>
           </div>
+          )}
 
           {preview.totalRows > 10 && (
             <p className="text-sm text-gray-500">
@@ -1283,8 +1346,9 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
             <Button
               onClick={() => file && importMutation.mutate(file)}
               loading={importMutation.isPending}
+              disabled={preview.totalRows === 0 || overCapacity}
             >
-              Import {preview.totalRows} Participants
+              Import {preview.totalRows} Participant{preview.totalRows === 1 ? '' : 's'}
             </Button>
           </div>
         </div>
@@ -1642,7 +1706,7 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
   const [carRate, setCarRate] = useState<string>(String(project.carRatePerKm || 0.22));
 
   const updateProjectMutation = useMutation({
-    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number; aiAnalysisUnlocked?: boolean; requireGreenTravelDeclaration?: boolean }) =>
+    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number; aiAnalysisUnlocked?: boolean; requireGreenTravelDeclaration?: boolean; requireAirlineDeclaration?: boolean }) =>
       organisationApi.updateProject(projectId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
@@ -1731,6 +1795,24 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
               type="checkbox"
               checked={project.requireGreenTravelDeclaration || false}
               onChange={(e) => updateProjectMutation.mutate({ requireGreenTravelDeclaration: e.target.checked })}
+              disabled={updateProjectMutation.isPending}
+              className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
+            />
+          </label>
+
+          <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <div className="pr-4">
+              <p className="font-medium text-gray-900">No declaration on honour for a missing boarding pass</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                For National Agencies that require proof from the airline. A participant without a boarding pass must
+                upload a written declaration from the airline that they took the flight, instead of signing a
+                declaration on honour.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={project.requireAirlineDeclaration || false}
+              onChange={(e) => updateProjectMutation.mutate({ requireAirlineDeclaration: e.target.checked })}
               disabled={updateProjectMutation.isPending}
               className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
             />

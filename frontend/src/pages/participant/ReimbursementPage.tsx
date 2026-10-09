@@ -44,6 +44,7 @@ import { MissingBoardingPassModal } from '../../components/participant/MissingBo
 import { SignaturePad } from '../../components/participant/SignaturePad';
 import { ReceiptsCard } from '../../components/participant/ReceiptsCard';
 import { isReceiptDocument } from '../../utils/documentKinds';
+import { isFlightProof, flightHasProof } from '../../utils/flightProof';
 import { computePayable } from '../../utils/reimbursementMath';
 import { sameCountry, normalizeCountryName } from '../../utils/countryName';
 import DisseminationPage from './DisseminationPage';
@@ -66,6 +67,7 @@ const MAX_DOCUMENTS = 25;
 function isNonTripDocument(d: Document): boolean {
   return (
     d.documentType === 'FLIGHT_BOARDING_PASS' ||
+    d.documentType === 'AIRLINE_DECLARATION' ||
     d.documentType === 'HOTEL_INVOICE' ||
     d.documentType === 'MEAL_RECEIPT' ||
     d.documentType === 'GREEN_TRAVEL_DECLARATION'
@@ -836,6 +838,7 @@ function Step1Upload({
   const docTypeLabels: Record<string, string> = {
     FLIGHT_INVOICE: 'Flight Invoice',
     FLIGHT_BOARDING_PASS: 'Boarding Pass',
+    AIRLINE_DECLARATION: 'Airline Declaration',
     TRAIN_TICKET: 'Train Ticket',
     BUS_TICKET: 'Bus Ticket',
     FUEL_RECEIPT: 'Fuel Receipt',
@@ -1200,7 +1203,8 @@ function Step2CheckData({
 }) {
   const queryClient = useQueryClient();
   const [showAddTravelModal, setShowAddTravelModal] = useState(false);
-  const [showBoardingPassUpload, setShowBoardingPassUpload] = useState(false);
+  // The flight whose "Upload now" button was pressed (the boarding pass is attached to it)
+  const [boardingPassUploadItem, setBoardingPassUploadItem] = useState<TravelItem | null>(null);
   const [participantNote, setParticipantNote] = useState(data.participant.participantNote || '');
   const [noteEdited, setNoteEdited] = useState(false);
   const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
@@ -1484,12 +1488,14 @@ function Step2CheckData({
 
     // Check for missing boarding passes for flights
     const hasFlights = data.travelItems.some(t => t.modeOfTransport === 'PLANE');
-    const hasBoardingPass = data.documents.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+    const hasBoardingPass = data.documents.some(isFlightProof);
     if (hasFlights && !hasBoardingPass) {
       w.push({
         id: 'missing-boarding-pass',
         type: 'warning',
-        message: 'You have flight travel items but no boarding pass uploaded. Please upload your boarding pass(es) or add a declaration.',
+        message: data.requireAirlineDeclaration
+          ? 'You have flight travel items but no boarding pass uploaded. Please upload your boarding pass(es), or a declaration from the airline that you took the flight.'
+          : 'You have flight travel items but no boarding pass uploaded. Please upload your boarding pass(es) or add a declaration.',
         dismissible: true,
       });
     }
@@ -1734,7 +1740,8 @@ function Step2CheckData({
                     setDeleteWithDocuments(false);
                   }}
                   onToggleChecked={() => toggleCheckedMutation.mutate(item.id)}
-                  onUploadBoardingPass={() => setShowBoardingPassUpload(true)}
+                  onUploadBoardingPass={() => setBoardingPassUploadItem(item)}
+                  declarationsAllowed={!data.requireAirlineDeclaration}
                   onViewDocument={setViewingDocument}
                   onUnlinkDocument={(docId) =>
                     unlinkDocumentMutation.mutate({ travelItemId: item.id, documentId: docId })
@@ -2028,9 +2035,10 @@ function Step2CheckData({
 
       {/* Boarding Pass Upload Modal */}
       <BoardingPassUploadModal
-        isOpen={showBoardingPassUpload}
-        onClose={() => setShowBoardingPassUpload(false)}
+        isOpen={!!boardingPassUploadItem}
+        onClose={() => setBoardingPassUploadItem(null)}
         token={token}
+        travelItem={boardingPassUploadItem}
       />
 
       {/* Document View Modal */}
@@ -2047,6 +2055,7 @@ function Step2CheckData({
           onClose={() => setMissingBoardingPassItem(null)}
           token={token}
           travelItem={missingBoardingPassItem}
+          declarationsAllowed={!data.requireAirlineDeclaration}
           documents={data.documents}
           participantName={`${data.participant.firstName} ${data.participant.lastName}`}
           participantCountry={data.participant.country}
@@ -2469,6 +2478,7 @@ function TravelItemCard({
   onViewDocument,
   onUnlinkDocument,
   onMissingBoardingPass,
+  declarationsAllowed = true,
 }: {
   item: TravelItem;
   documents: Document[];
@@ -2482,10 +2492,13 @@ function TravelItemCard({
   onViewDocument: (doc: Document) => void;
   onUnlinkDocument: (docId: string) => void;
   onMissingBoardingPass: () => void;
+  /** False when the project doesn't accept a declaration on honour for a missing boarding pass */
+  declarationsAllowed?: boolean;
 }) {
   const Icon = transportIcons[item.modeOfTransport];
   const isPlane = item.modeOfTransport === 'PLANE';
-  const hasDeclaration = declarationsOfTravel.some(dec => dec.travelItemId === item.id);
+  // A signed declaration only stands in for the boarding pass when the project accepts it
+  const hasDeclaration = declarationsAllowed && declarationsOfTravel.some(dec => dec.travelItemId === item.id);
   const linkedDocument = documents.find(d => d.id === item.documentId);
   const isNonEurCurrency = item.currencyOriginal !== 'EUR';
 
@@ -2508,10 +2521,12 @@ function TravelItemCard({
     return docs;
   }, [linkedDocument, additionalDocuments]);
 
-  // Check if THIS travel item has a boarding pass linked (not just any boarding pass in all documents)
+  // Check if THIS travel item has a boarding pass (or the airline's declaration) linked,
+  // not just any boarding pass in all documents
   const hasBoardingPass = useMemo(() => {
-    return allLinkedDocuments.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
+    return allLinkedDocuments.some(isFlightProof);
   }, [allLinkedDocuments]);
+  const proofIsAirlineDeclaration = hasBoardingPass && !allLinkedDocuments.some(d => d.documentType === 'FLIGHT_BOARDING_PASS');
   const [isConverting, setIsConverting] = useState(false);
   const [conversionInfo, setConversionInfo] = useState<{ rate: number; month: number; year: number } | null>(null);
 
@@ -2896,7 +2911,7 @@ function TravelItemCard({
               <>
                 <Ticket className="w-5 h-5 text-emerald-600" />
                 <span className="text-sm font-medium text-emerald-700">
-                  Boarding Pass Added
+                  {proofIsAirlineDeclaration ? 'Airline Declaration Added' : 'Boarding Pass Added'}
                 </span>
               </>
             ) : hasDeclaration ? (
@@ -3981,15 +3996,17 @@ function AddTravelModal({
   );
 }
 
-// Boarding Pass Upload Modal
+// Boarding Pass Upload Modal — the file is stored as a boarding pass and attached to the flight
 function BoardingPassUploadModal({
   isOpen,
   onClose,
   token,
+  travelItem,
 }: {
   isOpen: boolean;
   onClose: () => void;
   token: string;
+  travelItem: TravelItem | null;
 }) {
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
@@ -3997,12 +4014,12 @@ function BoardingPassUploadModal({
   const handleUpload = async (file: File) => {
     setUploading(true);
     try {
-      await participantApi.uploadDocument(token, file);
-      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
-      toast.success('Boarding pass uploaded');
+      await participantApi.uploadDocument(token, file, 'FLIGHT_BOARDING_PASS', travelItem?.id);
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
+      toast.success('Boarding pass added to this flight');
       onClose();
-    } catch {
-      toast.error('Failed to upload boarding pass');
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload boarding pass');
     }
     setUploading(false);
   };
@@ -4011,7 +4028,8 @@ function BoardingPassUploadModal({
     <Modal isOpen={isOpen} onClose={onClose} title="Upload Boarding Pass">
       <div className="space-y-4">
         <p className="text-sm text-gray-600">
-          Please upload your boarding pass. This can be a screenshot, photo, or PDF of your boarding pass.
+          Please upload your boarding pass{travelItem ? <> for <strong>{travelItem.fromLocation} → {travelItem.toLocation}</strong></> : ''}.
+          This can be a screenshot, photo, or PDF of your boarding pass.
         </p>
 
         <div className="border-2 border-dashed border-gray-200 rounded-xl p-8">
@@ -4028,10 +4046,11 @@ function BoardingPassUploadModal({
               <input
                 type="file"
                 className="hidden"
-                accept=".pdf,.jpg,.jpeg,.png"
+                accept=".pdf,.jpg,.jpeg,.png,.webp"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) handleUpload(file);
+                  e.target.value = '';
                 }}
               />
             </label>
@@ -4085,19 +4104,18 @@ function Step3Confirm({
     !!data.requireGreenTravelDeclaration && !!data.greenTravel && !data.greenTravelDeclaration;
   const [greenSignature, setGreenSignature] = useState<string | null>(null);
 
-  // Find flights missing boarding passes (no linked boarding pass document and no declaration of travel)
+  // Find flights missing boarding passes (no boarding pass or airline declaration, and no
+  // declaration of travel where the project accepts one)
+  const declarationsAllowed = !data.requireAirlineDeclaration;
   const declarationsOfTravel = data.declarationsOfTravel || [];
   const flightsMissingBoardingPass = data.travelItems.filter((item) => {
     if (item.modeOfTransport !== 'PLANE') return false;
 
-    // Check if there's a linked boarding pass document
-    const linkedDoc = data.documents.find((d) => d.id === item.documentId);
-    const hasBoardingPass =
-      linkedDoc?.documentType === 'FLIGHT_BOARDING_PASS' ||
-      data.documents.some((d) => d.documentType === 'FLIGHT_BOARDING_PASS');
+    // A boarding pass or airline declaration (per flight when the project requires the airline's)
+    const hasBoardingPass = flightHasProof(item, data.documents, !declarationsAllowed);
 
     // Check if there's a declaration of travel for this item
-    const hasDeclaration = declarationsOfTravel.some((dec) => dec.travelItemId === item.id);
+    const hasDeclaration = declarationsAllowed && declarationsOfTravel.some((dec) => dec.travelItemId === item.id);
 
     return !hasBoardingPass && !hasDeclaration;
   });
@@ -4231,7 +4249,15 @@ function Step3Confirm({
                               Fix this trip
                             </button>
                           )}
-                          {item.type === 'document' && item.documentType && (
+                          {item.type === 'document' && item.documentType === 'FLIGHT_BOARDING_PASS' && linkedItem ? (
+                            // Boarding pass: upload it, add the airline's declaration, or (where accepted) sign one
+                            <button
+                              onClick={() => setDeclarationTravelItem(linkedItem)}
+                              className="text-xs text-amber-600 hover:text-amber-800 underline"
+                            >
+                              {declarationsAllowed ? 'Add boarding pass or declaration' : 'Add boarding pass or airline declaration'}
+                            </button>
+                          ) : item.type === 'document' && item.documentType && (item.documentType !== 'FLIGHT_BOARDING_PASS' || declarationsAllowed) ? (
                             <button
                               onClick={() => {
                                 setSelectedMissingDoc(item.documentType!);
@@ -4241,7 +4267,7 @@ function Step3Confirm({
                             >
                               Sign declaration
                             </button>
-                          )}
+                          ) : null}
                         </li>
                       );
                     })}
@@ -4262,8 +4288,9 @@ function Step3Confirm({
                     Flights Without Boarding Pass
                   </h4>
                   <p className="text-sm text-blue-700 mt-1">
-                    The following flights don't have a boarding pass. You can either upload
-                    one or sign a declaration on honor.
+                    {declarationsAllowed
+                      ? "The following flights don't have a boarding pass. You can either upload one or sign a declaration on honor."
+                      : `The following flights don't have a boarding pass. Upload it, or a written declaration from the airline that you took the flight. ${data.project.organisation?.name || 'Your organisation'} doesn't accept a declaration on honour for flights.`}
                   </p>
                   <ul className="mt-3 space-y-2">
                     {flightsMissingBoardingPass.map((item) => (
@@ -4282,9 +4309,9 @@ function Step3Confirm({
                         </div>
                         <button
                           onClick={() => setDeclarationTravelItem(item)}
-                          className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                          className="text-sm text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap pl-3"
                         >
-                          Sign Declaration
+                          {declarationsAllowed ? 'Sign Declaration' : 'Add proof'}
                         </button>
                       </li>
                     ))}
@@ -4535,13 +4562,14 @@ function Step3Confirm({
         isLoading={createDeclarationMutation.isPending}
       />
 
-      {/* Declaration on Honor Modal (for missing boarding pass) */}
+      {/* Missing boarding pass: upload it, the airline's declaration, or (where accepted) sign a declaration */}
       {declarationTravelItem && (
         <MissingBoardingPassModal
           isOpen={true}
           onClose={() => setDeclarationTravelItem(null)}
           token={token}
           travelItem={declarationTravelItem}
+          declarationsAllowed={declarationsAllowed}
           documents={data.documents}
           participantName={`${data.participant.firstName} ${data.participant.lastName}`}
           participantCountry={data.participant.country}
@@ -4700,6 +4728,7 @@ function DeclarationModal({
   const docTypeLabels: Record<DocumentType, string> = {
     FLIGHT_INVOICE: 'Flight Invoice',
     FLIGHT_BOARDING_PASS: 'Boarding Pass',
+    AIRLINE_DECLARATION: 'Airline Declaration',
     TRAIN_TICKET: 'Train Ticket',
     BUS_TICKET: 'Bus Ticket',
     FUEL_RECEIPT: 'Fuel Receipt',

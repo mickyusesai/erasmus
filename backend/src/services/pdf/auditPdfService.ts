@@ -35,6 +35,7 @@ const TRANSPORT_LABELS: Record<string, string> = {
 const DOC_TYPE_LABELS: Record<string, string> = {
   FLIGHT_INVOICE: 'Flight Invoice',
   FLIGHT_BOARDING_PASS: 'Boarding Pass',
+  AIRLINE_DECLARATION: 'Airline Declaration',
   TRAIN_TICKET: 'Train Ticket',
   BUS_TICKET: 'Bus Ticket',
   FUEL_RECEIPT: 'Fuel Receipt',

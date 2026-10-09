@@ -79,7 +79,7 @@ export class JourneyConsolidationService {
     documentId: string,
     fileBuffer: Buffer,
     mimeType: string,
-    options: { typeHint?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT' } = {}
+    options: { typeHint?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT' | 'FLIGHT_BOARDING_PASS' | 'AIRLINE_DECLARATION' } = {}
   ): Promise<void> {
     const typeHint = options.typeHint;
     console.log(`[Consolidation] Extracting data from document ${documentId} using OpenAI GPT-5.2`);
@@ -140,6 +140,11 @@ Carefully determine the document type:
 1. TICKET DOCUMENTS (have route/journey information):
    - FLIGHT_INVOICE: Flight booking confirmation, e-ticket, itinerary with flight details
    - FLIGHT_BOARDING_PASS: Boarding pass with gate, seat, flight number
+   - AIRLINE_DECLARATION: A letter, certificate or email ISSUED BY THE AIRLINE confirming that the
+     passenger actually took a specific flight (e.g. "certificate of travel", "flight confirmation",
+     "proof of flight", "attestato di volo", "certificado de vuelo", "attestation de vol", "Flugbestätigung").
+     It names the passenger, flight number and date and is written/signed by the airline. It is NOT a
+     booking confirmation or invoice (those are FLIGHT_INVOICE) and NOT a boarding pass.
    - TRAIN_TICKET: Train ticket with stations, date, sometimes price
    - BUS_TICKET: Bus ticket with route, date, company name
 
@@ -211,7 +216,7 @@ PRICE EXTRACTION:
 Extract ALL information you can find. Respond with ONLY a JSON object:
 {
   "documentLanguage": "Croatian" | "English" | "Dutch" | "German" | "French" | "Polish" | "Spanish" | "Italian" | "other",
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "AIRLINE_DECLARATION" | "TRAIN_TICKET" | "BUS_TICKET" | "BANK_TRANSACTION" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "LUGGAGE_INVOICE" | "INTERRAIL_PASS" | "OTHER",
   "confidence": 0.0-1.0,
   "reasoning": "Brief explanation: 1) What language is this document in? 2) How did you identify the document type? 3) Key information extracted",
 
@@ -260,7 +265,11 @@ Extract real values only - use null if not visible.
 For station names like "Rotterdam C." or "Eindhoven C." use just the city name.
 REMEMBER: European dates are DD/MM/YYYY - day first, then month!${typeHint ? `
 
-PARTICIPANT'S OWN CLASSIFICATION: the participant uploaded this as a ${typeHint === 'HOTEL_INVOICE' ? 'hotel/accommodation invoice' : 'meal/food receipt'} for their green-travel extra. Set documentType to ${typeHint} and focus on the total amount, currency, documentDate and merchantName.` : ''}`;
+PARTICIPANT'S OWN CLASSIFICATION: ${
+      typeHint === 'HOTEL_INVOICE' || typeHint === 'MEAL_RECEIPT'
+        ? `the participant uploaded this as a ${typeHint === 'HOTEL_INVOICE' ? 'hotel/accommodation invoice' : 'meal/food receipt'} for their green-travel extra. Set documentType to ${typeHint} and focus on the total amount, currency, documentDate and merchantName.`
+        : `the participant uploaded this for a flight as ${typeHint === 'AIRLINE_DECLARATION' ? 'a declaration from the airline confirming they took the flight' : 'their boarding pass'}. Set documentType to ${typeHint} and extract the passenger name, flight number, route and departure date.`
+    }` : ''}`;
 
     contentParts.push({ type: 'text', text: prompt });
 
@@ -589,7 +598,7 @@ Before linking ANY document to a travel item, verify:
 1. The document type matches the transport mode:
    - BUS_TICKET → only link to BUS travel items
    - TRAIN_TICKET → only link to TRAIN travel items
-   - FLIGHT_INVOICE, FLIGHT_BOARDING_PASS → only link to PLANE travel items
+   - FLIGHT_INVOICE, FLIGHT_BOARDING_PASS, AIRLINE_DECLARATION → only link to PLANE travel items
 2. Even if cities overlap, different transport modes = DIFFERENT trips
 
 BUS COMPANY DOCUMENTS - ALWAYS CREATE BUS TRAVEL ITEMS:
@@ -691,6 +700,8 @@ A single flight typically has MULTIPLE related documents - link them ALL to ONE 
 - BOOKING CONFIRMATION: Has price, booking reference, flight details
 - INVOICE/ITINERARY: May have detailed price breakdown
 - BOARDING PASS: Has gate, seat, confirms the flight happened
+- AIRLINE DECLARATION: Written confirmation from the airline that the passenger flew; replaces a lost
+  boarding pass. Link it to the flight it confirms (same flight number and date), never create a separate trip for it.
 - BANK TRANSACTION: Shows the payment for this booking
 
 When you see these document types with matching flight number, date, and route:
@@ -1373,6 +1384,7 @@ Do NOT include in warnings (these are handled elsewhere):
     const mapping: Record<string, DocumentType> = {
       FLIGHT_INVOICE: 'FLIGHT_INVOICE',
       FLIGHT_BOARDING_PASS: 'FLIGHT_BOARDING_PASS',
+      AIRLINE_DECLARATION: 'AIRLINE_DECLARATION',
       TRAIN_TICKET: 'TRAIN_TICKET',
       BUS_TICKET: 'BUS_TICKET',
       FUEL_RECEIPT: 'FUEL_RECEIPT',

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { parse } from 'csv-parse/sync';
+import { parseParticipantCsv, alignCountry, CsvReadError, FIELD_LABELS, type CsvParticipant, type ParticipantCsvResult } from '../../utils/participantCsv.js';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { organisationAuth, ensureOwnProject } from '../../middleware/auth.js';
@@ -324,6 +324,7 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       contactEmail: project.contactEmail,
       contactPhone: project.contactPhone,
       requireGreenTravelDeclaration: project.requireGreenTravelDeclaration,
+      requireAirlineDeclaration: project.requireAirlineDeclaration,
       creditSource: project.creditSource,
       countryLimits: project.countryLimits,
       participants: project.participants,
@@ -352,6 +353,7 @@ const updateProjectSchema = z.object({
   contactEmail: z.string().nullish(),
   contactPhone: z.string().nullish(),
   requireGreenTravelDeclaration: z.boolean().optional(),
+  requireAirlineDeclaration: z.boolean().optional(),
 });
 
 /**
@@ -430,6 +432,7 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
       contactEmail: project.contactEmail,
       contactPhone: project.contactPhone,
       requireGreenTravelDeclaration: project.requireGreenTravelDeclaration,
+      requireAirlineDeclaration: project.requireAirlineDeclaration,
       creditSource: project.creditSource,
       participantCount: project._count.participants,
       createdAt: project.createdAt,
@@ -995,40 +998,61 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
  * POST /api/organisation/projects/:id/participants/preview-import
  * Preview CSV import
  */
+/**
+ * Parses an uploaded participant CSV and lines it up with the project: countries take the
+ * project's existing spelling, and people already in the project are set apart.
+ */
+async function prepareParticipantImport(projectId: string, buffer: Buffer): Promise<{
+  parsed: ParticipantCsvResult;
+  newRows: CsvParticipant[];
+  alreadyInProject: CsvParticipant[];
+}> {
+  let parsed: ParticipantCsvResult;
+  try {
+    parsed = parseParticipantCsv(buffer);
+  } catch (err) {
+    if (err instanceof CsvReadError) throw new ValidationError(err.message);
+    throw new ValidationError("The file couldn't be read as a CSV file.");
+  }
+  const [limits, existing] = await Promise.all([
+    prisma.projectCountryLimit.findMany({ where: { projectId }, select: { country: true } }),
+    prisma.participant.findMany({ where: { projectId }, select: { email: true } }),
+  ]);
+  const knownCountries = limits.map((l) => l.country);
+  const existingEmails = new Set(existing.map((p) => p.email.trim().toLowerCase()));
+  const rows = parsed.participants.map((p) => ({ ...p, country: alignCountry(p.country, knownCountries) }));
+  return {
+    parsed,
+    newRows: rows.filter((r) => !existingEmails.has(r.email)),
+    alreadyInProject: rows.filter((r) => existingEmails.has(r.email)),
+  };
+}
+
 router.post('/projects/:id/participants/preview-import', ensureOwnProject, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
   if (!req.file) {
     throw new ValidationError('No file uploaded');
   }
+  const projectId = req.params.id;
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { _count: { select: { participants: true } } },
+  });
+  if (!project) throw new NotFoundError('Project not found');
 
-  const content = req.file.buffer.toString('utf-8');
+  const { parsed, newRows, alreadyInProject } = await prepareParticipantImport(projectId, req.file.buffer);
 
-  try {
-    const records = parse(content, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    }) as Record<string, string>[];
-
-    // Map column names (flexible)
-    const mappedRecords = records.map((row) => ({
-      firstName: row.first_name || row.firstName || row['First Name'] || '',
-      lastName: row.last_name || row.lastName || row['Last Name'] || '',
-      email: row.email || row.Email || '',
-      country: row.country || row.Country || '',
-    }));
-
-    const validRecords = mappedRecords.filter(
-      (r) => r.firstName && r.lastName && r.email && r.country
-    );
-
-    res.json({
-      totalRows: validRecords.length,
-      columns: Object.keys(records[0] || {}),
-      preview: validRecords.slice(0, 10),
-    });
-  } catch (err) {
-    throw new ValidationError('Failed to parse CSV file');
-  }
+  res.json({
+    totalRows: newRows.length,
+    columns: parsed.columns,
+    preview: newRows.slice(0, 10),
+    missingColumns: parsed.missingColumns.map((f) => FIELD_LABELS[f]),
+    skipped: parsed.skipped.slice(0, 20),
+    skippedCount: parsed.skipped.length,
+    alreadyInProject: alreadyInProject.length,
+    remainingSlots: project.maxParticipants === null ? null : Math.max(0, project.maxParticipants - project._count.participants),
+    isTestProject: project.isTestProject,
+    detected: { delimiter: parsed.delimiter, encoding: parsed.encoding },
+  });
 }));
 
 /**
@@ -1052,26 +1076,12 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
     throw new NotFoundError('Project not found');
   }
 
-  const content = req.file.buffer.toString('utf-8');
+  const { parsed, newRows: validRecords, alreadyInProject } = await prepareParticipantImport(projectId, req.file.buffer);
+  if (parsed.missingColumns.length > 0) {
+    throw new ValidationError(`No column found for: ${parsed.missingColumns.map((f) => FIELD_LABELS[f]).join(', ')}.`);
+  }
 
-  const records = parse(content, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-  }) as Record<string, string>[];
-
-  const mappedRecords = records.map((row) => ({
-    firstName: row.first_name || row.firstName || row['First Name'] || '',
-    lastName: row.last_name || row.lastName || row['Last Name'] || '',
-    email: row.email || row.Email || '',
-    country: row.country || row.Country || '',
-  }));
-
-  const validRecords = mappedRecords.filter(
-    (r) => r.firstName && r.lastName && r.email && r.country
-  );
-
-  // Check participant limit for test and paid projects
+  // Check participant limit for test and paid projects (only people not yet in the project count)
   if (project.maxParticipants !== null) {
     const remainingSlots = project.maxParticipants - project._count.participants;
     if (validRecords.length > remainingSlots) {
@@ -1084,19 +1094,22 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
   }
 
   const created: any[] = [];
-  const errors: { row: number; error: string }[] = [];
+  const errors: { row: number; error: string }[] = [
+    ...parsed.skipped.map((s) => ({ row: s.row, error: s.reason })),
+    ...alreadyInProject.map((r) => ({ row: r.row, error: `${r.email} is already in this project` })),
+  ];
 
   for (let i = 0; i < validRecords.length; i++) {
     const record = validRecords[i];
 
     try {
-      // Check for existing
+      // Check for existing (case-insensitive: older entries may have been typed with capitals)
       const existing = await prisma.participant.findFirst({
-        where: { projectId, email: record.email },
+        where: { projectId, email: { equals: record.email, mode: 'insensitive' } },
       });
 
       if (existing) {
-        errors.push({ row: i + 1, error: `Email ${record.email} already exists` });
+        errors.push({ row: record.row, error: `${record.email} is already in this project` });
         continue;
       }
 
@@ -1143,10 +1156,11 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
 
       created.push(participant);
     } catch (err: any) {
-      errors.push({ row: i + 1, error: err.message || 'Unknown error' });
+      errors.push({ row: record.row, error: err.message || 'Unknown error' });
     }
   }
 
+  errors.sort((a, b) => a.row - b.row);
   res.json({
     success: true,
     created: created.length,
@@ -1487,6 +1501,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     maxReimbursementForCountry: effectiveLimit.maxReimbursement,
     greenTravel: effectiveLimit.greenTravel,
     greenTravelExtra: { foodEur: participant.greenTravelFoodEur, accommodationEur: participant.greenTravelAccommodationEur, note: participant.greenTravelExtraNote },
+    requireAirlineDeclaration: participant.project.requireAirlineDeclaration,
     travelItems: participant.travelItems.map((item) => ({
       id: item.id,
       modeOfTransport: item.modeOfTransport,

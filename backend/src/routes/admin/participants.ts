@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
-import { parse } from 'csv-parse/sync';
+import { parseParticipantCsv, CsvReadError, FIELD_LABELS, type ParticipantCsvResult } from '../../utils/participantCsv.js';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
@@ -336,51 +336,23 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
     throw new ValidationError('Project ID is required');
   }
 
-  // Parse CSV
-  const content = req.file.buffer.toString('utf-8');
-  let records: Record<string, string>[];
-
+  // Parse CSV (Excel separators, encodings and translated column names are handled by the shared parser)
+  let parsed: ParticipantCsvResult;
   try {
-    records = parse(content, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    });
-  } catch {
-    throw new ValidationError('Invalid CSV format');
+    parsed = parseParticipantCsv(req.file.buffer);
+  } catch (err) {
+    throw new ValidationError(err instanceof CsvReadError ? err.message : 'Invalid CSV format');
   }
-
-  // Validate required columns
-  const requiredColumns = ['first_name', 'last_name', 'email', 'country'];
-  const columns = Object.keys(records[0] || {}).map((c) => c.toLowerCase());
-
-  for (const col of requiredColumns) {
-    if (!columns.includes(col)) {
-      throw new ValidationError(`Missing required column: ${col}`);
-    }
+  if (parsed.missingColumns.length > 0) {
+    throw new ValidationError(`Missing required column: ${parsed.missingColumns.map((f) => FIELD_LABELS[f]).join(', ')}`);
   }
 
   // Create participants
   const created = [];
-  const errors = [];
+  const errors: { row: number; error: string }[] = parsed.skipped.map((s) => ({ row: s.row, error: s.reason }));
 
-  for (let i = 0; i < records.length; i++) {
-    const row = records[i];
-    const rowNum = i + 2; // +2 for header and 0-index
-
-    // Normalize column names
-    const data = {
-      firstName: row.first_name || row.firstName,
-      lastName: row.last_name || row.lastName,
-      email: row.email,
-      country: row.country,
-    };
-
-    // Validate
-    if (!data.firstName || !data.lastName || !data.email || !data.country) {
-      errors.push({ row: rowNum, error: 'Missing required fields' });
-      continue;
-    }
+  for (const data of parsed.participants) {
+    const rowNum = data.row;
 
     // Check for duplicate email in this project
     const existing = await prisma.participant.findFirst({
@@ -441,31 +413,20 @@ router.post('/preview-import', upload.single('file'), async (req: Request, res: 
     throw new ValidationError('CSV file is required');
   }
 
-  const content = req.file.buffer.toString('utf-8');
-  let records: Record<string, string>[];
-
+  let parsed: ParticipantCsvResult;
   try {
-    records = parse(content, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    });
-  } catch {
-    throw new ValidationError('Invalid CSV format');
+    parsed = parseParticipantCsv(req.file.buffer);
+  } catch (err) {
+    throw new ValidationError(err instanceof CsvReadError ? err.message : 'Invalid CSV format');
   }
 
-  const columns = Object.keys(records[0] || {});
-  const preview = records.slice(0, 10).map((row) => ({
-    firstName: row.first_name || row.firstName,
-    lastName: row.last_name || row.lastName,
-    email: row.email,
-    country: row.country,
-  }));
-
   res.json({
-    totalRows: records.length,
-    columns,
-    preview,
+    totalRows: parsed.participants.length,
+    columns: parsed.columns,
+    preview: parsed.participants.slice(0, 10),
+    missingColumns: parsed.missingColumns.map((f) => FIELD_LABELS[f]),
+    skipped: parsed.skipped.slice(0, 20),
+    skippedCount: parsed.skipped.length,
   });
 });
 

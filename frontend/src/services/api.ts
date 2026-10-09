@@ -321,11 +321,19 @@ export const participantApi = {
     return handleResponse<ParticipantAuthResponse>(res);
   },
 
-  uploadDocument: async (token: string, file: File, documentType?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT') => {
+  uploadDocument: async (
+    token: string,
+    file: File,
+    documentType?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT' | 'FLIGHT_BOARDING_PASS' | 'AIRLINE_DECLARATION',
+    /** Attach a boarding pass / airline declaration to this flight straight away */
+    travelItemId?: string
+  ) => {
     const formData = new FormData();
     formData.append('file', file);
-    // Receipts for the green-travel extra are stored as such and never treated as tickets
+    // Receipts for the green-travel extra are stored as such and never treated as tickets;
+    // a boarding pass or airline declaration keeps the type the participant gave it
     if (documentType) formData.append('documentType', documentType);
+    if (travelItemId) formData.append('travelItemId', travelItemId);
 
     const res = await fetch(`${API_BASE}/participant/documents?token=${token}`, {
       method: 'POST',
@@ -491,11 +499,21 @@ export const participantApi = {
   },
 
   // Document linking
-  linkDocumentToTravelItem: async (token: string, travelItemId: string, documentId: string) => {
+  /**
+   * Link an uploaded document to a trip. With `markAs` the document is also marked as the
+   * flight's boarding pass or airline declaration and added next to the trip's ticket;
+   * without it, it becomes the trip's main document.
+   */
+  linkDocumentToTravelItem: async (
+    token: string,
+    travelItemId: string,
+    documentId: string,
+    markAs?: 'FLIGHT_BOARDING_PASS' | 'AIRLINE_DECLARATION'
+  ) => {
     const res = await fetch(`${API_BASE}/participant/travel-items/${travelItemId}/link-document?token=${token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documentId }),
+      body: JSON.stringify({ documentId, markAs }),
     });
     return handleResponse<TravelItem>(res);
   },
@@ -1252,6 +1270,8 @@ export interface OrgProject {
   contactEmail?: string | null;
   contactPhone?: string | null;
   requireGreenTravelDeclaration?: boolean;
+  /** A declaration on honour is not accepted for a missing boarding pass */
+  requireAirlineDeclaration?: boolean;
   participantCount: number;
   creditSource?: string;
   isTestProject: boolean;
@@ -1381,6 +1401,7 @@ export interface CreateOrgProjectData {
   contactEmail?: string | null;
   contactPhone?: string | null;
   requireGreenTravelDeclaration?: boolean;
+  requireAirlineDeclaration?: boolean;
 }
 
 export interface ProjectRecalcResult {
@@ -1640,6 +1661,7 @@ export interface Document {
 export type DocumentType =
   | 'FLIGHT_INVOICE'
   | 'FLIGHT_BOARDING_PASS'
+  | 'AIRLINE_DECLARATION'
   | 'TRAIN_TICKET'
   | 'BUS_TICKET'
   | 'FUEL_RECEIPT'
@@ -1780,14 +1802,26 @@ export interface BankDetails {
 }
 
 export interface ImportPreview {
+  /** Participants that will be created (people already in the project excluded) */
   totalRows: number;
+  /** Column headers as written in the file */
   columns: string[];
   preview: {
+    row?: number;
     firstName: string;
     lastName: string;
     email: string;
     country: string;
   }[];
+  /** Required columns that weren't found, e.g. ["email"] */
+  missingColumns?: string[];
+  skipped?: { row: number; reason: string }[];
+  skippedCount?: number;
+  alreadyInProject?: number;
+  /** Free places left in the project (null = no limit) */
+  remainingSlots?: number | null;
+  isTestProject?: boolean;
+  detected?: { delimiter: string; encoding: string };
 }
 
 export interface ImportResult {
@@ -1867,6 +1901,8 @@ export interface ParticipantAuthResponse {
   receiptUploadsOpen?: boolean;
   greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
   requireGreenTravelDeclaration?: boolean;
+  /** The organisation doesn't accept a declaration on honour for a missing boarding pass */
+  requireAirlineDeclaration?: boolean;
   validation: ValidationResult;
   disseminationStatus?: {
     hasDisseminationActivity: boolean;

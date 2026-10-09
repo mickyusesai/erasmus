@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { participantAuth, ensureOwnParticipant } from '../../middleware/auth.js';
 import { isReceiptDocument, isReceiptDocumentType } from '../../utils/documentKinds.js';
+import { isFlightProofType, flightDeclarationsAccepted } from '../../utils/flightProof.js';
 import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
@@ -145,6 +146,35 @@ const MAX_RECEIPTS = 80;
  * Receipts may be added until the organiser has either set the green-travel
  * extra or paid out; travel documents are locked once the organiser approves.
  */
+/**
+ * Adds a document to a trip without losing what is already linked: it becomes the trip's
+ * main document only when the trip has none, otherwise it is added next to it.
+ */
+async function attachDocumentToTravelItem(
+  item: { id: string; documentId: string | null; additionalDocumentIds: string | null },
+  documentId: string
+): Promise<void> {
+  if (item.documentId === documentId) return;
+  if (!item.documentId) {
+    await prisma.travelItem.update({ where: { id: item.id }, data: { documentId } });
+    return;
+  }
+  let extra: string[] = [];
+  try {
+    extra = item.additionalDocumentIds ? JSON.parse(item.additionalDocumentIds) : [];
+  } catch {
+    extra = [];
+  }
+  if (extra.includes(documentId)) return;
+  await prisma.travelItem.update({
+    where: { id: item.id },
+    data: { additionalDocumentIds: JSON.stringify([...extra, documentId]) },
+  });
+}
+
+const FLIGHT_DECLARATION_NOT_ACCEPTED =
+  'Your organisation does not accept a declaration on honour for a missing boarding pass. Please upload the boarding pass, or a written declaration from the airline that you took the flight.';
+
 function receiptUploadsOpen(p: { status: string; greenTravelExtraUpdatedAt: Date | null }): boolean {
   if (p.status === 'PAID') return false;
   if (p.status === 'ADMIN_APPROVED') return !p.greenTravelExtraUpdatedAt;
@@ -185,6 +215,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
           contactEmail: true,
           contactPhone: true,
           requireGreenTravelDeclaration: true,
+          requireAirlineDeclaration: true,
           organisation: {
             select: {
               id: true,
@@ -291,6 +322,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
     greenTravelDeclaration: data?.greenTravelDeclaration ?? null,
     receiptUploadsOpen: data ? receiptUploadsOpen(data) : false,
     requireGreenTravelDeclaration: data?.project.requireGreenTravelDeclaration ?? false,
+    requireAirlineDeclaration: data?.project.requireAirlineDeclaration ?? false,
     validation,
     disseminationStatus,
   });
@@ -312,12 +344,28 @@ router.post(
       throw new ValidationError('File is required');
     }
 
-    // Optional type hint from the "Food & accommodation" section: the participant
-    // tells us it is a receipt, so it is stored as one and never treated as a ticket.
-    const typeHint = isReceiptDocumentType(req.body?.documentType) ? req.body.documentType : null;
+    // Optional type hint: a receipt from the "Food & accommodation" section is stored as one and
+    // never treated as a ticket; a boarding pass or airline declaration uploaded from a flight
+    // keeps that type whatever the AI thinks, because the participant told us what it is.
+    const rawHint = req.body?.documentType;
+    const typeHint = isReceiptDocumentType(rawHint) || isFlightProofType(rawHint) ? rawHint : null;
+    const isReceiptUpload = isReceiptDocumentType(typeHint);
+
+    // Optionally attach the upload to a flight straight away (boarding pass / airline declaration)
+    let flightToAttach: { id: string; documentId: string | null; additionalDocumentIds: string | null } | null = null;
+    if (req.body?.travelItemId) {
+      if (!isFlightProofType(typeHint)) {
+        throw new ValidationError('Only a boarding pass or an airline declaration can be attached to a trip on upload');
+      }
+      flightToAttach = await prisma.travelItem.findFirst({
+        where: { id: String(req.body.travelItemId), participantId: participant.id },
+        select: { id: true, documentId: true, additionalDocumentIds: true },
+      });
+      if (!flightToAttach) throw new NotFoundError('Travel item not found');
+    }
 
     // Check if participant can still upload
-    if (typeHint) {
+    if (isReceiptUpload) {
       if (!receiptUploadsOpen(participant)) {
         throw new ForbiddenError('Receipts can no longer be added: the green travel extra has been settled');
       }
@@ -332,7 +380,7 @@ router.post(
     });
     const receiptCount = existingDocs.filter(isReceiptDocument).length;
     const travelDocCount = existingDocs.length - receiptCount;
-    if (typeHint) {
+    if (isReceiptUpload) {
       if (receiptCount >= MAX_RECEIPTS) {
         throw new ValidationError(`You have reached the maximum of ${MAX_RECEIPTS} receipts. Combine several receipts into one PDF.`);
       }
@@ -404,8 +452,11 @@ router.post(
       throw dbError;
     }
 
-    // A new travel document means the trips must be rebuilt; a receipt never affects them
-    if (!typeHint) {
+    // A new travel document means the trips must be rebuilt; a receipt never affects them,
+    // and neither does a boarding pass that goes straight onto its flight
+    if (flightToAttach) {
+      await attachDocumentToTravelItem(flightToAttach, document.id);
+    } else if (!isReceiptUpload) {
       await prisma.participant.update({
         where: { id: participant.id },
         data: { journeyConsolidatedAt: null },
@@ -967,10 +1018,13 @@ router.post('/travel-items/:id/link-document', participantAuth, asyncHandler(asy
     throw new ForbiddenError('Cannot modify travel items after approval');
   }
 
-  const { documentId } = req.body;
+  const { documentId, markAs } = req.body as { documentId?: string; markAs?: string };
 
   if (!documentId) {
     throw new ValidationError('Document ID is required');
+  }
+  if (markAs !== undefined && !isFlightProofType(markAs)) {
+    throw new ValidationError('A document can only be marked as a boarding pass or an airline declaration');
   }
 
   // Verify travel item ownership
@@ -997,11 +1051,31 @@ router.post('/travel-items/:id/link-document', participantAuth, asyncHandler(asy
     throw new NotFoundError('Document not found');
   }
 
-  // Update travel item with document link
-  const updated = await prisma.travelItem.update({
-    where: { id: req.params.id },
-    data: { documentId },
-  });
+  let updated;
+  if (markAs) {
+    // "I have the boarding pass but it wasn't recognized": the participant tells us what the
+    // document is. Fix its type and add it to the flight, keeping the ticket that is already linked.
+    if (document.documentType !== markAs) {
+      await prisma.document.update({ where: { id: document.id }, data: { documentType: markAs } });
+      await prisma.changeLogEntry.create({
+        data: {
+          participantId: participant.id,
+          userType: 'PARTICIPANT',
+          fieldName: 'document.type',
+          previousValue: `${document.renamedFilename}: ${document.documentType}`,
+          newValue: `${document.renamedFilename}: ${markAs}`,
+        },
+      });
+    }
+    await attachDocumentToTravelItem(travelItem, document.id);
+    updated = await prisma.travelItem.findUniqueOrThrow({ where: { id: travelItem.id } });
+  } else {
+    // Make this document the trip's main document
+    updated = await prisma.travelItem.update({
+      where: { id: req.params.id },
+      data: { documentId },
+    });
+  }
 
   // Log the change
   await prisma.changeLogEntry.create({
@@ -1206,6 +1280,11 @@ router.post('/declarations', participantAuth, asyncHandler(async (req: Request, 
     throw new ValidationError(result.error.errors[0].message);
   }
 
+  if (result.data.missingDocumentType === 'FLIGHT_BOARDING_PASS') {
+    const project = await prisma.project.findUnique({ where: { id: participant.projectId }, select: { requireAirlineDeclaration: true } });
+    if (!flightDeclarationsAccepted(project)) throw new ForbiddenError(FLIGHT_DECLARATION_NOT_ACCEPTED);
+  }
+
   const declaration = await prisma.declarationOnHonor.create({
     data: {
       participantId: participant.id,
@@ -1294,6 +1373,13 @@ router.post('/declarations-of-travel', participantAuth, asyncHandler(async (req:
   }
 
   const data = result.data as DeclarationOfTravelInput;
+
+  // A declaration of travel for a flight replaces its boarding pass: refused when the
+  // project requires the airline's own declaration instead
+  if (data.modeOfTransport === 'PLANE') {
+    const project = await prisma.project.findUnique({ where: { id: participant.projectId }, select: { requireAirlineDeclaration: true } });
+    if (!flightDeclarationsAccepted(project)) throw new ForbiddenError(FLIGHT_DECLARATION_NOT_ACCEPTED);
+  }
 
   // Convert date strings to Date objects
   const travelDateObj = new Date(data.travelDate);
@@ -1764,6 +1850,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         maxReimbursementForCountry: effectiveLimit.maxReimbursement,
         greenTravel: effectiveLimit.greenTravel,
         greenTravelExtra: { foodEur: fullParticipant.greenTravelFoodEur, accommodationEur: fullParticipant.greenTravelAccommodationEur, note: fullParticipant.greenTravelExtraNote },
+        requireAirlineDeclaration: fullParticipant.project.requireAirlineDeclaration,
         travelItems: fullParticipant.travelItems.map((item) => ({
           id: item.id,
           modeOfTransport: item.modeOfTransport,

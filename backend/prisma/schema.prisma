@@ -156,6 +156,11 @@ model Project {
   // Default false so live projects are unaffected; set true on project creation.
   requireGreenTravelDeclaration Boolean            @default(false)
 
+  // Some National Agencies (e.g. Italy) don't accept a declaration on honour for a missing
+  // boarding pass. When true, participants must provide the boarding pass or a written
+  // declaration from the airline (DocumentType AIRLINE_DECLARATION) for every flight.
+  requireAirlineDeclaration Boolean                @default(false)
+
   // Test project - automatically created for new organisations (max 10 participants)
   isTestProject            Boolean                 @default(false)
   maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects
@@ -349,6 +354,7 @@ model DocumentExtraction {
 enum DocumentType {
   FLIGHT_INVOICE
   FLIGHT_BOARDING_PASS
+  AIRLINE_DECLARATION      // Written confirmation from the airline that the passenger took the flight (substitutes a boarding pass)
   TRAIN_TICKET
   BUS_TICKET
   FUEL_RECEIPT

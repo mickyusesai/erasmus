@@ -185,6 +185,14 @@ export const REVIEW_RULES: ReviewRule[] = [
     enabled: true,
   },
   {
+    id: 'airline-declaration',
+    severity: 'info',
+    label: 'Airline Declaration',
+    description: 'A flight is proven by a declaration from the airline instead of a boarding pass',
+    prompt: 'If an AIRLINE_DECLARATION document exists → tell the org which flight it covers, so they can check it names the participant, the flight number and the date. It replaces the boarding pass; do NOT report that flight as missing a boarding pass.',
+    enabled: true,
+  },
+  {
     id: 'luggage-fee',
     severity: 'info',
     label: 'Luggage Fee',

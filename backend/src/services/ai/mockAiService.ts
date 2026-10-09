@@ -10,6 +10,7 @@ import {
 import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
+import { flightHasProof, flightDeclarationsAccepted } from '../../utils/flightProof.js';
 
 /**
  * Mock AI Service for development
@@ -53,7 +54,10 @@ export class MockAiService implements TravelDocumentAiService {
     const warnings: string[] = [];
 
     // Simple pattern matching for document type detection
-    if (filename.includes('boarding') || filename.includes('pass')) {
+    if (filename.includes('attestation') || filename.includes('certificate') || (filename.includes('airline') && filename.includes('declaration'))) {
+      documentType = DocumentType.AIRLINE_DECLARATION;
+      confidence = 0.8;
+    } else if (filename.includes('boarding') || filename.includes('pass')) {
       documentType = DocumentType.FLIGHT_BOARDING_PASS;
       confidence = 0.85;
     } else if (filename.includes('flight') || filename.includes('plane') || filename.includes('airline')) {
@@ -122,6 +126,7 @@ export class MockAiService implements TravelDocumentAiService {
     const typeLabels: Record<DocumentType, string> = {
       FLIGHT_INVOICE: 'flight invoice',
       FLIGHT_BOARDING_PASS: 'boarding pass',
+      AIRLINE_DECLARATION: 'airline declaration',
       TRAIN_TICKET: 'train ticket',
       BUS_TICKET: 'bus ticket',
       FUEL_RECEIPT: 'fuel receipt',
@@ -147,6 +152,8 @@ export class MockAiService implements TravelDocumentAiService {
         documents: true,
         travelItems: true,
         declarationsOnHonor: true,
+        declarationsOfTravel: true,
+        project: { select: { requireAirlineDeclaration: true } },
       },
     });
 
@@ -210,20 +217,25 @@ export class MockAiService implements TravelDocumentAiService {
         });
       }
 
-      // Check for boarding pass if flight
+      // Check for boarding pass if flight (same rules as the Claude service)
       if (item.modeOfTransport === TransportMode.PLANE) {
-        const hasBoardingPass = participant.documents.some(
-          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_BOARDING_PASS
-        );
-        const hasDeclaration = participant.declarationsOnHonor.some(
-          (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_BOARDING_PASS
+        const declarationsAccepted = flightDeclarationsAccepted(participant.project);
+        const hasBoardingPass = flightHasProof(item, participant.documents, !declarationsAccepted);
+        const hasDeclaration = declarationsAccepted && (
+          participant.declarationsOnHonor.some(
+            (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_BOARDING_PASS
+          ) ||
+          participant.declarationsOfTravel.some((dec: { travelItemId: string | null }) => dec.travelItemId === item.id)
         );
 
         if (!hasBoardingPass && !hasDeclaration) {
           missingItems.push({
             type: 'document',
-            description: 'Boarding pass or declaration on honor required for flight',
+            description: declarationsAccepted
+              ? `Boarding pass or declaration on honor required for flight${route}`
+              : `Boarding pass or declaration from the airline required for flight${route}`,
             documentType: DocumentType.FLIGHT_BOARDING_PASS,
+            travelItemId: item.id,
           });
         }
       }

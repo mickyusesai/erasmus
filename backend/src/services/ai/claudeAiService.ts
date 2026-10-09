@@ -12,6 +12,7 @@ import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { normalizeCountryName, sameCountry } from '../../utils/countryName.js';
 import { isReceiptDocument } from '../../utils/documentKinds.js';
+import { flightHasProof, flightDeclarationsAccepted } from '../../utils/flightProof.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
@@ -75,6 +76,7 @@ export class ClaudeAiService implements TravelDocumentAiService {
 Analyze this travel document and extract all relevant information. This could be:
 - A flight booking confirmation or invoice
 - A boarding pass
+- A declaration from an airline confirming that the passenger took a flight (certificate/confirmation of travel)
 - A train ticket
 - A bus ticket
 - A fuel receipt
@@ -83,7 +85,7 @@ Analyze this travel document and extract all relevant information. This could be
 
 Please respond with a JSON object (and ONLY a JSON object, no other text) with the following structure:
 {
-  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "OTHER",
+  "documentType": "FLIGHT_INVOICE" | "FLIGHT_BOARDING_PASS" | "AIRLINE_DECLARATION" | "TRAIN_TICKET" | "BUS_TICKET" | "FUEL_RECEIPT" | "GREEN_TRAVEL_DECLARATION" | "HOTEL_INVOICE" | "MEAL_RECEIPT" | "OTHER",
   "confidence": 0.0-1.0,
   "ocrText": "The key text extracted from the document",
   "isRoundTrip": true/false,
@@ -267,6 +269,7 @@ Other important notes:
     const mapping: Record<string, DocumentType> = {
       FLIGHT_INVOICE: DocumentType.FLIGHT_INVOICE,
       FLIGHT_BOARDING_PASS: DocumentType.FLIGHT_BOARDING_PASS,
+      AIRLINE_DECLARATION: DocumentType.AIRLINE_DECLARATION,
       TRAIN_TICKET: DocumentType.TRAIN_TICKET,
       BUS_TICKET: DocumentType.BUS_TICKET,
       FUEL_RECEIPT: DocumentType.FUEL_RECEIPT,
@@ -305,6 +308,7 @@ Other important notes:
     const typeLabels: Record<DocumentType, string> = {
       FLIGHT_INVOICE: 'flight invoice',
       FLIGHT_BOARDING_PASS: 'boarding pass',
+      AIRLINE_DECLARATION: 'airline declaration',
       TRAIN_TICKET: 'train ticket',
       BUS_TICKET: 'bus ticket',
       FUEL_RECEIPT: 'fuel receipt',
@@ -331,6 +335,7 @@ Other important notes:
         travelItems: true,
         declarationsOnHonor: true,
         declarationsOfTravel: true,
+        project: { select: { requireAirlineDeclaration: true } },
       },
     });
 
@@ -404,23 +409,26 @@ Other important notes:
         });
       }
 
-      // Check for boarding pass if flight
+      // Check for boarding pass if flight. A declaration from the airline counts as a
+      // boarding pass; a declaration on honour only counts when the project accepts it.
       if (item.modeOfTransport === TransportMode.PLANE) {
-        const hasBoardingPass = participant.documents.some(
-          (doc: { documentType: string }) => doc.documentType === DocumentType.FLIGHT_BOARDING_PASS
-        );
-        const hasDeclarationOnHonor = participant.declarationsOnHonor.some(
+        const declarationsAccepted = flightDeclarationsAccepted(participant.project);
+        const hasBoardingPass = flightHasProof(item, participant.documents, !declarationsAccepted);
+        const hasDeclarationOnHonor = declarationsAccepted && participant.declarationsOnHonor.some(
           (dec: { missingDocumentType: string }) => dec.missingDocumentType === DocumentType.FLIGHT_BOARDING_PASS
         );
-        const hasDeclarationOfTravel = participant.declarationsOfTravel.some(
+        const hasDeclarationOfTravel = declarationsAccepted && participant.declarationsOfTravel.some(
           (dec: { travelItemId: string | null }) => dec.travelItemId === item.id
         );
 
         if (!hasBoardingPass && !hasDeclarationOnHonor && !hasDeclarationOfTravel) {
           missingItems.push({
             type: 'document',
-            description: 'Boarding pass or declaration on honor required for flight',
+            description: declarationsAccepted
+              ? `Boarding pass or declaration on honor required for flight${route}`
+              : `Boarding pass or declaration from the airline required for flight${route}`,
             documentType: DocumentType.FLIGHT_BOARDING_PASS,
+            travelItemId: item.id,
           });
         }
       }
@@ -602,6 +610,8 @@ export async function generateParticipantReview(data: {
   maxReimbursementForCountry: number;
   greenTravel?: boolean;
   greenTravelExtra?: { foodEur: number | null; accommodationEur: number | null; note: string | null } | null;
+  /** Project setting: a declaration on honour is NOT accepted instead of a boarding pass */
+  requireAirlineDeclaration?: boolean;
   travelItems: Array<{
     id: string;
     modeOfTransport: string;
@@ -733,6 +743,12 @@ ${data.greenTravel ? 'This participant is flagged as GREEN TRAVEL (low-emission 
 ${data.greenTravelExtra && ((data.greenTravelExtra.foodEur ?? 0) > 0 || (data.greenTravelExtra.accommodationEur ?? 0) > 0)
   ? `The ORGANISATION added a green travel extra on top of the travel maximum: food €${(data.greenTravelExtra.foodEur ?? 0).toFixed(2)}, accommodation €${(data.greenTravelExtra.accommodationEur ?? 0).toFixed(2)}${data.greenTravelExtra.note ? ` (note: "${data.greenTravelExtra.note}")` : ''}. This amount was decided by the organisation — do NOT question it; only mention hotel/meal receipts that look implausible.`
   : 'No green travel extra has been added by the organisation.'}
+
+=== BOARDING PASS PROOF ===
+AIRLINE_DECLARATION documents are written confirmations from the airline that the participant took a flight. They are a valid substitute for a boarding pass: never report a flight as missing its boarding pass when an AIRLINE_DECLARATION covers it.
+${data.requireAirlineDeclaration
+  ? 'PROJECT RULE: this project\'s National Agency does NOT accept a declaration on honour (a Declaration of Travel, or a Declaration on Honor for FLIGHT_BOARDING_PASS) instead of a boarding pass. For every flight that is covered ONLY by such a declaration, create a CRITICAL finding (category "Declaration Not Accepted") saying the participant must provide the boarding pass or a declaration from the airline.'
+  : 'Declarations on honour are accepted instead of a missing boarding pass in this project.'}
 
 === DECLARATIONS OF TRAVEL (${data.declarationsOfTravel.length}) ===
 These are SIGNED declarations the participant created to REPLACE missing boarding passes. Each one is a PDF with their signature. The organisation MUST manually verify each declaration is correct (check route, date, flight number match the travel item).
