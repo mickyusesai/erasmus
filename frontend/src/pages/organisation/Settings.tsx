@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { organisationApi } from '../../services/api';
+import { organisationApi, type OrgBillingFields } from '../../services/api';
 import toast from 'react-hot-toast';
 import { ArrowLeft, User, Lock, Building } from 'lucide-react';
 
@@ -97,15 +97,31 @@ export default function Settings() {
   );
 }
 
-function ProfileSection({ organisation, queryClient }: { organisation: { id: string; name: string; email: string; oid?: string; legalName?: string | null; vatNumber?: string | null; createdAt?: string }; queryClient: ReturnType<typeof useQueryClient> }) {
+const BILLING_FIELD_LABELS: { key: keyof OrgBillingFields; label: string; placeholder: string }[] = [
+  { key: 'registrationNumber', label: 'Registration number', placeholder: 'e.g. Reg. Nr. 40008299840' },
+  { key: 'billingStreet', label: 'Street and number', placeholder: 'e.g. Daugavgrivas 132/1-51' },
+  { key: 'billingPostalCode', label: 'Postal code', placeholder: 'e.g. LV-1055' },
+  { key: 'billingCity', label: 'City', placeholder: 'e.g. Riga' },
+  { key: 'billingCountry', label: 'Country', placeholder: 'e.g. Latvia' },
+];
+
+function ProfileSection({ organisation, queryClient }: { organisation: { id: string; name: string; email: string; oid?: string; createdAt?: string } & OrgBillingFields; queryClient: ReturnType<typeof useQueryClient> }) {
   const [name, setName] = useState(organisation.name);
   const [email, setEmail] = useState(organisation.email);
   const [legalName, setLegalName] = useState(organisation.legalName ?? '');
   const [vatNumber, setVatNumber] = useState(organisation.vatNumber ?? '');
+  const billingInitial = () => Object.fromEntries(BILLING_FIELD_LABELS.map((f) => [f.key, organisation[f.key] ?? ''])) as Record<keyof OrgBillingFields, string>;
+  const [billing, setBilling] = useState<Record<keyof OrgBillingFields, string>>(billingInitial);
   const [isEditing, setIsEditing] = useState(false);
 
   const updateMutation = useMutation({
-    mutationFn: () => organisationApi.updateProfile({ name, email, legalName: legalName.trim() || null, vatNumber: vatNumber.trim() || null }),
+    mutationFn: () => organisationApi.updateProfile({
+      name,
+      email,
+      legalName: legalName.trim() || null,
+      vatNumber: vatNumber.trim() || null,
+      ...Object.fromEntries(BILLING_FIELD_LABELS.map((f) => [f.key, (billing[f.key] || '').trim() || null])),
+    }),
     onSuccess: () => {
       toast.success('Profile updated successfully');
       queryClient.invalidateQueries({ queryKey: ['org-settings'] });
@@ -169,7 +185,7 @@ function ProfileSection({ organisation, queryClient }: { organisation: { id: str
           </div>
           <div className="pt-2 border-t border-gray-100">
             <p className="text-xs text-gray-500 mb-3">
-              Optional — shown on the audit PDFs your accountant receives.
+              Optional — printed in the “Bill to” block of your invoices and on the audit PDFs your accountant receives.
             </p>
             <div className="space-y-4">
               <div>
@@ -198,6 +214,21 @@ function ProfileSection({ organisation, queryClient }: { organisation: { id: str
                   className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 />
               </div>
+              {BILLING_FIELD_LABELS.map((f) => (
+                <div key={f.key}>
+                  <label htmlFor={f.key} className="block text-sm font-medium text-gray-700 mb-1">
+                    {f.label} <span className="text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    id={f.key}
+                    type="text"
+                    value={billing[f.key]}
+                    onChange={(e) => setBilling((b) => ({ ...b, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  />
+                </div>
+              ))}
             </div>
           </div>
           <div className="flex gap-3">
@@ -208,6 +239,7 @@ function ProfileSection({ organisation, queryClient }: { organisation: { id: str
                 setEmail(organisation.email);
                 setLegalName(organisation.legalName ?? '');
                 setVatNumber(organisation.vatNumber ?? '');
+                setBilling(billingInitial());
                 setIsEditing(false);
               }}
               className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
@@ -240,6 +272,16 @@ function ProfileSection({ organisation, queryClient }: { organisation: { id: str
           <div className="flex justify-between">
             <span className="text-gray-600">VAT Number</span>
             <span className="text-gray-900">{organisation.vatNumber || <span className="text-gray-400">Not set</span>}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-600">Registration number</span>
+            <span className="text-gray-900">{organisation.registrationNumber || <span className="text-gray-400">Not set</span>}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-600">Invoice address</span>
+            <span className="text-gray-900 text-right">
+              {[organisation.billingStreet, [organisation.billingPostalCode, organisation.billingCity].filter(Boolean).join(' '), organisation.billingCountry].filter(Boolean).join(', ') || <span className="text-gray-400">Not set</span>}
+            </span>
           </div>
         </div>
       )}

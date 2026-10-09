@@ -697,13 +697,13 @@ export const organisationApi = {
     return handleResponse<{ message: string }>(res);
   },
 
-  updateProfile: async (data: { name?: string; email?: string; legalName?: string | null; vatNumber?: string | null }) => {
+  updateProfile: async (data: { name?: string; email?: string } & Partial<OrgBillingFields>) => {
     const res = await fetch(`${API_BASE}/auth/profile`, {
       method: 'PATCH',
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ message: string; organisation: { id: string; name: string; email: string; legalName?: string | null; vatNumber?: string | null } }>(res);
+    return handleResponse<{ message: string; organisation: { id: string; name: string; email: string } & OrgBillingFields }>(res);
   },
 
   // Dashboard
@@ -1139,11 +1139,11 @@ export const organisationApi = {
   },
 
   // Stripe
-  createCheckoutSession: async (type: 'SINGLE' | 'PACK_5' | 'PACK_10') => {
+  createCheckoutSession: async (type: 'SINGLE' | 'PACK_5' | 'PACK_10', invoiceReference?: string) => {
     const res = await fetch(`${API_BASE}/organisation/stripe/create-checkout-session`, {
       method: 'POST',
       headers: { ...getOrgAuthHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type }),
+      body: JSON.stringify({ type, invoiceReference: invoiceReference || undefined }),
     });
     return handleResponse<{ url: string }>(res);
   },
@@ -1205,13 +1205,22 @@ export const organisationApi = {
 };
 
 // Organisation Types
-export interface OrganisationInfo {
+/** Invoicing identity printed in the "Bill to" block of Stripe invoices (all optional) */
+export interface OrgBillingFields {
+  legalName?: string | null;
+  vatNumber?: string | null;
+  registrationNumber?: string | null;
+  billingStreet?: string | null;
+  billingPostalCode?: string | null;
+  billingCity?: string | null;
+  billingCountry?: string | null;
+}
+
+export interface OrganisationInfo extends OrgBillingFields {
   id: string;
   name: string;
   email: string;
   oid?: string;
-  legalName?: string | null;
-  vatNumber?: string | null;
   projectCredits: number;
   hasAnnualLicense: boolean;
   annualLicenseExpiresAt?: string;
@@ -1294,6 +1303,7 @@ export interface OrgPurchase {
   creditsGranted: number;
   status?: string;
   stripeInvoiceUrl?: string;
+  invoiceReference?: string | null;
   createdAt: string;
   completedAt?: string;
 }
@@ -1302,6 +1312,17 @@ export interface OrgBillingData {
   credits: OrgCreditStatus & { projectCredits: number };
   purchases: OrgPurchase[];
   organisation?: { isAffiliate: boolean; affiliateActive: boolean };
+  /** What the next invoice's "Bill to" block will show */
+  invoiceDetails?: {
+    name: string;
+    registrationNumber: string | null;
+    vatNumber: string | null;
+    street: string | null;
+    postalCode: string | null;
+    city: string | null;
+    country: string | null;
+    complete: boolean;
+  };
 }
 
 export interface AffiliateCustomerPurchase {

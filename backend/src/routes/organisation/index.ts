@@ -661,12 +661,24 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
       creditsGranted: p.creditsGranted,
       status: p.status,
       stripeInvoiceUrl: p.stripeInvoiceUrl,
+      invoiceReference: p.invoiceReference,
       createdAt: p.createdAt,
       completedAt: p.completedAt,
     })),
     organisation: {
       isAffiliate: org.isAffiliate,
       affiliateActive: org.affiliateActive,
+    },
+    // What will be printed in the "Bill to" block of the next invoice
+    invoiceDetails: {
+      name: org.legalName || org.name,
+      registrationNumber: org.registrationNumber,
+      vatNumber: org.vatNumber,
+      street: org.billingStreet,
+      postalCode: org.billingPostalCode,
+      city: org.billingCity,
+      country: org.billingCountry,
+      complete: !!(org.billingStreet && org.billingCity && org.billingCountry),
     },
   });
 }));
@@ -675,6 +687,52 @@ router.get('/billing', asyncHandler(async (req: Request, res: Response) => {
  * POST /api/organisation/stripe/create-checkout-session
  * Create a Stripe Checkout session for purchasing credits
  */
+/** Country names organisations commonly type, mapped to the ISO code Stripe needs for addresses */
+const COUNTRY_CODES: Record<string, string> = {
+  austria: 'AT', belgium: 'BE', bulgaria: 'BG', croatia: 'HR', cyprus: 'CY', czechia: 'CZ', 'czech republic': 'CZ', denmark: 'DK',
+  estonia: 'EE', finland: 'FI', france: 'FR', germany: 'DE', deutschland: 'DE', greece: 'GR', hungary: 'HU', iceland: 'IS', ireland: 'IE',
+  italy: 'IT', italia: 'IT', latvia: 'LV', latvija: 'LV', liechtenstein: 'LI', lithuania: 'LT', lietuva: 'LT', luxembourg: 'LU', malta: 'MT',
+  netherlands: 'NL', 'the netherlands': 'NL', nederland: 'NL', 'north macedonia': 'MK', norway: 'NO', poland: 'PL', polska: 'PL',
+  portugal: 'PT', romania: 'RO', serbia: 'RS', slovakia: 'SK', slovenia: 'SI', spain: 'ES', españa: 'ES', sweden: 'SE', switzerland: 'CH',
+  turkey: 'TR', türkiye: 'TR', ukraine: 'UA', 'united kingdom': 'GB', uk: 'GB',
+};
+function toCountryCode(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const v = value.trim();
+  if (/^[A-Za-z]{2}$/.test(v)) return v.toUpperCase();
+  return COUNTRY_CODES[v.toLowerCase()] ?? null;
+}
+
+/**
+ * Find or create the Stripe Customer for an organisation and keep its name/address in sync,
+ * so every invoice shows the legal name, address and registration details the organisation entered.
+ */
+async function syncStripeCustomer(stripe: any, org: Organisation): Promise<string> {
+  const countryCode = toCountryCode(org.billingCountry);
+  const address = org.billingStreet || org.billingCity || org.billingPostalCode
+    ? {
+        line1: org.billingStreet || undefined,
+        // Stripe only accepts ISO codes for the country; keep an unrecognised country name visible on line 2
+        line2: !countryCode && org.billingCountry ? org.billingCountry : undefined,
+        postal_code: org.billingPostalCode || undefined,
+        city: org.billingCity || undefined,
+        country: countryCode || undefined,
+      }
+    : undefined;
+  const params = { name: org.legalName || org.name, email: org.email, address, metadata: { organisationId: org.id } };
+  if (org.stripeCustomerId) {
+    try {
+      await stripe.customers.update(org.stripeCustomerId, params);
+      return org.stripeCustomerId;
+    } catch (err) {
+      console.warn(`[Stripe] Could not update customer ${org.stripeCustomerId}, creating a new one:`, err instanceof Error ? err.message : err);
+    }
+  }
+  const customer = await stripe.customers.create(params);
+  await prisma.organisation.update({ where: { id: org.id }, data: { stripeCustomerId: customer.id } });
+  return customer.id;
+}
+
 const STRIPE_PLANS: Record<string, { productEnvKey: string; amountCents: number; credits: number; label: string }> = {
   SINGLE:  { productEnvKey: 'STRIPE_PRODUCT_ID_SINGLE',  amountCents: 12900, credits: 1,  label: 'Single Project Credit' },
   PACK_5:  { productEnvKey: 'STRIPE_PRODUCT_ID_PACK_5',  amountCents: 49900, credits: 5,  label: 'Pack of 5 Credits' },
@@ -684,6 +742,8 @@ const STRIPE_PLANS: Record<string, { productEnvKey: string; amountCents: number;
 router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request, res: Response) => {
   const org = req.organisation!;
   const { type } = req.body as { type: string };
+  // Optional project number / PO reference, printed on this invoice only
+  const invoiceReference = typeof req.body?.invoiceReference === 'string' ? req.body.invoiceReference.trim().slice(0, 140) : '';
 
   const plan = STRIPE_PLANS[type];
   if (!plan) {
@@ -708,8 +768,17 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
       currency: 'EUR',
       creditsGranted: plan.credits,
       status: 'PENDING',
+      invoiceReference: invoiceReference || null,
     },
   });
+
+  // Invoice "Bill to" block: Stripe prints the customer's name and address, plus up to four custom fields
+  const customerId = await syncStripeCustomer(stripe, org);
+  const customFields = [
+    org.registrationNumber ? { name: 'Reg. Nr.', value: org.registrationNumber.slice(0, 140) } : null,
+    org.vatNumber ? { name: 'VAT ID', value: org.vatNumber.slice(0, 140) } : null,
+    invoiceReference ? { name: 'Project number', value: invoiceReference } : null,
+  ].filter((f): f is { name: string; value: string } => !!f);
 
   const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
@@ -726,6 +795,8 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
       enabled: true,
       invoice_data: {
         footer: 'VAT reverse charged — Article 196 Council Directive 2006/112/EC. VAT to be accounted for by the recipient. VAT ID: NL002317662B92.',
+        ...(customFields.length > 0 ? { custom_fields: customFields } : {}),
+        metadata: { organisationId: org.id, purchaseId: purchase.id, ...(invoiceReference ? { invoiceReference } : {}) },
       },
     },
     success_url: `${frontendUrl}/org/billing?success=1`,
@@ -736,7 +807,7 @@ router.post('/stripe/create-checkout-session', asyncHandler(async (req: Request,
       purchaseType: type,
       creditsGranted: String(plan.credits),
     },
-    customer_email: org.email,
+    customer: customerId,
     allow_promotion_codes: true,
   });
 
@@ -768,6 +839,11 @@ router.get('/settings', asyncHandler(async (req: Request, res: Response) => {
       oid: org.oid,
       legalName: org.legalName,
       vatNumber: org.vatNumber,
+      registrationNumber: org.registrationNumber,
+      billingStreet: org.billingStreet,
+      billingPostalCode: org.billingPostalCode,
+      billingCity: org.billingCity,
+      billingCountry: org.billingCountry,
       createdAt: org.createdAt,
     },
   });

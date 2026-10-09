@@ -261,7 +261,13 @@ const updateProfileSchema = z.object({
   email: z.string().email('Invalid email address').optional(),
   legalName: z.string().max(200).nullish(),
   vatNumber: z.string().max(50).nullish(),
+  registrationNumber: z.string().max(80).nullish(),
+  billingStreet: z.string().max(200).nullish(),
+  billingPostalCode: z.string().max(30).nullish(),
+  billingCity: z.string().max(100).nullish(),
+  billingCountry: z.string().max(100).nullish(),
 });
+const BILLING_FIELDS = ['legalName', 'vatNumber', 'registrationNumber', 'billingStreet', 'billingPostalCode', 'billingCity', 'billingCountry'] as const;
 
 /**
  * PATCH /api/auth/profile
@@ -275,7 +281,7 @@ router.patch('/profile', organisationAuth, asyncHandler(async (req: Request, res
     throw new ValidationError(result.error.errors[0].message);
   }
 
-  const { name, email, legalName, vatNumber } = result.data;
+  const { name, email } = result.data;
 
   // If email is being changed, check it's not already taken
   if (email && email.toLowerCase() !== organisation.email) {
@@ -294,8 +300,9 @@ router.patch('/profile', organisationAuth, asyncHandler(async (req: Request, res
     data: {
       ...(name && { name }),
       ...(email && { email: email.toLowerCase() }),
-      ...(legalName !== undefined && { legalName: legalName || null }),
-      ...(vatNumber !== undefined && { vatNumber: vatNumber || null }),
+      ...Object.fromEntries(
+        BILLING_FIELDS.filter((f) => result.data[f] !== undefined).map((f) => [f, result.data[f]?.trim() || null])
+      ),
     },
   });
 
@@ -305,8 +312,7 @@ router.patch('/profile', organisationAuth, asyncHandler(async (req: Request, res
       id: updated.id,
       name: updated.name,
       email: updated.email,
-      legalName: updated.legalName,
-      vatNumber: updated.vatNumber,
+      ...Object.fromEntries(BILLING_FIELDS.map((f) => [f, updated[f]])),
     },
   });
 }));

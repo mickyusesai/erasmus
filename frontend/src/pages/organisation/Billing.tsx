@@ -3,7 +3,7 @@ import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { organisationApi } from '../../services/api';
-import { ArrowLeft, CreditCard, CheckCircle, Clock, AlertTriangle, ExternalLink } from 'lucide-react';
+import { ArrowLeft, CreditCard, CheckCircle, Clock, AlertTriangle, ExternalLink, FileText } from 'lucide-react';
 import { OnboardingWizard } from '../../components/organisation/OnboardingWizard';
 
 const PRICING = {
@@ -19,6 +19,8 @@ export default function Billing() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const [loadingPlan, setLoadingPlan] = useState<PlanType | null>(null);
+  // Project number / PO reference printed on the next invoice (optional, per purchase)
+  const [invoiceReference, setInvoiceReference] = useState('');
 
   // Show onboarding wizard after a successful purchase if not yet seen
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -54,7 +56,7 @@ export default function Billing() {
   const handlePurchase = async (type: PlanType) => {
     setLoadingPlan(type);
     try {
-      const { url } = await organisationApi.createCheckoutSession(type);
+      const { url } = await organisationApi.createCheckoutSession(type, invoiceReference.trim() || undefined);
       window.location.href = url;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start checkout');
@@ -115,6 +117,53 @@ export default function Billing() {
             </p>
           )}
         </div>
+
+        {/* Invoice details: what the next invoice will say, plus an optional project reference */}
+        {(() => {
+          const d = data.invoiceDetails;
+          const addressLine = d ? [d.street, [d.postalCode, d.city].filter(Boolean).join(' '), d.country].filter(Boolean).join(', ') : '';
+          return (
+            <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="flex items-start gap-3">
+                  <FileText className="w-5 h-5 text-gray-500 mt-0.5" />
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">Invoice details</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">This is what the “Bill to” block of your next invoice will show.</p>
+                  </div>
+                </div>
+                <Link to="/org/settings" className="text-sm text-primary-600 hover:text-primary-700 font-medium">Edit in settings</Link>
+              </div>
+              {d && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="text-sm text-gray-800 bg-gray-50 rounded-lg p-4 space-y-0.5">
+                    <p className="font-medium">{d.name}</p>
+                    {d.registrationNumber && <p>Reg. Nr. {d.registrationNumber}</p>}
+                    {d.vatNumber && <p>VAT ID {d.vatNumber}</p>}
+                    {addressLine ? <p>{addressLine}</p> : (
+                      <p className="text-amber-700">No invoice address yet — add your organisation's address in settings so your accountant gets a complete invoice.</p>
+                    )}
+                  </div>
+                  <div>
+                    <label htmlFor="invoiceReference" className="block text-sm font-medium text-gray-700 mb-1">
+                      Project number or reference for this invoice <span className="text-gray-400 font-normal">(optional)</span>
+                    </label>
+                    <input
+                      id="invoiceReference"
+                      type="text"
+                      maxLength={140}
+                      value={invoiceReference}
+                      onChange={(e) => setInvoiceReference(e.target.value)}
+                      placeholder="e.g. 2026-1-LV02-KA152-YOU-000399595"
+                      className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Printed on the invoice of the purchase you start below, for your project accounting.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Pricing Options */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
@@ -205,6 +254,7 @@ export default function Billing() {
                         </p>
                         <p className="text-sm text-gray-500">
                           {new Date(purchase.completedAt || purchase.createdAt).toLocaleDateString()}
+                          {purchase.invoiceReference && <span className="text-gray-400"> · {purchase.invoiceReference}</span>}
                         </p>
                       </div>
                     </div>

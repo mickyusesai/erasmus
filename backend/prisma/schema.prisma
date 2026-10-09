@@ -34,9 +34,15 @@ model Organisation {
   // Account status
   isActive                Boolean   @default(true)
 
-  // Accountant / invoicing details (optional; shown on audit PDFs)
+  // Accountant / invoicing details (optional; shown on audit PDFs and on Stripe invoices)
   legalName               String?   // Official registered name, if different from display name
   vatNumber               String?   // VAT identification number
+  registrationNumber      String?   // Company / association registration number (e.g. "Reg. Nr. 40008299840")
+  billingStreet           String?
+  billingPostalCode       String?
+  billingCity             String?
+  billingCountry          String?
+  stripeCustomerId        String?   // Stripe Customer reused for every purchase so invoices carry the details above
 
   // Affiliate programme
   isAffiliate             Boolean   @default(false)
@@ -72,6 +78,7 @@ model Purchase {
   stripeSessionId   String?        @unique
   stripePaymentIntentId String?
   stripeInvoiceUrl  String?
+  invoiceReference  String?        // Project number / PO reference the organisation wants printed on this invoice
 
   status            PurchaseStatus @default(PENDING)
   createdAt         DateTime       @default(now())
