@@ -7,11 +7,103 @@ import { ValidationError, NotFoundError } from '../../middleware/errorHandler.js
 import { superAdminAuth } from '../../middleware/auth.js';
 import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
+import { AI_JOB_LABELS, estimateCostUsd, type AiJob } from '../../services/ai/usageLog.js';
 
 const router = Router();
 
 // All routes require super admin authentication
 router.use(superAdminAuth);
+
+/**
+ * GET /api/super-admin/ai-usage?days=30
+ * Claude token usage and estimated cost per AI job over the last N days
+ */
+router.get('/ai-usage', asyncHandler(async (req: Request, res: Response) => {
+  const days = Math.min(365, Math.max(1, parseInt(String(req.query.days ?? '30'), 10) || 30));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const [groups, participants, first] = await Promise.all([
+    prisma.aiUsage.groupBy({
+      by: ['job', 'model'],
+      where: { createdAt: { gte: since } },
+      _count: { _all: true },
+      _sum: { inputTokens: true, cacheWriteTokens: true, cacheReadTokens: true, outputTokens: true },
+      _avg: { durationMs: true },
+    }),
+    prisma.aiUsage.findMany({
+      where: { createdAt: { gte: since }, participantId: { not: null } },
+      distinct: ['participantId'],
+      select: { participantId: true },
+    }),
+    prisma.aiUsage.findFirst({ orderBy: { createdAt: 'asc' }, select: { createdAt: true } }),
+  ]);
+
+  type JobRow = {
+    job: AiJob;
+    label: string;
+    calls: number;
+    inputTokens: number;
+    cacheWriteTokens: number;
+    cacheReadTokens: number;
+    outputTokens: number;
+    estimatedCostUsd: number;
+    avgDurationMs: number | null;
+  };
+  const byJob = new Map<string, JobRow>();
+  const unpricedModels = new Set<string>();
+  for (const g of groups) {
+    const tokens = {
+      inputTokens: g._sum.inputTokens ?? 0,
+      cacheWriteTokens: g._sum.cacheWriteTokens ?? 0,
+      cacheReadTokens: g._sum.cacheReadTokens ?? 0,
+      outputTokens: g._sum.outputTokens ?? 0,
+    };
+    const cost = estimateCostUsd(g.model, tokens);
+    if (cost === null) unpricedModels.add(g.model);
+    const row = byJob.get(g.job) ?? {
+      job: g.job as AiJob,
+      label: AI_JOB_LABELS[g.job as AiJob] ?? g.job,
+      calls: 0,
+      inputTokens: 0,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      outputTokens: 0,
+      estimatedCostUsd: 0,
+      avgDurationMs: null,
+    };
+    const prevCalls = row.calls;
+    row.calls += g._count._all;
+    row.inputTokens += tokens.inputTokens;
+    row.cacheWriteTokens += tokens.cacheWriteTokens;
+    row.cacheReadTokens += tokens.cacheReadTokens;
+    row.outputTokens += tokens.outputTokens;
+    row.estimatedCostUsd += cost ?? 0;
+    if (g._avg.durationMs != null) {
+      row.avgDurationMs = Math.round(((row.avgDurationMs ?? 0) * prevCalls + g._avg.durationMs * g._count._all) / row.calls);
+    }
+    byJob.set(g.job, row);
+  }
+
+  const order: AiJob[] = ['EXTRACTION', 'CONSOLIDATION', 'REVIEW'];
+  const jobs = [...byJob.values()].sort((a, b) => order.indexOf(a.job) - order.indexOf(b.job));
+  const totalCost = jobs.reduce((s, j) => s + j.estimatedCostUsd, 0);
+
+  res.json({
+    days,
+    since,
+    loggingStartedAt: first?.createdAt ?? null,
+    jobs: jobs.map((j) => ({ ...j, shareOfCost: totalCost > 0 ? j.estimatedCostUsd / totalCost : 0 })),
+    total: {
+      calls: jobs.reduce((s, j) => s + j.calls, 0),
+      inputTokens: jobs.reduce((s, j) => s + j.inputTokens + j.cacheWriteTokens + j.cacheReadTokens, 0),
+      outputTokens: jobs.reduce((s, j) => s + j.outputTokens, 0),
+      estimatedCostUsd: totalCost,
+    },
+    participants: participants.length,
+    costPerParticipantUsd: participants.length > 0 ? totalCost / participants.length : null,
+    unpricedModels: [...unpricedModels],
+  });
+}));
 
 /**
  * GET /api/super-admin/organisations

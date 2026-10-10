@@ -8,6 +8,7 @@ import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import { normalizeCountryName } from '../../utils/countryName.js';
 import { samePlace, sameTravelDay } from '../../utils/placeMatch.js';
 import { isReceiptDocument } from '../../utils/documentKinds.js';
+import { recordAiUsage } from './usageLog.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -82,7 +83,7 @@ export class JourneyConsolidationService {
     options: { typeHint?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT' | 'FLIGHT_BOARDING_PASS' | 'AIRLINE_DECLARATION' } = {}
   ): Promise<void> {
     const typeHint = options.typeHint;
-    console.log(`[Consolidation] Extracting data from document ${documentId} using OpenAI GPT-5.2`);
+    console.log(`[Consolidation] Extracting data from document ${documentId} using ${this.model}`);
 
     const isPdf = mimeType.includes('pdf');
 
@@ -276,6 +277,7 @@ PARTICIPANT'S OWN CLASSIFICATION: ${
     try {
       console.log(`[Extraction] Quick extraction for UI feedback using ${this.model}`);
 
+      const startedAt = Date.now();
       const response = await this.client.messages.create({
         model: this.model,
         max_tokens: 2000, // Light extraction - keep it fast, no extended thinking
@@ -286,6 +288,8 @@ PARTICIPANT'S OWN CLASSIFICATION: ${
           },
         ],
       });
+
+      void recordAiUsage('EXTRACTION', response, { documentId, startedAt });
 
       const responseText = response.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -961,6 +965,7 @@ Do NOT include in warnings (these are handled elsewhere):
       let response: Anthropic.Message | undefined;
       for (let attempt = 0; attempt <= participant.documents.length; attempt++) {
         try {
+          const startedAt = Date.now();
           response = await this.client.messages.create({
             model: this.model,
             max_tokens: 28000,
@@ -974,6 +979,13 @@ Do NOT include in warnings (these are handled elsewhere):
                 content: activeParts as Anthropic.MessageParam['content'],
               },
             ],
+          });
+          // Every attempt that returns is billed, so each one is recorded
+          void recordAiUsage('CONSOLIDATION', response, {
+            participantId,
+            projectId: participant.projectId,
+            documentCount: activeOwner.size,
+            startedAt,
           });
           break;
         } catch (apiError) {

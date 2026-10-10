@@ -107,6 +107,28 @@ enum PurchaseStatus {
   EXPIRED
 }
 
+// One row per Claude API response, to see what each AI job costs.
+// No foreign keys on purpose: usage history must survive deleting a participant or project.
+model AiUsage {
+  id               String   @id @default(uuid())
+  createdAt        DateTime @default(now())
+  job              String   // EXTRACTION (reading one uploaded file) | CONSOLIDATION (building the trips) | REVIEW (AI review)
+  model            String
+  participantId    String?
+  projectId        String?
+  documentCount    Int?     // files sent in the request (trip building)
+  inputTokens      Int
+  cacheWriteTokens Int      @default(0)
+  cacheReadTokens  Int      @default(0)
+  outputTokens     Int      // includes thinking tokens
+  thinkingTokens   Int?     // only when the API reports it separately
+  stopReason       String?
+  durationMs       Int?
+
+  @@index([createdAt])
+  @@index([job, createdAt])
+}
+
 // Super Admin - internal administrative access
 model SuperAdmin {
   id            String   @id @default(uuid())

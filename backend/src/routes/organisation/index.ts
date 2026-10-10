@@ -1574,7 +1574,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       amountToReimburse: participant.reimbursementSummary.amountToReimburse,
     } : null,
     bankDetailsComplete: !!(participant.bankAccountIban && participant.bankAccountHolderName && participant.bankAccountBic),
-  });
+  }, { participantId: participant.id, projectId: participant.projectId });
 
   // Store new findings in DB (including travelItemId link)
   if (findings.length > 0) {

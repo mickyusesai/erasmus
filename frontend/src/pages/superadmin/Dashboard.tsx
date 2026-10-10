@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { LogOut, Building2, CreditCard, Users, Plus, RefreshCw, ExternalLink, TrendingUp, CheckCircle, ToggleLeft, ToggleRight } from 'lucide-react';
+import { LogOut, Building2, CreditCard, Users, Plus, RefreshCw, ExternalLink, TrendingUp, CheckCircle, ToggleLeft, ToggleRight, Sparkles } from 'lucide-react';
+import { AiUsagePanel } from '../../components/superadmin/AiUsagePanel';
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
@@ -61,7 +62,7 @@ export default function SuperAdminDashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<'organisations' | 'affiliates'>('organisations');
+  const [activeTab, setActiveTab] = useState<'organisations' | 'affiliates' | 'ai-usage'>('organisations');
 
   // Organisations state
   const [showGrantModal, setShowGrantModal] = useState(false);
@@ -338,7 +339,17 @@ export default function SuperAdminDashboard() {
               </span>
             )}
           </button>
+          <button
+            onClick={() => setActiveTab('ai-usage')}
+            className={`px-5 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'ai-usage' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
+          >
+            <Sparkles className="w-4 h-4" />
+            AI usage
+          </button>
         </div>
+
+        {/* AI Usage Tab */}
+        {activeTab === 'ai-usage' && <AiUsagePanel />}
 
         {/* Organisations Tab */}
         {activeTab === 'organisations' && (

@@ -76,16 +76,6 @@ export interface MissingItem {
 
 export interface TravelDocumentAiService {
   /**
-   * Analyze an uploaded document and extract travel information
-   * This is where OCR and AI processing would happen
-   */
-  analyzeDocument(
-    fileBuffer: Buffer,
-    mimeType: string,
-    originalFilename: string
-  ): Promise<DocumentAnalysisResult>;
-
-  /**
    * Generate a human-readable filename based on document content
    */
   generateFilename(

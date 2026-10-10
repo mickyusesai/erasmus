@@ -1918,7 +1918,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
           amountToReimburse: fullParticipant.reimbursementSummary.amountToReimburse,
         } : null,
         bankDetailsComplete: !!(fullParticipant.bankAccountIban && fullParticipant.bankAccountHolderName && fullParticipant.bankAccountBic),
-      });
+      }, { participantId: fullParticipant.id, projectId: fullParticipant.projectId });
 
       // Store findings in DB (including travelItemId link)
       if (findings.length > 0) {
