@@ -610,7 +610,7 @@ export function projectEndedHtml(participantName: string, projectName: string, m
 }
 
 // =============================================================================
-// GREEN TRAVEL EXTRA (organiser added food/accommodation budget)
+// GREEN TRAVEL EXTRA (organiser set or changed the food/accommodation amount)
 // =============================================================================
 
 export interface GreenTravelExtraAmounts {
@@ -626,7 +626,7 @@ export function greenTravelExtraSubject(projectName: string, amounts: GreenTrave
   const removed = amounts.foodEur + amounts.accommodationEur <= 0;
   return removed
     ? `Green travel extra removed – ${projectName}`
-    : `Extra green travel budget added to your reimbursement – ${projectName}`;
+    : `Green travel extra on your reimbursement – ${projectName}`;
 }
 
 export function greenTravelExtraText(participantName: string, projectName: string, amounts: GreenTravelExtraAmounts, magicLink: string, ctx?: ProjectEmailContext): string {
@@ -636,7 +636,7 @@ export function greenTravelExtraText(participantName: string, projectName: strin
 
 ${removed
   ? `${who} has removed the green travel extra from your reimbursement for "${projectName}".`
-  : `${who} has added an extra green travel budget to your reimbursement for "${projectName}", because you travelled sustainably:
+  : `${who} has set the green travel extra on your reimbursement for "${projectName}", because you travelled sustainably:
 
 - Food: ${eur(amounts.foodEur)}
 - Accommodation: ${eur(amounts.accommodationEur)}`}
@@ -660,7 +660,7 @@ export function greenTravelExtraHtml(participantName: string, projectName: strin
     <p>Hello <strong>${participantName}</strong>,</p>
     ${removed
       ? `<p>${who} has removed the green travel extra from your reimbursement for "${escapeHtml(projectName)}".</p>`
-      : `${successBox(`${who} has added an <strong>extra green travel budget</strong> to your reimbursement for "${escapeHtml(projectName)}", because you travelled sustainably.`)}
+      : `${successBox(`${who} has set the <strong>green travel extra</strong> on your reimbursement for "${escapeHtml(projectName)}", because you travelled sustainably.`)}
     <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
       <tr><td style="padding: 6px 0; color: #374151;">Food</td><td style="padding: 6px 0; text-align: right; font-weight: 600;">${eur(amounts.foodEur)}</td></tr>
       <tr><td style="padding: 6px 0; color: #374151;">Accommodation</td><td style="padding: 6px 0; text-align: right; font-weight: 600;">${eur(amounts.accommodationEur)}</td></tr>
