@@ -31,7 +31,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult, CreateOrgProjectData } from '../../services/api';
+import { organisationApi, OrgParticipant, ImportPreview, ExchangeRateMode, ProjectRecalcResult, CreateOrgProjectData, GreenTravelExtraMode } from '../../services/api';
 import { clsx } from 'clsx';
 
 // Helper function to format dates as DD-MM-YYYY (European format)
@@ -1701,13 +1701,113 @@ function ParticipantCommunicationCard({ project, projectId }: { project: any; pr
   );
 }
 
+const GREEN_TRAVEL_RULES: { value: GreenTravelExtraMode; label: string; help: string }[] = [
+  {
+    value: 'MANUAL',
+    label: 'I decide the amount per participant',
+    help: "You type the food and accommodation amounts on each green traveller's page.",
+  },
+  {
+    value: 'RECEIPTS',
+    label: 'Receipts, up to a limit',
+    help: 'Receipts from the extra travel days count, up to your limit per day for food and per night for accommodation.',
+  },
+  {
+    value: 'FIXED',
+    label: 'Fixed amount per extra day',
+    help: 'A set amount per extra travel day for food and per extra night for accommodation. No receipts needed.',
+  },
+];
+
+/** How the green travel extra is worked out for green travellers (food per day, accommodation per night) */
+function GreenTravelRuleSetting({
+  project,
+  saving,
+  onSave,
+}: {
+  project: { greenTravelExtraMode?: GreenTravelExtraMode; greenTravelFoodPerDayEur?: number | null; greenTravelAccommodationPerNightEur?: number | null };
+  saving: boolean;
+  onSave: (data: Partial<CreateOrgProjectData>) => void;
+}) {
+  const mode: GreenTravelExtraMode = project.greenTravelExtraMode || 'MANUAL';
+  const asText = (n: number | null | undefined) => (n != null ? String(n) : '');
+  const [food, setFood] = useState(asText(project.greenTravelFoodPerDayEur));
+  const [night, setNight] = useState(asText(project.greenTravelAccommodationPerNightEur));
+  useEffect(() => setFood(asText(project.greenTravelFoodPerDayEur)), [project.greenTravelFoodPerDayEur]);
+  useEffect(() => setNight(asText(project.greenTravelAccommodationPerNightEur)), [project.greenTravelAccommodationPerNightEur]);
+
+  const saveLimit = (field: 'greenTravelFoodPerDayEur' | 'greenTravelAccommodationPerNightEur', text: string) => {
+    const value = text.trim() === '' ? null : parseFloat(text.replace(',', '.'));
+    if (value != null && (isNaN(value) || value < 0)) {
+      toast.error('Please enter an amount of 0 or more');
+      return;
+    }
+    if (value !== (project[field] ?? null)) onSave({ [field]: value });
+  };
+
+  return (
+    <div className="p-3 bg-gray-50 rounded-xl">
+      <p className="font-medium text-gray-900">Green travel extra</p>
+      <p className="text-sm text-gray-500 mt-0.5">
+        Food and accommodation for green travellers on their extra travel days outside the project dates. Whichever you
+        choose, you still check and save the amounts on each participant's page.
+      </p>
+      <div className="mt-3 space-y-2">
+        {GREEN_TRAVEL_RULES.map((rule) => (
+          <label key={rule.value} className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="green-travel-extra-mode"
+              checked={mode === rule.value}
+              onChange={() => onSave({ greenTravelExtraMode: rule.value })}
+              disabled={saving}
+              className="mt-1 text-primary-600 focus:ring-primary-500"
+            />
+            <span>
+              <span className="block text-sm font-medium text-gray-900">{rule.label}</span>
+              <span className="block text-xs text-gray-500">{rule.help}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {mode !== 'MANUAL' && (
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Input
+            label={mode === 'RECEIPTS' ? 'Food: up to € per extra travel day' : 'Food: € per extra travel day'}
+            type="number"
+            min="0"
+            step="0.01"
+            inputMode="decimal"
+            value={food}
+            onChange={(e) => setFood(e.target.value)}
+            onBlur={() => saveLimit('greenTravelFoodPerDayEur', food)}
+            placeholder="e.g. 40"
+            disabled={saving}
+          />
+          <Input
+            label={mode === 'RECEIPTS' ? 'Accommodation: up to € per extra night' : 'Accommodation: € per extra night'}
+            type="number"
+            min="0"
+            step="0.01"
+            inputMode="decimal"
+            value={night}
+            onChange={(e) => setNight(e.target.value)}
+            onBlur={() => saveLimit('greenTravelAccommodationPerNightEur', night)}
+            placeholder="e.g. 35"
+            disabled={saving}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FeatureSettingsCard({ project, projectId }: { project: any; projectId: string }) {
   const queryClient = useQueryClient();
   const [carRate, setCarRate] = useState<string>(String(project.carRatePerKm || 0.22));
 
   const updateProjectMutation = useMutation({
-    mutationFn: (data: { disseminationEnabled?: boolean; carRatePerKm?: number; aiAnalysisUnlocked?: boolean; requireGreenTravelDeclaration?: boolean; requireAirlineDeclaration?: boolean }) =>
-      organisationApi.updateProject(projectId, data),
+    mutationFn: (data: Partial<CreateOrgProjectData>) => organisationApi.updateProject(projectId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
       toast.success('Project settings updated');
@@ -1799,6 +1899,12 @@ function FeatureSettingsCard({ project, projectId }: { project: any; projectId: 
               className="rounded border-gray-300 w-5 h-5 text-primary-600 focus:ring-primary-500"
             />
           </label>
+
+          <GreenTravelRuleSetting
+            project={project}
+            saving={updateProjectMutation.isPending}
+            onSave={(data) => updateProjectMutation.mutate(data)}
+          />
 
           <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
             <div className="pr-4">

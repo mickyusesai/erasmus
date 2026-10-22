@@ -416,7 +416,7 @@ router.get('/:id/export/csv', async (req: Request, res: Response) => {
     'Total EUR',
     'Max Allowed',
     'Amount to Reimburse',
-    'AI Check OK',
+    'All Details Filled In',
     'Admin Approved',
     'Paid',
   ];

@@ -6,6 +6,7 @@ import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '..
 import { organisationAuth, ensureOwnProject } from '../../middleware/auth.js';
 import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { getStorageService } from '../../services/storage/index.js';
@@ -13,6 +14,8 @@ import { generateAuditPdf } from '../../services/pdf/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { summarizeTravelDays } from '../../utils/travelDays.js';
+import { extraTravelDates, calculateGreenTravelExtra, GREEN_TRAVEL_EXTRA_MODES, type ExtraReceipt, type GreenTravelCalculation } from '../../utils/greenTravelExtra.js';
+import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
 import multer from 'multer';
@@ -325,6 +328,9 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       contactPhone: project.contactPhone,
       requireGreenTravelDeclaration: project.requireGreenTravelDeclaration,
       requireAirlineDeclaration: project.requireAirlineDeclaration,
+      greenTravelExtraMode: project.greenTravelExtraMode,
+      greenTravelFoodPerDayEur: project.greenTravelFoodPerDayEur,
+      greenTravelAccommodationPerNightEur: project.greenTravelAccommodationPerNightEur,
       creditSource: project.creditSource,
       countryLimits: project.countryLimits,
       participants: project.participants,
@@ -354,6 +360,10 @@ const updateProjectSchema = z.object({
   contactPhone: z.string().nullish(),
   requireGreenTravelDeclaration: z.boolean().optional(),
   requireAirlineDeclaration: z.boolean().optional(),
+  // How the green travel extra is worked out, with its limits (EUR)
+  greenTravelExtraMode: z.enum(GREEN_TRAVEL_EXTRA_MODES).optional(),
+  greenTravelFoodPerDayEur: z.number().min(0).max(10000).nullish(),
+  greenTravelAccommodationPerNightEur: z.number().min(0).max(10000).nullish(),
 });
 
 /**
@@ -433,6 +443,9 @@ router.patch('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request
       contactPhone: project.contactPhone,
       requireGreenTravelDeclaration: project.requireGreenTravelDeclaration,
       requireAirlineDeclaration: project.requireAirlineDeclaration,
+      greenTravelExtraMode: project.greenTravelExtraMode,
+      greenTravelFoodPerDayEur: project.greenTravelFoodPerDayEur,
+      greenTravelAccommodationPerNightEur: project.greenTravelAccommodationPerNightEur,
       creditSource: project.creditSource,
       participantCount: project._count.participants,
       createdAt: project.createdAt,
@@ -1231,6 +1244,44 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
       })),
   };
 
+  // The project's green travel rule suggests the amounts for green travellers (the organiser still saves them)
+  const { greenTravelExtraMode: ruleMode, greenTravelFoodPerDayEur, greenTravelAccommodationPerNightEur } = participant.project;
+  let calculation: GreenTravelCalculation | null = null;
+  if (effectiveLimit.greenTravel && (ruleMode === 'RECEIPTS' || ruleMode === 'FIXED')) {
+    const receipts: ExtraReceipt[] = await Promise.all(
+      participant.documents
+        .filter((d) => d.documentType === 'HOTEL_INVOICE' || d.documentType === 'MEAL_RECEIPT')
+        .map(async (d): Promise<ExtraReceipt> => {
+          const date = d.extraction?.documentDate ?? null;
+          const receipt: ExtraReceipt = {
+            id: d.id,
+            kind: d.documentType === 'HOTEL_INVOICE' ? 'ACCOMMODATION' : 'FOOD',
+            filename: d.renamedFilename,
+            date: date ? date.toISOString().slice(0, 10) : null,
+            amountEur: null,
+          };
+          const amount = d.extraction?.amount;
+          if (amount == null) return receipt;
+          try {
+            // Same rate rules as the tickets (project mode + per-currency overrides); no currency read = EUR
+            receipt.amountEur = await convertToEurForParticipant(participant.id, amount, d.extraction?.currency || 'EUR', date);
+          } catch {
+            receipt.noRate = true;
+          }
+          return receipt;
+        })
+    );
+    calculation = calculateGreenTravelExtra({
+      mode: ruleMode,
+      foodPerDayEur: greenTravelFoodPerDayEur,
+      accommodationPerNightEur: greenTravelAccommodationPerNightEur,
+      extra: extraTravelDates(participant.travelItems, participant.project.startDate, participant.project.endDate),
+      projectStart: participant.project.startDate,
+      projectEnd: participant.project.endDate,
+      receipts,
+    });
+  }
+
   res.json({
     participant: {
       ...participant,
@@ -1239,7 +1290,7 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
       greenTravel: effectiveLimit.greenTravel,
       countryMaxReimbursement: effectiveLimit.countryMax,
       countryGreenTravel: effectiveLimit.countryGreen,
-      greenTravelSuggestion,
+      greenTravelSuggestion: { ...greenTravelSuggestion, mode: ruleMode, calculation },
     },
   });
 }));
@@ -2277,7 +2328,8 @@ const orgUpdateTravelItemSchema = z.object({
   amountEur: z.number().optional(),
   comment: z.string().nullable().optional(),
   excludedFromReimbursement: z.boolean().optional(),
-  exclusionReason: z.enum(['HOSTING_ORG_PAID', 'OTHER']).nullable().optional(),
+  // ORGANISATION = the organisation decided not to reimburse this trip (participants cannot undo it)
+  exclusionReason: z.enum(['HOSTING_ORG_PAID', 'OTHER', 'ORGANISATION']).nullable().optional(),
   exchangeRateOverride: z.number().nullable().optional(),
   companyName: z.string().nullable().optional(),
 });
@@ -2426,6 +2478,18 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
 
   const documentType = (req.body.documentType as string) || 'OTHER';
 
+  // The same file is kept once: return the copy the participant already has
+  const contentHash = createHash('sha256').update(req.file.buffer).digest('hex');
+  const sameFile = await prisma.document.findFirst({ where: { participantId, contentHash } });
+  if (sameFile) {
+    const document =
+      sameFile.documentType === 'OTHER' && documentType !== 'OTHER'
+        ? await prisma.document.update({ where: { id: sameFile.id }, data: { documentType: documentType as DocumentType } })
+        : sameFile;
+    res.status(200).json({ ...document, duplicate: true });
+    return;
+  }
+
   // Repair PDFs with junk before the header; refuse files that aren't PDFs at all
   let fileBuffer = req.file.buffer;
   if (req.file.mimetype.includes('pdf')) {
@@ -2450,6 +2514,7 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
       mimeType: req.file.mimetype,
       fileSize: fileBuffer.length,
       documentType: documentType as DocumentType,
+      contentHash,
     },
   });
 

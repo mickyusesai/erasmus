@@ -40,14 +40,18 @@ import {
   Repeat,
   BedDouble,
   Utensils,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, type OrgParticipantDetail as OrgParticipantDetailData } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, type OrgParticipantDetail as OrgParticipantDetailData, type GreenTravelCalculation, type GreenTravelNotCountedReason } from '../../services/api';
 import { clsx } from 'clsx';
+import { tripHasNoPrice, tripPriceTypedIn } from '../../utils/tripPrice';
+import { isFlightProof } from '../../utils/flightProof';
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -110,6 +114,35 @@ function getLinkedDocIds(item: TravelItem): string[] {
     ids.push(item.luggageDocumentId);
   }
   return ids;
+}
+
+/**
+ * The delete confirmation for a file: which trips use it, and a warning when it is the
+ * only file of a trip or the only boarding pass of a flight. Deleting is permanent.
+ */
+function deleteDocumentMessage(doc: Document, travelItems: TravelItem[], documents: Document[]): string {
+  const docsById = new Map(documents.map((d) => [d.id, d]));
+  const lines = [`Delete "${doc.renamedFilename}"?`];
+  const linked = travelItems.filter((t) => getLinkedDocIds(t).includes(doc.id));
+  if (linked.length > 0) {
+    lines.push('', 'It is linked to:');
+    for (const t of linked) {
+      const others = getLinkedDocIds(t)
+        .filter((id) => id !== doc.id)
+        .map((id) => docsById.get(id))
+        .filter((d): d is Document => !!d);
+      const trip = `${t.fromLocation} → ${t.toLocation}${t.flightNumber ? ` (${t.flightNumber})` : ''}, ${formatDate(t.departureDate)}`;
+      const warning =
+        others.length === 0
+          ? ' ⚠ the only file for this trip'
+          : t.modeOfTransport === 'PLANE' && isFlightProof(doc) && !others.some(isFlightProof)
+            ? ' ⚠ the only boarding pass for this flight'
+            : '';
+      lines.push(`• ${trip}${warning}`);
+    }
+  }
+  lines.push('', 'The file is deleted for good and cannot be restored.');
+  return lines.join('\n');
 }
 
 // Group travel items belonging to the same booking (round-trip / multi-leg).
@@ -367,6 +400,25 @@ export default function OrgParticipantDetail() {
     onError: (error: Error) => toast.error(error.message || 'Failed to update travel item'),
   });
 
+  // The organisation decides not to reimburse a trip (or reimburses it again); the trip stays visible
+  const excludeTravelItemMutation = useMutation({
+    mutationFn: async ({ itemId, exclude }: { itemId: string; exclude: boolean }) => {
+      await organisationApi.updateTravelItem(
+        id!,
+        itemId,
+        exclude
+          ? { excludedFromReimbursement: true, exclusionReason: 'ORGANISATION' }
+          : { excludedFromReimbursement: false, exclusionReason: null }
+      );
+      await organisationApi.recalculateSummary(id!);
+    },
+    onSuccess: (_r, { exclude }) => {
+      toast.success(exclude ? 'This trip is no longer reimbursed' : 'This trip is reimbursed again');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    },
+    onError: (error: Error) => toast.error(error.message || 'Failed to update travel item'),
+  });
+
   const deleteTravelItemMutation = useMutation({
     mutationFn: async (itemId: string) => {
       await organisationApi.deleteTravelItem(id!, itemId);
@@ -380,11 +432,11 @@ export default function OrgParticipantDetail() {
   });
 
   const uploadDocumentMutation = useMutation({
-    mutationFn: async ({ file, docType }: { file: File; docType: string }) => {
-      await organisationApi.uploadDocument(id!, file, docType);
-    },
-    onSuccess: () => {
-      toast.success('Document uploaded');
+    mutationFn: async ({ file, docType }: { file: File; docType: string }) =>
+      organisationApi.uploadDocument(id!, file, docType),
+    onSuccess: (doc) => {
+      if (doc.duplicate) toast(`"${doc.renamedFilename}" is already in this participant's documents, so it was not added twice`, { icon: 'ℹ️' });
+      else toast.success('Document uploaded');
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
       setShowUploadModal(false);
       setUploadFile(null);
@@ -597,8 +649,8 @@ export default function OrgParticipantDetail() {
                     <p className="text-white/70 text-xs">incl. {formatCurrency(summary?.greenTravelExtraEur || 0)} green travel extra</p>
                   )}
                 </div>
-                <div>
-                  <p className="text-white/70 text-sm">Status</p>
+                <div title="Checks that bank details, trip details, amounts and proof documents are all there. This is not the AI review: see the AI Review panel for its findings.">
+                  <p className="text-white/70 text-sm">Details</p>
                   <div className="flex items-center gap-2 mt-1">
                     {summary?.aiCheckOk ? (
                       <CheckCircle className="w-5 h-5 text-emerald-300" />
@@ -606,7 +658,7 @@ export default function OrgParticipantDetail() {
                       <HelpCircle className="w-5 h-5 text-amber-300" />
                     )}
                     <span className="text-white font-medium">
-                      {summary?.aiCheckOk ? 'AI Check OK' : 'Needs Review'}
+                      {summary?.aiCheckOk ? 'All filled in' : 'Something missing'}
                     </span>
                   </div>
                 </div>
@@ -667,9 +719,10 @@ export default function OrgParticipantDetail() {
                                 deleteTravelItemMutation.mutate(itemId);
                               }
                             }}
+                            onToggleExcluded={(itemId, exclude) => excludeTravelItemMutation.mutate({ itemId, exclude })}
                             onLinkDocument={(itemId, docId) => linkDocumentMutation.mutate({ itemId, docId })}
                             onUnlinkDocument={(itemId, docId) => unlinkDocumentMutation.mutate({ itemId, docId })}
-                            isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending}
+                            isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending || excludeTravelItemMutation.isPending}
                           />
                         );
 
@@ -728,7 +781,7 @@ export default function OrgParticipantDetail() {
                           document={doc}
                           participantId={participant.id}
                           onDelete={() => {
-                            if (confirm(`Delete "${doc.renamedFilename}"? This cannot be undone.`)) {
+                            if (confirm(deleteDocumentMessage(doc, participant.travelItems, participant.documents))) {
                               deleteDocumentMutation.mutate(doc.id);
                             }
                           }}
@@ -827,10 +880,13 @@ export default function OrgParticipantDetail() {
                       </div>
                       <div className="flex items-center gap-2">
                         {findings.length > 0 && (
-                          <span className={clsx(
-                            'text-xs font-medium px-2 py-0.5 rounded-full',
-                            allChecked ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'
-                          )}>
+                          <span
+                            className={clsx(
+                              'text-xs font-medium px-2 py-0.5 rounded-full',
+                              allChecked ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'
+                            )}
+                            title={`${checkedCount} of ${findings.length} findings ticked as checked`}
+                          >
                             {checkedCount}/{findings.length}
                           </span>
                         )}
@@ -838,7 +894,7 @@ export default function OrgParticipantDetail() {
                           onClick={handleRefreshReview}
                           disabled={refreshReviewMutation.isPending}
                           className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
-                          title="Regenerate AI review"
+                          title="Run the AI review again (your ticks are removed)"
                         >
                           <RefreshCw className={clsx('w-3.5 h-3.5', refreshReviewMutation.isPending && 'animate-spin')} />
                         </button>
@@ -860,6 +916,10 @@ export default function OrgParticipantDetail() {
                       </div>
                     ) : findings.length > 0 ? (
                       <>
+                        <p className="text-xs text-gray-500 mb-3">
+                          Tick a finding once you've checked it. Ticking changes nothing in the reimbursement.
+                          To change a trip, open it and use <strong>Edit</strong>, <strong>Don't reimburse</strong> or <strong>Delete</strong>.
+                        </p>
                         {allChecked && (
                           <div className="flex items-center gap-2 p-2 bg-emerald-50 rounded-lg text-sm text-emerald-700 mb-3">
                             <CheckCircle className="w-4 h-4 flex-shrink-0" />
@@ -1250,9 +1310,10 @@ function FindingItem({
               ? 'bg-amber-50'
               : 'bg-gray-50',
     )}>
-      {/* Checkbox */}
+      {/* Checkbox: a to-do tick only, it changes nothing in the reimbursement */}
       <button
         onClick={onToggle}
+        title={finding.checked ? 'Ticked as checked. Click to untick' : 'Tick when checked (changes nothing in the reimbursement)'}
         className={clsx(
           'w-4 h-4 rounded border mt-0.5 flex-shrink-0 flex items-center justify-center transition-colors',
           finding.checked
@@ -1300,7 +1361,7 @@ function FindingItem({
             <button
               onClick={(e) => { e.stopPropagation(); onNavigate(); }}
               className="ml-auto p-0.5 rounded hover:bg-white/60 text-gray-400 hover:text-indigo-600 transition-colors"
-              title="Jump to travel item"
+              title="Go to this trip"
             >
               <Navigation className="w-3 h-3" />
             </button>
@@ -1409,6 +1470,7 @@ function TravelItemCard({
   allDocuments,
   onEdit,
   onDelete,
+  onToggleExcluded,
   onLinkDocument,
   onUnlinkDocument,
   isMutating,
@@ -1424,6 +1486,7 @@ function TravelItemCard({
   allDocuments: Document[];
   onEdit: (itemId: string, data: Partial<CreateTravelItemData>) => void;
   onDelete: (itemId: string) => void;
+  onToggleExcluded: (itemId: string, exclude: boolean) => void;
   onLinkDocument: (itemId: string, docId: string) => void;
   onUnlinkDocument: (itemId: string, docId: string) => void;
   isMutating: boolean;
@@ -1490,12 +1553,17 @@ function TravelItemCard({
             <span className="text-gray-400">&rarr;</span>
             <span className="font-medium text-gray-900">{item.toLocation}</span>
             {/* Status badges inline */}
-            {item.manuallyEdited && (
-              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700" title={`AI detected ${formatAiOriginalAmount(item.originalAmountFromAi || 0, item.originalCurrencyFromAi, item.currencyOriginal)}`}>
+            {(item.manuallyEdited || tripPriceTypedIn(item)) && (
+              <span
+                className="px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700"
+                title={item.originalAmountFromAi != null
+                  ? `AI detected ${formatAiOriginalAmount(item.originalAmountFromAi, item.originalCurrencyFromAi, item.currencyOriginal)}`
+                  : 'The AI found no price in the documents; the amount was typed in by hand'}
+              >
                 <Pencil className="w-2.5 h-2.5 inline mr-0.5" />Edited
               </span>
             )}
-            {item.priceMissing && (
+            {tripHasNoPrice(item) && (
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">No price</span>
             )}
             {item.routeMatchesCountry === false && (
@@ -1503,7 +1571,11 @@ function TravelItemCard({
             )}
             {item.excludedFromReimbursement && (
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">
-                {item.exclusionReason === 'HOSTING_ORG_PAID' ? 'Excluded · hosting org paid' : 'Excluded'}
+                {item.exclusionReason === 'HOSTING_ORG_PAID'
+                  ? 'Excluded · hosting org paid'
+                  : item.exclusionReason === 'ORGANISATION'
+                    ? 'Not reimbursed · your decision'
+                    : 'Excluded by participant'}
               </span>
             )}
           </div>
@@ -1537,7 +1609,12 @@ function TravelItemCard({
           )}
         </div>
         <div className="text-right flex-shrink-0">
-          <p className="font-semibold text-gray-900">{formatCurrency(item.amountEur)}</p>
+          <p
+            className={clsx('font-semibold', item.excludedFromReimbursement ? 'text-gray-400 line-through' : 'text-gray-900')}
+            title={item.excludedFromReimbursement ? 'Not counted in the reimbursement' : undefined}
+          >
+            {formatCurrency(item.amountEur)}
+          </p>
           {item.currencyOriginal !== 'EUR' && (
             <p className="text-xs text-gray-500">{item.amountOriginal} {item.currencyOriginal}</p>
           )}
@@ -1564,6 +1641,22 @@ function TravelItemCard({
             >
               <Pencil className="w-3 h-3" />
               {isEditing ? 'Cancel' : 'Edit'}
+            </button>
+            <button
+              onClick={() => onToggleExcluded(item.id, !item.excludedFromReimbursement)}
+              disabled={isMutating}
+              className={clsx(
+                'flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50',
+                item.excludedFromReimbursement
+                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+              )}
+              title={item.excludedFromReimbursement
+                ? 'Count this trip in the reimbursement again'
+                : 'Keep this trip in the file but leave its amount out of the reimbursement'}
+            >
+              {item.excludedFromReimbursement ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+              {item.excludedFromReimbursement ? 'Reimburse again' : "Don't reimburse"}
             </button>
             <button
               onClick={() => onDelete(item.id)}
@@ -1608,6 +1701,9 @@ function TravelItemCard({
                 )}
                 {item.manuallyEdited && item.originalAmountFromAi != null && (
                   <DetailField label="AI Original Amount" value={formatAiOriginalAmount(item.originalAmountFromAi, item.originalCurrencyFromAi, item.currencyOriginal)} highlight="orange" />
+                )}
+                {tripPriceTypedIn(item) && item.originalAmountFromAi == null && (
+                  <DetailField label="AI Original Amount" value="None found · typed in by hand" highlight="orange" />
                 )}
                 {item.numberOfPassengers && item.numberOfPassengers > 1 && (
                   <>
@@ -2026,10 +2122,8 @@ function ReceiptGallery({ participantId, receipts }: { participantId: string; re
   }
   const meals = receipts.filter((r) => r.documentType === 'MEAL_RECEIPT');
   const hotels = receipts.filter((r) => r.documentType === 'HOTEL_INVOICE');
-  const dayKey = (r: SuggestionReceipt) => {
-    const d = r.documentDate || r.uploadDate;
-    return d ? new Date(d).toISOString().slice(0, 10) : 'unknown';
-  };
+  // Grouped by the date on the receipt; the upload date says nothing about when the money was spent
+  const dayKey = (r: SuggestionReceipt) => (r.documentDate ? new Date(r.documentDate).toISOString().slice(0, 10) : 'unknown');
   const groups = new Map<string, SuggestionReceipt[]>();
   for (const r of receipts) {
     const k = dayKey(r);
@@ -2060,16 +2154,134 @@ function ReceiptGallery({ participantId, receipts }: { participantId: string; re
   );
 }
 
+/** 'YYYY-MM-DD' → 'DD-MM-YYYY' without time-zone shifts */
+function formatIsoDay(day: string): string {
+  const [y, m, d] = day.split('-');
+  return `${d}-${m}-${y}`;
+}
+
+const NOT_COUNTED_LABELS: Record<GreenTravelNotCountedReason, string> = {
+  NO_AMOUNT: 'no amount could be read',
+  NO_RATE: 'no exchange rate found',
+  NO_DATE: 'no date could be read',
+  DURING_PROJECT: 'during the project',
+  NOT_AN_EXTRA_DAY: 'not on an extra travel day',
+};
+
+/** What the project's green travel rule suggests, step by step, with a button to fill in the amounts */
+function GreenTravelCalculationBox({
+  calc,
+  onFillIn,
+  alreadyFilledIn,
+  disabled,
+}: {
+  calc: GreenTravelCalculation;
+  onFillIn: () => void;
+  alreadyFilledIn: boolean;
+  disabled: boolean;
+}) {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const noLimits = calc.foodPerDayEur === 0 && calc.accommodationPerNightEur === 0;
+  const listDays = (days: string[]) => (days.length > 0 ? days.map(formatIsoDay).join(', ') : 'none');
+
+  return (
+    <div className="mt-3 p-3 rounded-xl bg-white border border-emerald-200 text-sm text-gray-700">
+      <p className="font-medium text-gray-900">
+        {calc.mode === 'RECEIPTS'
+          ? `Project rule: receipts, up to ${formatCurrency(calc.foodPerDayEur)} food per day and ${formatCurrency(calc.accommodationPerNightEur)} accommodation per night`
+          : `Project rule: ${formatCurrency(calc.foodPerDayEur)} food per extra day and ${formatCurrency(calc.accommodationPerNightEur)} accommodation per extra night`}
+      </p>
+      <p className="text-xs text-gray-500 mt-1">
+        Extra travel days: {listDays(calc.extraDays)} · Extra nights: {listDays(calc.extraNights)}
+      </p>
+
+      {calc.mode === 'FIXED' ? (
+        <div className="mt-2 space-y-1">
+          <p className="flex justify-between gap-3">
+            <span>Food: {plural(calc.extraDays.length, 'day', 'days')} × {formatCurrency(calc.foodPerDayEur)}</span>
+            <strong>{formatCurrency(calc.foodEur)}</strong>
+          </p>
+          <p className="flex justify-between gap-3">
+            <span>Accommodation: {plural(calc.extraNights.length, 'night', 'nights')} × {formatCurrency(calc.accommodationPerNightEur)}</span>
+            <strong>{formatCurrency(calc.accommodationEur)}</strong>
+          </p>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700/80">Food</p>
+          {calc.foodDays.length === 0 && <p className="text-gray-500">No meal receipts on the extra travel days.</p>}
+          {calc.foodDays.map((d) => (
+            <p key={d.date} className="flex justify-between gap-3">
+              <span>
+                {formatIsoDay(d.date)}: spent {formatCurrency(d.spentEur)}
+                {d.countedEur < d.spentEur && <span className="text-gray-500"> (limit {formatCurrency(calc.foodPerDayEur)})</span>}
+              </span>
+              <span>{formatCurrency(d.countedEur)}</span>
+            </p>
+          ))}
+          <p className="flex justify-between gap-3 border-t border-gray-100 pt-1">
+            <span>Food total</span>
+            <strong>{formatCurrency(calc.foodEur)}</strong>
+          </p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-sky-700/80 pt-1">Accommodation</p>
+          <p className="flex justify-between gap-3">
+            <span>
+              Hotel receipts {formatCurrency(calc.accommodationSpentEur)}, limit {plural(calc.extraNights.length, 'night', 'nights')} ×{' '}
+              {formatCurrency(calc.accommodationPerNightEur)} = {formatCurrency(calc.accommodationCapEur)}
+            </span>
+            <strong>{formatCurrency(calc.accommodationEur)}</strong>
+          </p>
+          {calc.notCounted.length > 0 && (
+            <div className="pt-1">
+              <p className="text-xs text-gray-500">Not counted ({calc.notCounted.length}). You can still add these yourself below:</p>
+              <ul className="text-xs text-gray-500 list-disc pl-5">
+                {calc.notCounted.map((n) => (
+                  <li key={n.id}>
+                    {n.filename}
+                    {n.date ? ` (${formatIsoDay(n.date)})` : ''}: {NOT_COUNTED_LABELS[n.reason]}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {noLimits && (
+        <p className="mt-2 text-xs text-amber-700">
+          No limits are set yet. Add them in the project settings under Feature Settings → Green travel extra.
+        </p>
+      )}
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <p className="text-xs text-gray-500">Suggested: {formatCurrency(calc.foodEur + calc.accommodationEur)}</p>
+        <Button size="sm" variant="secondary" onClick={onFillIn} disabled={disabled || alreadyFilledIn}>
+          {alreadyFilledIn ? 'Filled in below' : 'Fill in these amounts'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDetailData }) {
   const queryClient = useQueryClient();
-  const [food, setFood] = useState(participant.greenTravelFoodEur != null ? String(participant.greenTravelFoodEur) : '');
-  const [accommodation, setAccommodation] = useState(participant.greenTravelAccommodationEur != null ? String(participant.greenTravelAccommodationEur) : '');
+  const s = participant.greenTravelSuggestion;
+  const isGreen = !!participant.greenTravel;
+  const calc = isGreen ? s?.calculation ?? null : null;
+  const asText = (n: number | null | undefined) => (n != null ? String(n) : '');
+  // Nothing saved yet: start from what the project's rule suggests (still to be saved by the organiser)
+  const neverSaved =
+    participant.greenTravelFoodEur == null && participant.greenTravelAccommodationEur == null && !participant.greenTravelExtraUpdatedAt;
+  const initialFood = neverSaved && calc ? asText(calc.foodEur) : asText(participant.greenTravelFoodEur);
+  const initialAccommodation = neverSaved && calc ? asText(calc.accommodationEur) : asText(participant.greenTravelAccommodationEur);
+
+  const [food, setFood] = useState(initialFood);
+  const [accommodation, setAccommodation] = useState(initialAccommodation);
   const [note, setNote] = useState(participant.greenTravelExtraNote || '');
   useEffect(() => {
-    setFood(participant.greenTravelFoodEur != null ? String(participant.greenTravelFoodEur) : '');
-    setAccommodation(participant.greenTravelAccommodationEur != null ? String(participant.greenTravelAccommodationEur) : '');
+    setFood(initialFood);
+    setAccommodation(initialAccommodation);
     setNote(participant.greenTravelExtraNote || '');
-  }, [participant.greenTravelFoodEur, participant.greenTravelAccommodationEur, participant.greenTravelExtraNote]);
+  }, [initialFood, initialAccommodation, participant.greenTravelExtraNote]);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -2087,8 +2299,6 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
   });
 
   const isPaid = participant.status === 'PAID';
-  const isGreen = !!participant.greenTravel;
-  const s = participant.greenTravelSuggestion;
   const current = (participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0);
   const parsedFood = food.trim() === '' ? 0 : parseFloat(food);
   const parsedAcc = accommodation.trim() === '' ? 0 : parseFloat(accommodation);
@@ -2097,10 +2307,11 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
     parsedFood !== (participant.greenTravelFoodEur ?? 0) ||
     parsedAcc !== (participant.greenTravelAccommodationEur ?? 0) ||
     (note.trim() || '') !== (participant.greenTravelExtraNote || '');
+  const filledIn = !!calc && parsedFood === calc.foodEur && parsedAcc === calc.accommodationEur;
 
   const handleSave = () => {
     if (invalid) { toast.error('Amounts must be numbers of 0 or more'); return; }
-    if (window.confirm(`Save a green travel extra of ${formatCurrency(parsedFood + parsedAcc)}? The participant will receive an email.`)) {
+    if (window.confirm(`Save a green travel extra of ${formatCurrency(parsedFood + parsedAcc)}? This amount is paid on top of the travel maximum and the participant will receive an email.`)) {
       mutation.mutate();
     }
   };
@@ -2118,7 +2329,8 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
               )}
             </p>
             <p className="text-sm text-gray-500 mt-0.5">
-              Food and accommodation budget you add on top of the travel maximum. You decide the amount; the participant is emailed.
+              Food and accommodation you pay on top of the travel maximum. The amounts you save are paid in full, so
+              enter what the participant should receive (not a budget). The participant is emailed when you save.
             </p>
           </div>
           {current > 0 && participant.greenTravelExtraUpdatedAt && (
@@ -2134,18 +2346,32 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
               {' '}<strong>{s.extraTravelDays}</strong> beyond the project dates.
             </p>
             <ReceiptGallery participantId={participant.id} receipts={s.receipts} />
-            <p className="mt-2 text-emerald-700">Fill in the total amount for green travel you wish to add to their reimbursement.</p>
+            {calc ? (
+              <GreenTravelCalculationBox
+                calc={calc}
+                alreadyFilledIn={filledIn}
+                disabled={isPaid || mutation.isPending}
+                onFillIn={() => {
+                  setFood(String(calc.foodEur));
+                  setAccommodation(String(calc.accommodationEur));
+                }}
+              />
+            ) : (
+              <p className="mt-2 text-emerald-700">Fill in the amounts for green travel you wish to add to their reimbursement.</p>
+            )}
           </div>
         )}
 
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Input label="Food (€)" type="number" min="0" step="0.01" value={food} onChange={(e) => setFood(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
-          <Input label="Accommodation (€)" type="number" min="0" step="0.01" value={accommodation} onChange={(e) => setAccommodation(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
+          <Input label="Food to pay (€)" type="number" min="0" step="0.01" value={food} onChange={(e) => setFood(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
+          <Input label="Accommodation to pay (€)" type="number" min="0" step="0.01" value={accommodation} onChange={(e) => setAccommodation(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
           <Input label="Note to participant (optional)" value={note} onChange={(e) => setNote(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="e.g. 2 nights, as agreed" />
         </div>
         <div className="mt-3 flex items-center justify-between gap-3">
           <p className="text-xs text-gray-400">
-            {isPaid ? 'This participant has been paid — the extra can no longer be changed.' : `Total extra: ${formatCurrency(invalid ? 0 : parsedFood + parsedAcc)}`}
+            {isPaid
+              ? 'This participant has been paid — the extra can no longer be changed.'
+              : `Total extra: ${formatCurrency(invalid ? 0 : parsedFood + parsedAcc)}${dirty ? ' · not saved yet' : ''}`}
           </p>
           <Button size="sm" onClick={handleSave} loading={mutation.isPending} disabled={isPaid || !dirty || invalid}>
             Save & notify participant

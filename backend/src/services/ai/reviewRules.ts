@@ -39,7 +39,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'critical',
     label: 'Amount Changed',
     description: 'Participant changed an amount from what the AI detected',
-    prompt: 'If a participant MANUALLY CHANGED AN AMOUNT from what the AI detected → flag the specific item with both amounts. This could be legitimate (AI was wrong) or suspicious.',
+    prompt: 'If a participant MANUALLY CHANGED AN AMOUNT from what the AI detected → flag the specific item with both amounts. This could be legitimate (AI was wrong) or suspicious. If the PRICE WAS TYPED IN BY HAND because the AI found none, flag it once here (say the AI found no price and give the typed amount) — never also as a missing price.',
     enabled: true,
   },
   {

@@ -183,6 +183,16 @@ model Project {
   // declaration from the airline (DocumentType AIRLINE_DECLARATION) for every flight.
   requireAirlineDeclaration Boolean                @default(false)
 
+  // How the green travel extra (food + accommodation on the extra travel days outside the
+  // project dates) is worked out for green travellers:
+  //   MANUAL   = the organiser types the amounts per participant (default)
+  //   RECEIPTS = the participant's receipts, capped per day (food) and per night (accommodation)
+  //   FIXED    = a fixed amount per extra travel day (food) and per extra night (accommodation)
+  // The app only fills in the amounts; the organiser still checks and saves them.
+  greenTravelExtraMode                String   @default("MANUAL")
+  greenTravelFoodPerDayEur            Float?
+  greenTravelAccommodationPerNightEur Float?
+
   // Test project - automatically created for new organisations (max 10 participants)
   isTestProject            Boolean                 @default(false)
   maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects
@@ -308,10 +318,13 @@ model Document {
   uploadDate       DateTime            @default(now())
   documentType     DocumentType        @default(OTHER)
   ocrText          String?
+  contentHash      String?             // SHA-256 of the file: the same file uploaded twice is kept once
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
   travelItems      TravelItem[]
   extraction       DocumentExtraction?
+
+  @@index([participantId, contentHash])
 }
 
 // DocumentExtraction - raw AI-extracted data from a document (before consolidation)
@@ -476,7 +489,7 @@ model TravelItem {
 
   // Exclusion from reimbursement
   excludedFromReimbursement Boolean           @default(false)  // User marked this item to be excluded from reimbursement (e.g., personal trip)
-  exclusionReason           String?                            // Why it was excluded: HOSTING_ORG_PAID | OTHER (null = unspecified)
+  exclusionReason           String?                            // Why it was excluded: HOSTING_ORG_PAID | OTHER | ORGANISATION (organisation's decision) (null = unspecified)
 
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt

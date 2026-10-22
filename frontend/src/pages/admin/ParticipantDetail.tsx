@@ -204,8 +204,8 @@ export default function ParticipantDetail() {
                     }).format(summary?.amountToReimburse || 0)}
                   </p>
                 </div>
-                <div>
-                  <p className="text-white/70 text-sm">Status</p>
+                <div title="Checks that bank details, trip details, amounts and proof documents are all there. This is not the AI review: see the AI Review panel for its findings.">
+                  <p className="text-white/70 text-sm">Details</p>
                   <div className="flex items-center gap-2 mt-1">
                     {summary?.aiCheckOk ? (
                       <CheckCircle className="w-5 h-5 text-emerald-300" />
@@ -213,7 +213,7 @@ export default function ParticipantDetail() {
                       <HelpCircle className="w-5 h-5 text-amber-300" />
                     )}
                     <span className="text-white font-medium">
-                      {summary?.aiCheckOk ? 'AI Check OK' : 'Needs Review'}
+                      {summary?.aiCheckOk ? 'All filled in' : 'Something missing'}
                     </span>
                   </div>
                 </div>

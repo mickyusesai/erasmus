@@ -366,7 +366,11 @@ async function buildStructuredPdf(participantId: string): Promise<Buffer> {
       if (item.excludedFromReimbursement)
         kvRows.push([
           'Excluded from Reimbursement',
-          item.exclusionReason === 'HOSTING_ORG_PAID' ? 'Yes (paid by the hosting organisation)' : 'Yes',
+          item.exclusionReason === 'HOSTING_ORG_PAID'
+            ? 'Yes (paid by the hosting organisation)'
+            : item.exclusionReason === 'ORGANISATION'
+              ? 'Yes (decided by the organisation)'
+              : 'Yes',
         ]);
 
       drawKvRows(doc, kvRows);

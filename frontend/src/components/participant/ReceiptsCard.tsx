@@ -64,11 +64,13 @@ export function ReceiptsCard({
     setUploadingType(type);
     setProgress({ current: 0, total: list.length });
     let ok = 0;
+    let alreadyThere = 0;
     for (let i = 0; i < list.length; i++) {
       setProgress({ current: i + 1, total: list.length });
       try {
-        await participantApi.uploadDocument(token, list[i], type);
-        ok++;
+        const result = await participantApi.uploadDocument(token, list[i], type);
+        if (result.duplicate) alreadyThere++;
+        else ok++;
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : `Could not upload ${list[i].name}`);
       }
@@ -77,6 +79,9 @@ export function ReceiptsCard({
     setUploadingType(null);
     setProgress({ current: 0, total: 0 });
     if (ok > 0) toast.success(ok === 1 ? 'Receipt added' : `${ok} receipts added`);
+    if (alreadyThere > 0) {
+      toast(alreadyThere === 1 ? 'You already uploaded this receipt, so it was not added twice' : `${alreadyThere} receipts were already uploaded, so they were not added twice`, { icon: 'ℹ️' });
+    }
   };
 
   const viewDocument = async (docId: string) => {

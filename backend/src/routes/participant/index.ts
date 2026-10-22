@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
 import path from 'path';
+import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { participantAuth, ensureOwnParticipant } from '../../middleware/auth.js';
@@ -373,6 +374,28 @@ router.post(
       throw new ForbiddenError('Cannot upload documents after approval');
     }
 
+    // The same file uploaded again is kept once: reuse the earlier copy (no second AI read,
+    // no rebuild), but still honour what the participant told us about it this time
+    const contentHash = createHash('sha256').update(req.file.buffer).digest('hex');
+    const sameFile = await prisma.document.findFirst({ where: { participantId: participant.id, contentHash } });
+    if (sameFile) {
+      let document = sameFile;
+      const retype =
+        typeHint &&
+        sameFile.documentType !== typeHint &&
+        (sameFile.documentType === 'OTHER' || (isFlightProofType(typeHint) && !isReceiptDocument(sameFile)));
+      if (retype) {
+        document = await prisma.document.update({ where: { id: sameFile.id }, data: { documentType: typeHint } });
+      }
+      if (flightToAttach) await attachDocumentToTravelItem(flightToAttach, sameFile.id);
+      res.status(200).json({
+        document,
+        duplicate: true,
+        message: 'You already uploaded this file, so it was not added a second time.',
+      });
+      return;
+    }
+
     // Enforce the document limit (receipts are counted separately)
     const existingDocs = await prisma.document.findMany({
       where: { participantId: participant.id },
@@ -444,6 +467,7 @@ router.post(
           mimeType: req.file.mimetype,
           fileSize: fileBuffer.length,
           documentType: typeHint ?? 'OTHER', // Travel documents are typed during extraction
+          contentHash,
         },
       });
     } catch (dbError) {
@@ -800,6 +824,14 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
 
   if (!current) {
     throw new NotFoundError('Travel item not found');
+  }
+
+  // Only the organisation can undo its own decision not to reimburse a trip
+  if (
+    current.exclusionReason === 'ORGANISATION' &&
+    (result.data.excludedFromReimbursement !== undefined || result.data.exclusionReason !== undefined)
+  ) {
+    throw new ValidationError('Your organisation decided not to reimburse this trip. Please contact them if you think this is wrong.');
   }
 
   // Check if amount is being changed (participant manually editing AI value)

@@ -1084,7 +1084,8 @@ export const organisationApi = {
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
-    return handleResponse<Document>(res);
+    // duplicate: the participant already had this exact file (the earlier copy is returned)
+    return handleResponse<Document & { duplicate?: boolean }>(res);
   },
 
   deleteDocument: async (participantId: string, documentId: string) => {
@@ -1272,6 +1273,10 @@ export interface OrgProject {
   requireGreenTravelDeclaration?: boolean;
   /** A declaration on honour is not accepted for a missing boarding pass */
   requireAirlineDeclaration?: boolean;
+  /** How the green travel extra is worked out, with its limits in EUR */
+  greenTravelExtraMode?: GreenTravelExtraMode;
+  greenTravelFoodPerDayEur?: number | null;
+  greenTravelAccommodationPerNightEur?: number | null;
   participantCount: number;
   creditSource?: string;
   isTestProject: boolean;
@@ -1299,12 +1304,38 @@ export interface GreenTravelExtra {
   updatedAt: string | null;
 }
 
+/**
+ * MANUAL = the organiser types the amounts; RECEIPTS = receipts capped per day/night;
+ * FIXED = a fixed amount per extra day/night
+ */
+export type GreenTravelExtraMode = 'MANUAL' | 'RECEIPTS' | 'FIXED';
+
+export type GreenTravelNotCountedReason = 'NO_AMOUNT' | 'NO_RATE' | 'NO_DATE' | 'DURING_PROJECT' | 'NOT_AN_EXTRA_DAY';
+
+/** Amounts suggested by the project's green travel rule (see backend utils/greenTravelExtra.ts) */
+export interface GreenTravelCalculation {
+  mode: 'RECEIPTS' | 'FIXED';
+  foodPerDayEur: number;
+  accommodationPerNightEur: number;
+  extraDays: string[];
+  extraNights: string[];
+  foodEur: number;
+  accommodationEur: number;
+  foodDays: { date: string; spentEur: number; countedEur: number }[];
+  accommodationSpentEur: number;
+  accommodationCapEur: number;
+  notCounted: { id: string; filename: string; kind: 'FOOD' | 'ACCOMMODATION'; date: string | null; reason: GreenTravelNotCountedReason }[];
+}
+
 export interface GreenTravelSuggestion {
   totalTravelDays: number;
   extraTravelDays: number;
   firstTravelDate: string | null;
   lastTravelDate: string | null;
   receipts: { id: string; renamedFilename: string; documentType: DocumentType; mimeType?: string; uploadDate?: string; amount: number | null; currency: string | null; documentDate: string | null }[];
+  /** The project's rule; the calculation is only there for green travellers when the rule isn't MANUAL */
+  mode?: GreenTravelExtraMode;
+  calculation?: GreenTravelCalculation | null;
 }
 
 export interface OrgDashboardData {
@@ -1392,6 +1423,7 @@ export interface CreateOrgProjectData {
   venueAddress?: string;
   startDate: string;
   endDate: string;
+  disseminationEnabled?: boolean;
   carRatePerKm?: number;
   exchangeRateMode?: ExchangeRateMode;
   exchangeRateManualDate?: string | null;
@@ -1402,6 +1434,9 @@ export interface CreateOrgProjectData {
   contactPhone?: string | null;
   requireGreenTravelDeclaration?: boolean;
   requireAirlineDeclaration?: boolean;
+  greenTravelExtraMode?: GreenTravelExtraMode;
+  greenTravelFoodPerDayEur?: number | null;
+  greenTravelAccommodationPerNightEur?: number | null;
 }
 
 export interface ProjectRecalcResult {
@@ -1720,7 +1755,8 @@ export interface TravelItem {
   checked?: boolean;
   // Exclusion from reimbursement
   excludedFromReimbursement?: boolean;
-  exclusionReason?: 'HOSTING_ORG_PAID' | 'OTHER' | null;
+  /** ORGANISATION = the organisation decided not to reimburse this trip */
+  exclusionReason?: 'HOSTING_ORG_PAID' | 'OTHER' | 'ORGANISATION' | null;
   // Currency and company info
   originalCurrencyFromAi?: string | null;
   exchangeRateOverride?: number | null;
@@ -1751,6 +1787,9 @@ export interface CreateTravelItemData {
   // Organisation overrides
   exchangeRateOverride?: number | null;
   companyName?: string | null;
+  // Reimbursement decision
+  excludedFromReimbursement?: boolean;
+  exclusionReason?: 'HOSTING_ORG_PAID' | 'OTHER' | 'ORGANISATION' | null;
 }
 
 export interface Declaration {
@@ -1912,6 +1951,9 @@ export interface ParticipantAuthResponse {
 
 export interface DocumentUploadResponse {
   document: Document;
+  /** The same file was already uploaded: this is the earlier copy, nothing new was added */
+  duplicate?: boolean;
+  message?: string;
   extractedTravelItems: TravelItem[];
   analysis: {
     confidence: number;

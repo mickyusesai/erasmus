@@ -46,6 +46,7 @@ import { ReceiptsCard } from '../../components/participant/ReceiptsCard';
 import { isReceiptDocument } from '../../utils/documentKinds';
 import { isFlightProof, flightHasProof } from '../../utils/flightProof';
 import { computePayable } from '../../utils/reimbursementMath';
+import { tripHasNoPrice } from '../../utils/tripPrice';
 import { sameCountry, normalizeCountryName } from '../../utils/countryName';
 import DisseminationPage from './DisseminationPage';
 import {
@@ -797,11 +798,15 @@ function Step1Upload({
     setUploading(true);
     setUploadProgress({ current: 0, total: acceptedFiles.length, filename: '' });
 
+    let uploaded = 0;
+    const alreadyThere: string[] = [];
     for (let i = 0; i < acceptedFiles.length; i++) {
       const file = acceptedFiles[i];
       setUploadProgress({ current: i + 1, total: acceptedFiles.length, filename: file.name });
       try {
-        await uploadMutation.mutateAsync(file);
+        const result = await uploadMutation.mutateAsync(file);
+        if (result.duplicate) alreadyThere.push(file.name);
+        else uploaded++;
       } catch {
         // Error already handled by mutation
       }
@@ -809,10 +814,19 @@ function Step1Upload({
 
     setUploading(false);
     setUploadProgress({ current: 0, total: 0, filename: '' });
-    if (acceptedFiles.length > 1) {
-      toast.success(`${acceptedFiles.length} documents uploaded`);
-    } else {
+    if (uploaded > 1) {
+      toast.success(`${uploaded} documents uploaded`);
+    } else if (uploaded === 1) {
       toast.success('Document uploaded');
+    }
+    // The same file twice is kept once (no duplicate for the trip builder or the organisation)
+    if (alreadyThere.length > 0) {
+      toast(
+        alreadyThere.length === 1
+          ? `You already uploaded "${alreadyThere[0]}", so it was not added twice`
+          : `${alreadyThere.length} files were already uploaded, so they were not added twice`,
+        { icon: 'ℹ️', duration: 6000 }
+      );
     }
   }, [uploadMutation]);
 
@@ -1659,10 +1673,10 @@ function Step2CheckData({
       {data.travelItems.length > 0 && (() => {
         const confirmedCount = data.travelItems.filter((i) => i.checked).length;
         const totalItems = data.travelItems.length;
-        const totalEur = data.travelItems.reduce(
-          (s, i) => s + (i.amountEur || 0) + (i.luggageAmountEur || 0),
-          0
-        );
+        // Trips that are not reimbursed (excluded by the participant or the organisation) don't count
+        const totalEur = data.travelItems
+          .filter((i) => !i.excludedFromReimbursement)
+          .reduce((s, i) => s + (i.amountEur || 0) + (i.luggageAmountEur || 0), 0);
         const greenTravelExtraEur = data.reimbursementSummary?.greenTravelExtraEur || 0;
         // Route label: origin ⇄ turnaround for round trips, origin → destination otherwise
         const sorted = [...data.travelItems].sort(
@@ -1780,7 +1794,9 @@ function Step2CheckData({
             });
 
             // Final slide: cost-breakdown "receipt"
-            const total = data.travelItems.reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
+            const total = data.travelItems
+              .filter((item) => !item.excludedFromReimbursement)
+              .reduce((sum, item) => sum + (item.amountEur || 0) + (item.luggageAmountEur || 0), 0);
             const max = data.maxReimbursementForCountry;
             const greenExtra = data.greenTravelExtra;
             const allowanceOnTop = greenExtra ? greenExtra.foodEur + greenExtra.accommodationEur : 0;
@@ -1809,7 +1825,9 @@ function Step2CheckData({
                           <span className="text-gray-400"> · {item.modeOfTransport.toLowerCase()}</span>
                         </span>
                         <span className="font-medium text-gray-900 whitespace-nowrap flex-shrink-0">
-                          {item.amountIncludedInRoundTrip ? (
+                          {item.excludedFromReimbursement ? (
+                            <span className="text-gray-400 text-xs italic">not claimed</span>
+                          ) : item.amountIncludedInRoundTrip ? (
                             <span className="text-gray-400 text-xs italic">incl.</span>
                           ) : (
                             <>
@@ -2427,7 +2445,7 @@ function InlineDocumentUpload({
         // Link the uploaded document to this travel item
         onUpdate({ documentId: result.document.id });
         await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
-        toast.success('Document uploaded and linked');
+        toast.success(result.duplicate ? 'You already uploaded this file. It is now linked to this trip' : 'Document uploaded and linked');
       } catch {
         toast.error('Failed to upload document');
       } finally {
@@ -2764,7 +2782,11 @@ function TravelItemCard({
             {item.excludedFromReimbursement && (
               <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[11px] font-medium rounded-full flex items-center gap-1">
                 <EyeOff className="w-3 h-3" />
-                {item.exclusionReason === 'HOSTING_ORG_PAID' ? 'Hosting org paid' : 'Excluded'}
+                {item.exclusionReason === 'HOSTING_ORG_PAID'
+                  ? 'Hosting org paid'
+                  : item.exclusionReason === 'ORGANISATION'
+                    ? 'Not reimbursed by your organisation'
+                    : 'Excluded'}
               </span>
             )}
             {item.isRoundTrip && (
@@ -2851,7 +2873,7 @@ function TravelItemCard({
         )}
 
         {/* Price missing (e.g. trip built from a boarding pass) */}
-        {(item.priceMissing || item.amountOriginal == null) && !item.amountIncludedInRoundTrip && !item.excludedFromReimbursement && (
+        {tripHasNoPrice(item) && (
           <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm flex items-start gap-2">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span>
@@ -3284,7 +3306,15 @@ function TravelItemCard({
         )}
       </div>
 
-      {/* Exclude from reimbursement toggle */}
+      {/* Exclude from reimbursement toggle (the organisation's own decision can only be undone by the organisation) */}
+      {item.exclusionReason === 'ORGANISATION' ? (
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <p className="flex items-start gap-2 text-sm text-gray-600 p-3 bg-gray-50 rounded-xl">
+            <EyeOff className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            Your organisation decided not to reimburse this trip. Please contact them if you think this is wrong.
+          </p>
+        </div>
+      ) : (
       <div className="mt-4 pt-4 border-t border-gray-200">
         <button
           type="button"
@@ -3342,6 +3372,7 @@ function TravelItemCard({
           </div>
         )}
       </div>
+      )}
 
       {/* Sheet actions: delete or done */}
       <div className="mt-6 pt-4 border-t border-gray-200 flex items-center justify-between gap-3">

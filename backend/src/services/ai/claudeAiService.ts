@@ -12,6 +12,7 @@ import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { normalizeCountryName, sameCountry } from '../../utils/countryName.js';
 import { isReceiptDocument } from '../../utils/documentKinds.js';
 import { flightHasProof, flightDeclarationsAccepted } from '../../utils/flightProof.js';
+import { tripHasNoPrice, tripPriceTypedIn } from '../../utils/tripPrice.js';
 import { recordAiUsage } from './usageLog.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
@@ -457,8 +458,13 @@ The typical journey pattern is: participant travels FROM their home country (${n
 === TRAVEL ITEMS (${data.travelItems.length}) ===
 ${data.travelItems.map((item, i) => {
     const flags = [];
-    if (item.manuallyEdited) flags.push(`AMOUNT MANUALLY CHANGED by participant: AI detected €${item.originalAmountFromAi}, participant set €${item.amountEur}`);
-    if (item.priceMissing) flags.push('PRICE IS MISSING');
+    if (tripPriceTypedIn(item)) {
+      // The AI found no price when it built the trips; a person typed one in afterwards
+      flags.push(`PRICE TYPED IN BY HAND: the AI found no price in the documents and €${item.amountEur ?? item.amountOriginal} was entered manually — the organisation must compare it with the invoice or booking confirmation (this is an amount change, NOT a missing price)`);
+    } else if (item.manuallyEdited) {
+      flags.push(`AMOUNT MANUALLY CHANGED by participant: AI detected €${item.originalAmountFromAi}, participant set €${item.amountEur}`);
+    }
+    if (tripHasNoPrice(item)) flags.push('PRICE IS MISSING');
     if (!item.documentId) flags.push('NO SUPPORTING DOCUMENT LINKED');
     if (item.modeOfTransport === 'PLANE' && !item.flightNumber) flags.push('FLIGHT NUMBER NOT FILLED IN');
     if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`MULTI-PERSON BOOKING: ${item.numberOfPassengers} passengers on this booking (full amount claimed by this participant)`);
@@ -467,7 +473,9 @@ ${data.travelItems.map((item, i) => {
       flags.push(
         item.exclusionReason === 'HOSTING_ORG_PAID'
           ? 'Participant excluded this from reimbursement: the hosting organisation paid for it'
-          : 'Participant excluded this from reimbursement'
+          : item.exclusionReason === 'ORGANISATION'
+            ? 'The ORGANISATION decided not to reimburse this trip — it is not claimed, so do not flag its price or documents'
+            : 'Participant excluded this from reimbursement'
       );
     }
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
