@@ -177,6 +177,22 @@ export const REVIEW_RULES: ReviewRule[] = [
     enabled: true,
   },
   {
+    id: 'wrong-proof',
+    severity: 'critical',
+    label: 'Wrong Proof',
+    description: "A trip's only proof is a meal or hotel receipt",
+    prompt: 'If a trip is flagged "ONLY PROOF IS A MEAL RECEIPT" or "ONLY PROOF IS A HOTEL RECEIPT" → flag it (category "Wrong Proof"): name the trip, its amount and the receipt, and say the organiser should ask for the real ticket or click "Don\'t reimburse" on the trip. Do not also report it as "No Document".',
+    enabled: true,
+  },
+  {
+    id: 'other-project',
+    severity: 'critical',
+    label: 'Other Project',
+    description: 'The same person claims trips in another project that clash with these',
+    prompt: 'If SAME PERSON IN ANOTHER PROJECT is listed → flag it (category "Other Project"): name the other project and the days, and say that these trips cannot all have happened (for example the trip home from one project and the trip out to the next on the same days), so the organiser should ask the participant which tickets were really used before paying.',
+    enabled: true,
+  },
+  {
     id: 'claimed-twice',
     severity: 'important',
     label: 'Claimed Twice',

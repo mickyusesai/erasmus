@@ -952,7 +952,9 @@ function OverviewTab({
                         </td>
                       )}
                       <td className="px-4 py-3 text-gray-600">
-                        {participant.reimbursementSummary
+                        {participant.noReimbursement
+                          ? <span className="text-gray-400 italic" title={'The participant ticked "I don\'t need reimbursement"'}>Not needed</span>
+                          : participant.reimbursementSummary
                           ? participant.reimbursementSummary.maxReimbursementAllowed === 0
                             ? <span className="text-gray-400 italic">Not set</span>
                             : new Intl.NumberFormat('de-DE', {

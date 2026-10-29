@@ -19,6 +19,7 @@ import {
   Trash2,
   Sparkles,
   AlertTriangle,
+  Clock,
   AlertCircle,
   Info,
   Check,
@@ -52,7 +53,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, type OrgParticipantDetail as OrgParticipantDetailData, type GreenTravelCalculation, type GreenTravelNotCountedReason } from '../../services/api';
+import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, type OrgParticipantDetail as OrgParticipantDetailData, type GreenTravelCalculation, type GreenTravelNotCountedReason, type OtherProjectOverlap } from '../../services/api';
 import { clsx } from 'clsx';
 import { tripHasNoPrice, tripPriceTypedIn } from '../../utils/tripPrice';
 import { isFlightProof } from '../../utils/flightProof';
@@ -253,6 +254,7 @@ export default function OrgParticipantDetail() {
     mutationFn: () => organisationApi.refreshReviewFindings(id!),
     onSuccess: (result) => {
       queryClient.setQueryData(['participant-review', id], { findings: result.findings });
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
       toast.success('AI review refreshed');
     },
     onError: () => toast.error('Failed to refresh AI review'),
@@ -310,6 +312,18 @@ export default function OrgParticipantDetail() {
       }
     },
     onError: (err: Error) => toast.error(err.message || 'Failed to update limit'),
+  });
+
+  const noReimbursementMutation = useMutation({
+    mutationFn: (value: boolean) => organisationApi.setNoReimbursement(id!, value),
+    onSuccess: (result) => {
+      toast.success(result.noReimbursement ? 'Marked as not needing reimbursement' : 'This participant will be paid');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      if (participant?.project?.id) {
+        queryClient.invalidateQueries({ queryKey: ['org-participants', participant.project.id] });
+      }
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update'),
   });
 
   const deleteParticipantMutation = useMutation({
@@ -685,7 +699,9 @@ export default function OrgParticipantDetail() {
                 <div>
                   <p className="text-white/70 text-sm">To Reimburse</p>
                   <p className="text-2xl font-bold text-white">{formatCurrency(summary?.amountToReimburse || 0)}</p>
-                  {(summary?.greenTravelExtraEur || 0) > 0 && (
+                  {participant.noReimbursement ? (
+                    <p className="text-white/70 text-xs">doesn't need reimbursement</p>
+                  ) : (summary?.greenTravelExtraEur || 0) > 0 && (
                     <p className="text-white/70 text-xs">incl. {formatCurrency(summary?.greenTravelExtraEur || 0)} green travel extra</p>
                   )}
                 </div>
@@ -705,6 +721,39 @@ export default function OrgParticipantDetail() {
               </div>
             </CardContent>
           </Card>
+
+          {/* ── The participant doesn't need reimbursement ── */}
+          {participant.noReimbursement && (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <Info className="w-5 h-5 text-amber-500 flex-shrink-0" />
+              <p className="text-sm text-amber-900 flex-1">
+                <strong>Doesn't need reimbursement.</strong>{' '}
+                {participant.noReimbursementSetBy === 'ORGANISATION'
+                  ? 'Switched on by your organisation, so nothing is paid.'
+                  : `${participant.firstName} ticked "I don't need reimbursement", so nothing is paid${participant.bankAccountIban ? '' : ' and no bank details were asked'}.`}
+              </p>
+              {participant.status !== 'ADMIN_APPROVED' && participant.status !== 'PAID' && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={noReimbursementMutation.isPending}
+                  onClick={() => {
+                    const bank = participant.bankAccountIban ? '' : ' You will also need their bank details (pencil on "Bank & Payment Details").';
+                    if (window.confirm(`Pay ${participant.firstName} after all? The amount to pay is calculated from the trips again.${bank}`)) {
+                      noReimbursementMutation.mutate(false);
+                    }
+                  }}
+                >
+                  Pay anyway
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* ── The same person's trips in another project clash with these ── */}
+          {participant.otherProjects && participant.otherProjects.length > 0 && (
+            <OtherProjectsWarning firstName={participant.firstName} overlaps={participant.otherProjects} />
+          )}
 
           {/* ── Individual limit (overrides the country default) ── */}
           <IndividualLimitCard
@@ -916,6 +965,18 @@ export default function OrgParticipantDetail() {
                       )}
                     </div>
                   </div>
+                  {participant.status !== 'ADMIN_APPROVED' && participant.status !== 'PAID' && (
+                    <label className="mt-4 pt-3 border-t border-gray-100 flex items-center gap-2 text-sm text-gray-600 cursor-pointer w-fit">
+                      <input
+                        type="checkbox"
+                        checked={!!participant.noReimbursement}
+                        disabled={noReimbursementMutation.isPending}
+                        onChange={(e) => noReimbursementMutation.mutate(e.target.checked)}
+                        className="rounded border-gray-300"
+                      />
+                      Doesn't need reimbursement (nothing is paid)
+                    </label>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -967,6 +1028,18 @@ export default function OrgParticipantDetail() {
                     </div>
                   </CardHeader>
                   <CardContent>
+                    {/* Trips or files changed after the review looked at them */}
+                    {participant.reviewOutdated && participant.aiReviewStatus === 'COMPLETE' && !reviewLoading && !refreshReviewMutation.isPending && (
+                      <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                        <Clock className="w-4 h-4 flex-shrink-0 text-amber-500" />
+                        <p className="flex-1">
+                          <strong>Out of date:</strong> {joinWithAnd(participant.reviewOutdated.changes)} after this review ({formatDate(participant.reviewOutdated.reviewedAt)}).{' '}
+                          <button type="button" onClick={handleRefreshReview} className="font-semibold underline hover:text-amber-700">
+                            Refresh the review
+                          </button>
+                        </p>
+                      </div>
+                    )}
                     {reviewLoading || refreshReviewMutation.isPending || participant.aiReviewStatus === 'PENDING' ? (
                       <div className="flex items-center gap-2 text-sm text-indigo-600 py-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -2493,6 +2566,54 @@ function ReceiptEditModal({ participantId, receipt, onClose }: { participantId: 
 }
 
 /** 'YYYY-MM-DD' → 'DD-MM-YYYY' without time-zone shifts */
+/** "a, b and c" */
+function joinWithAnd(parts: string[]): string {
+  const text = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Trips grouped by day, e.g. "07-09-2026: Suwałki → Białystok, Białystok → Warszawa" */
+function tripsPerDay(trips: { date: string; trip: string }[]): string {
+  const byDay = new Map<string, string[]>();
+  for (const t of trips) byDay.set(t.date, [...(byDay.get(t.date) || []), t.trip]);
+  return [...byDay.entries()].map(([day, list]) => `${formatIsoDay(day)}: ${list.join(', ')}`).join(' · ');
+}
+
+/** The same person claims trips in another project of the organisation that clash with these */
+function OtherProjectsWarning({ firstName, overlaps }: { firstName: string; overlaps: OtherProjectOverlap[] }) {
+  return (
+    <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 space-y-3">
+      {overlaps.map((o) => (
+        <div key={o.participantId} className="flex items-start gap-3 text-sm text-rose-900">
+          <AlertTriangle className="w-5 h-5 text-rose-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p>
+              <strong>{firstName} also claims trips in "{o.projectName}"</strong> ({formatIsoDay(o.projectStart)} → {formatIsoDay(o.projectEnd)}
+              {o.matchedBy === 'name' ? ', same name' : ''}). These trips can't all have happened, so ask which tickets were really used before paying.
+            </p>
+            <ul className="mt-1.5 space-y-1 text-xs text-rose-800">
+              {o.sameDays.map((d) => (
+                <li key={d.date}>
+                  <strong>{formatIsoDay(d.date)}, trips in both:</strong> here {d.here.join(', ')} · there {d.there.join(', ')}
+                </li>
+              ))}
+              {o.hereDuringOther.length > 0 && (
+                <li><strong>Here, while that project was running:</strong> {tripsPerDay(o.hereDuringOther)}</li>
+              )}
+              {o.thereDuringThis.length > 0 && (
+                <li><strong>There, while this project was running:</strong> {tripsPerDay(o.thereDuringThis)}</li>
+              )}
+            </ul>
+          </div>
+          <Link to={`/org/participants/${o.participantId}`} className="text-xs font-medium text-rose-700 hover:underline whitespace-nowrap">
+            Open the other file →
+          </Link>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function formatIsoDay(day: string): string {
   const [y, m, d] = day.split('-');
   return `${d}-${m}-${y}`;

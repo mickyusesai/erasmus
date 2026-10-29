@@ -274,6 +274,7 @@ model Participant {
   greenTravelExtraNote        String?
   greenTravelExtraUpdatedAt   DateTime?
   aiReviewStatus            AiReviewStatus          @default(NOT_STARTED)  // Status of background AI review after submission
+  aiReviewedAt              DateTime?               // When the last AI review looked at the trips and files
   tokenExpiresAt            DateTime?               // Magic link expiry (set to project.endDate + 180 days on creation)
   reopenedAt                DateTime?               // When the reimbursement was last reopened by the organisation
   reopenMessage             String?                 // Organisation's message to participant explaining what to fix

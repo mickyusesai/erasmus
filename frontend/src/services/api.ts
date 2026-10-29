@@ -1087,6 +1087,16 @@ export const organisationApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  /** Switch "doesn't need reimbursement" on or off (nothing is paid while it is on) */
+  setNoReimbursement: async (participantId: string, noReimbursement: boolean) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/no-reimbursement`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ noReimbursement }),
+    });
+    return handleResponse<{ noReimbursement: boolean; summary: ReimbursementSummary | null }>(res);
+  },
+
   /** Correct what the AI read from a receipt (amount, currency, date, meal or hotel) */
   correctReceipt: async (
     participantId: string,
@@ -1560,6 +1570,8 @@ export interface OrgParticipant {
   email: string;
   country: string;
   status: ParticipantStatus;
+  /** The participant ticked "I don't need reimbursement": nothing is paid while it is on */
+  noReimbursement?: boolean;
   lastMagicLinkSentAt?: string;
   createdAt: string;
   reimbursementSummary?: ReimbursementSummary;
@@ -1571,6 +1583,22 @@ export interface OrgParticipant {
     hasActivity: boolean;
     hasSocialMedia: boolean;
   };
+}
+
+/** The same person in another project, with trips that can't all have happened */
+export interface OtherProjectOverlap {
+  participantId: string;
+  projectId: string;
+  projectName: string;
+  projectStart: string;
+  projectEnd: string;
+  matchedBy: 'email' | 'name';
+  /** Days with trips in both files */
+  sameDays: { date: string; here: string[]; there: string[] }[];
+  /** Trips in this file while the other project was running */
+  hereDuringOther: { date: string; trip: string }[];
+  /** Trips in the other file while this project was running */
+  thereDuringThis: { date: string; trip: string }[];
 }
 
 /** A participant's email reply, received through the inbox and summarised by AI */
@@ -1621,6 +1649,12 @@ export interface OrgParticipantDetail extends OrgParticipant {
   greenTravelExtraUpdatedAt?: string | null;
   greenTravelSuggestion?: GreenTravelSuggestion;
   greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
+  /** The same person's trips in another project of the organisation that clash with these */
+  otherProjects?: OtherProjectOverlap[];
+  /** Trips or files changed after the AI review looked at them (null when up to date) */
+  reviewOutdated?: { reviewedAt: string; changes: string[] } | null;
+  /** Who switched "doesn't need reimbursement" on */
+  noReimbursementSetBy?: 'PARTICIPANT' | 'ORGANISATION' | null;
   /** Email replies from the participant (via the inbox), newest first */
   messages?: OrgParticipantMessage[];
   project: {

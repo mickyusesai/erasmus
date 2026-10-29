@@ -20,6 +20,8 @@ import { GREEN_TRAVEL_EXTRA_MODES } from '../../utils/greenTravelExtra.js';
 import { buildGreenTravelSuggestion } from '../../services/greenTravel/suggestion.js';
 import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
 import { findSameFile, fileHash } from '../../services/checks/sameFile.js';
+import { findOtherProjectOverlaps } from '../../services/checks/otherProjects.js';
+import { reviewOutdated } from '../../services/checks/reviewOutdated.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -1236,10 +1238,22 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
   const greenTravelSuggestion = await buildGreenTravelSuggestion(participant, effectiveLimit.greenTravel);
   // Files other participants in the project claimed too (e.g. the fuel receipts of a shared car)
   const sharedDocs = await findSharedDocuments(participant.id);
+  // The same person's trips in another project of the organisation that clash with these
+  const otherProjects = await findOtherProjectOverlaps(participant.id);
 
   res.json({
     participant: {
       ...participant,
+      otherProjects,
+      // Trips or files changed after the AI review looked at them
+      reviewOutdated: await reviewOutdated(participant),
+      // Who switched "doesn't need reimbursement" on (participants tick it themselves)
+      noReimbursementSetBy: participant.noReimbursement
+        ? participant.changeLogEntries.find((e) => e.fieldName === 'noReimbursement')?.userType === 'PARTICIPANT' ||
+          !participant.changeLogEntries.some((e) => e.fieldName === 'noReimbursement')
+          ? 'PARTICIPANT'
+          : 'ORGANISATION'
+        : null,
       travelItems: sortTravelItemsByJourney(participant.travelItems),
       documents: participant.documents.map((d) => ({ ...d, sharedWith: sharedDocs.get(d.id) ?? [] })),
       maxReimbursementForCountry: effectiveLimit.maxReimbursement,
@@ -1495,6 +1509,39 @@ router.patch('/participants/:id/bank-details', asyncHandler(async (req: Request,
   res.json({ success: true });
 }));
 
+/**
+ * PATCH /api/organisation/participants/:id/no-reimbursement
+ * Switch "doesn't need reimbursement" on or off (participants tick it themselves; while it is
+ * on, nothing is paid and no bank details are needed)
+ */
+router.patch('/participants/:id/no-reimbursement', asyncHandler(async (req: Request, res: Response) => {
+  const participantId = req.params.id;
+  const participant = await verifyOrgParticipant(req.organisation!, participantId);
+  if (participant.status === 'ADMIN_APPROVED' || participant.status === 'PAID') {
+    throw new ForbiddenError('This reimbursement is already approved');
+  }
+  const result = z.object({ noReimbursement: z.boolean() }).safeParse(req.body);
+  if (!result.success) throw new ValidationError('noReimbursement must be true or false');
+  const { noReimbursement } = result.data;
+
+  if (participant.noReimbursement !== noReimbursement) {
+    await prisma.participant.update({ where: { id: participantId }, data: { noReimbursement } });
+    await prisma.changeLogEntry.create({
+      data: {
+        participantId,
+        userType: changeLogActor(req),
+        fieldName: 'noReimbursement',
+        previousValue: participant.noReimbursement ? 'yes' : 'no',
+        newValue: noReimbursement ? 'yes' : 'no',
+      },
+    });
+  }
+  const { getAiService } = await import('../../services/ai/index.js');
+  await getAiService().recalculateParticipantSummary(participantId);
+  const summary = await prisma.reimbursementSummary.findUnique({ where: { participantId } });
+  res.json({ noReimbursement, summary });
+}));
+
 const RECEIPT_TYPES = ['HOTEL_INVOICE', 'MEAL_RECEIPT'] as const;
 
 /**
@@ -1739,6 +1786,9 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     throw new ForbiddenError('Access denied');
   }
 
+  // The review sees the trips and files as they are at this moment
+  const reviewStartedAt = new Date();
+
   // Delete all existing findings and mark review as pending
   await Promise.all([
     prisma.aiReviewFinding.deleteMany({ where: { participantId } }),
@@ -1852,6 +1902,8 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       amountToReimburse: participant.reimbursementSummary.amountToReimburse,
     } : null,
     bankDetailsComplete: !!(participant.bankAccountIban && participant.bankAccountHolderName && participant.bankAccountBic),
+    noReimbursement: participant.noReimbursement,
+    otherProjects: await findOtherProjectOverlaps(participant.id),
   }, { participantId: participant.id, projectId: participant.projectId });
 
   // Store new findings in DB (including travelItemId link)
@@ -1878,7 +1930,10 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
   storedFindings.sort((a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3));
 
   // Mark review as complete
-  await prisma.participant.update({ where: { id: participantId }, data: { aiReviewStatus: AiReviewStatus.COMPLETE } });
+  await prisma.participant.update({
+    where: { id: participantId },
+    data: { aiReviewStatus: AiReviewStatus.COMPLETE, aiReviewedAt: reviewStartedAt },
+  });
 
   res.json({ findings: storedFindings.map(withDocumentIds) });
 }));
@@ -3167,6 +3222,7 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
     'Country',
     'Email',
     'Reimbursement Status',
+    "Doesn't need reimbursement",
     'Reimbursement Amount (EUR)',
     'Travel (EUR)',
     'Green travel extra (EUR)',
@@ -3178,6 +3234,7 @@ router.get('/projects/:id/export/csv', ensureOwnProject, asyncHandler(async (req
     p.country,
     p.email,
     p.status,
+    p.noReimbursement ? 'yes' : '',
     p.reimbursementSummary?.amountToReimburse ?? '',
     p.reimbursementSummary?.totalEur ?? '',
     p.reimbursementSummary?.greenTravelExtraEur ?? '',

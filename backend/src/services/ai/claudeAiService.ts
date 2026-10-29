@@ -16,6 +16,7 @@ import { tripHasNoPrice, tripPriceTypedIn } from '../../utils/tripPrice.js';
 import { bankAccountProblem } from '../../utils/bankAccount.js';
 import { recordAiUsage } from './usageLog.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
+import { otherProjectsForPrompt, type OtherProjectOverlap } from '../checks/otherProjects.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
 
 /**
@@ -279,14 +280,17 @@ export class ClaudeAiService implements TravelDocumentAiService {
     const greenTravelExtraEur =
       Math.round(((participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0)) * 100) / 100;
 
-    // Single shared formula (see utils/reimbursementMath.ts)
-    const amountToReimburse = computePayable({
-      travelEur: totalEur,
-      allowanceInsideCap: 0,
-      allowanceOnTop: greenTravelExtraEur,
-      maxReimbursement: maxReimbursementAllowed,
-      hasMultiPersonBooking,
-    }).total;
+    // Single shared formula (see utils/reimbursementMath.ts). Nothing is paid to a participant
+    // who doesn't need reimbursement; the trips still add up to the total for the record.
+    const amountToReimburse = participant.noReimbursement
+      ? 0
+      : computePayable({
+          travelEur: totalEur,
+          allowanceInsideCap: 0,
+          allowanceOnTop: greenTravelExtraEur,
+          maxReimbursement: maxReimbursementAllowed,
+          hasMultiPersonBooking,
+        }).total;
 
     // Validate
     const validation = await this.validateReimbursement(participantId);
@@ -435,6 +439,10 @@ export async function generateParticipantReview(data: {
     amountToReimburse: number | null;
   } | null;
   bankDetailsComplete: boolean;
+  /** The participant ticked "I don't need reimbursement" */
+  noReimbursement?: boolean;
+  /** The same person's trips in another project of the organisation that clash with these */
+  otherProjects?: OtherProjectOverlap[];
 }, usageContext: { participantId?: string; projectId?: string } = {}): Promise<(ReviewFinding & { travelItemId?: string | null; documentIds?: string[] })[]> {
   // One fixed numbering of the travel documents, used in the prompt and to map the answer back
   const travelDocs = data.documents.filter((d) => !isReceiptDocument(d));
@@ -463,7 +471,8 @@ PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ 
 PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
 ${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : ''}
 ${data.consolidationSummary ? `\n=== CONSOLIDATION AI NOTES ===\nThe AI that processed the uploaded documents left these notes for you:\n${data.consolidationSummary}\n` : ''}
-BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}
+BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}${data.noReimbursement ? `
+DOESN'T NEED REIMBURSEMENT: the participant ticked "I don't need reimbursement", so nothing is paid and no bank details are needed. Do not flag missing bank details or amounts to pay.` : ''}
 
 The typical journey pattern is: participant travels FROM their home country (${normalizeCountryName(data.participantCountry)}) TO the project country (${data.projectCountry}), attends the project, then travels back home.
 
@@ -482,6 +491,10 @@ ${data.travelItems.map((item, i) => {
       const linked = linkedDocumentIds(item)
         .map((id) => data.documents.find((d) => d.id === id))
         .filter((d): d is (typeof data.documents)[number] => !!d);
+      // A meal or hotel receipt doesn't prove a journey
+      if (linked.length > 0 && linked.every(isReceiptDocument)) {
+        flags.push(`ONLY PROOF IS A ${linked.some((d) => d.documentType === 'HOTEL_INVOICE') ? 'HOTEL' : 'MEAL'} RECEIPT: ${linked.map((d) => `"${d.originalFilename}" (${d.documentType === 'HOTEL_INVOICE' ? 'hotel invoice' : 'meal receipt'}${d.extraction?.merchantName ? ` from ${d.extraction.merchantName}` : ''})`).join(', ')} — not a ticket, so this trip has no proof of travel`);
+      }
       if (!item.luggageAmount && linked.some((d) => d.documentType === 'LUGGAGE_INVOICE')) {
         flags.push('LUGGAGE/EXTRAS INVOICE NOT COUNTED: a luggage invoice is linked to this trip but no luggage amount is included');
       }
@@ -521,6 +534,10 @@ ${(() => { const r = data.documents.filter(isReceiptDocument); return r.length >
 === FOOD & ACCOMMODATION RECEIPTS (${r.length}) ===
 ${r.filter((d) => d.documentType === 'MEAL_RECEIPT').length} meal receipt(s), ${r.filter((d) => d.documentType === 'HOTEL_INVOICE').length} hotel invoice(s). These support the green-travel extra that the organisation decides separately. They are NEVER linked to travel items — do not flag them as unlinked, unused or missing.
 ` : ''; })()}
+${data.otherProjects?.length ? `
+=== SAME PERSON IN ANOTHER PROJECT OF THIS ORGANISATION ===
+${otherProjectsForPrompt(data.otherProjects)}
+` : ''}
 === GREEN TRAVEL ===
 ${data.greenTravel ? 'This participant is flagged as GREEN TRAVEL (low-emission transport for the main part of the journey).' : 'This participant is NOT flagged as green travel.'}
 ${data.greenTravelExtra && ((data.greenTravelExtra.foodEur ?? 0) > 0 || (data.greenTravelExtra.accommodationEur ?? 0) > 0)

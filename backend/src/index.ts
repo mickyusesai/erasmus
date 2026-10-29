@@ -187,6 +187,24 @@ async function expireAbandonedPurchases() {
 expireAbandonedPurchases();
 setInterval(expireAbandonedPurchases, 60 * 60 * 1000);
 
+// Participants who don't need reimbursement are paid nothing; amounts stored before that rule
+// are set to 0 once (not for reimbursements that are already approved or paid)
+async function zeroNoReimbursementAmounts() {
+  try {
+    const { count } = await prisma.reimbursementSummary.updateMany({
+      where: {
+        amountToReimburse: { not: 0 },
+        participant: { noReimbursement: true, status: { notIn: ['ADMIN_APPROVED', 'PAID'] } },
+      },
+      data: { amountToReimburse: 0 },
+    });
+    if (count > 0) console.log(`[Startup] Amount to pay set to 0 for ${count} participant(s) who don't need reimbursement`);
+  } catch (err) {
+    console.error('[Startup] Could not update the amounts of participants who don\'t need reimbursement:', err);
+  }
+}
+zeroNoReimbursementAmounts();
+
 // Graceful shutdown
 async function shutdown() {
   console.log('Shutting down gracefully...');

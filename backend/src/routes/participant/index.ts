@@ -18,6 +18,7 @@ import { projectEmailContext } from '../../services/email/context.js';
 import { extractionContextFor } from '../../services/ai/extractionContext.js';
 import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
 import { findSameFile, fileHash } from '../../services/checks/sameFile.js';
+import { findOtherProjectOverlaps } from '../../services/checks/otherProjects.js';
 import { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
@@ -1681,6 +1682,19 @@ router.patch('/no-reimbursement', participantAuth, asyncHandler(async (req: Requ
     where: { id: participant.id },
     data: { noReimbursement: !!noReimbursement },
   });
+  if (participant.noReimbursement !== updated.noReimbursement) {
+    // Organisers see when it was ticked; the amount to pay follows it
+    await prisma.changeLogEntry.create({
+      data: {
+        participantId: participant.id,
+        userType: 'PARTICIPANT',
+        fieldName: 'noReimbursement',
+        previousValue: participant.noReimbursement ? 'yes' : 'no',
+        newValue: updated.noReimbursement ? 'yes' : 'no',
+      },
+    });
+    await getAiService().recalculateParticipantSummary(participant.id);
+  }
 
   res.json({ noReimbursement: updated.noReimbursement });
 }));
@@ -1855,6 +1869,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
 
   // Generate AI review findings in the background (only once, on submission)
   (async () => {
+    const reviewStartedAt = new Date();
     try {
       // Fetch full participant data for AI review
       const fullParticipant = await prisma.participant.findUnique({
@@ -1971,6 +1986,8 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
           amountToReimburse: fullParticipant.reimbursementSummary.amountToReimburse,
         } : null,
         bankDetailsComplete: !!(fullParticipant.bankAccountIban && fullParticipant.bankAccountHolderName && fullParticipant.bankAccountBic),
+        noReimbursement: fullParticipant.noReimbursement,
+        otherProjects: await findOtherProjectOverlaps(fullParticipant.id),
       }, { participantId: fullParticipant.id, projectId: fullParticipant.projectId });
 
       // Store findings in DB (including travelItemId link)
@@ -1989,7 +2006,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
 
       await prisma.participant.update({
         where: { id: participant.id },
-        data: { aiReviewStatus: AiReviewStatus.COMPLETE },
+        data: { aiReviewStatus: AiReviewStatus.COMPLETE, aiReviewedAt: reviewStartedAt },
       });
       console.log(`[AI Review] Generated ${findings.length} findings for participant ${participant.id}`);
     } catch (error) {

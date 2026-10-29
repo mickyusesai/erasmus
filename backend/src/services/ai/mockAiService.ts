@@ -335,14 +335,17 @@ export class MockAiService implements TravelDocumentAiService {
     const greenTravelExtraEur =
       Math.round(((participant.greenTravelFoodEur ?? 0) + (participant.greenTravelAccommodationEur ?? 0)) * 100) / 100;
 
-    // Single shared formula (see utils/reimbursementMath.ts)
-    const amountToReimburse = computePayable({
-      travelEur: totalEur,
-      allowanceInsideCap: 0,
-      allowanceOnTop: greenTravelExtraEur,
-      maxReimbursement: maxReimbursementAllowed,
-      hasMultiPersonBooking,
-    }).total;
+    // Single shared formula (see utils/reimbursementMath.ts). Nothing is paid to a participant
+    // who doesn't need reimbursement; the trips still add up to the total for the record.
+    const amountToReimburse = participant.noReimbursement
+      ? 0
+      : computePayable({
+          travelEur: totalEur,
+          allowanceInsideCap: 0,
+          allowanceOnTop: greenTravelExtraEur,
+          maxReimbursement: maxReimbursementAllowed,
+          hasMultiPersonBooking,
+        }).total;
 
     // Validate
     const validation = await this.validateReimbursement(participantId);

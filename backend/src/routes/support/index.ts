@@ -13,6 +13,7 @@ import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import { bankAccountProblem, maskAccountNumber } from '../../utils/bankAccount.js';
 import { buildGreenTravelSuggestion } from '../../services/greenTravel/suggestion.js';
 import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
+import { findOtherProjectOverlaps } from '../../services/checks/otherProjects.js';
 
 const router = Router();
 router.use(asyncHandler(supportKeyAuth));
@@ -76,8 +77,10 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
   const validation = await getAiService().validateReimbursement(p.id);
   const greenTravel = await buildGreenTravelSuggestion(p, effectiveLimit.greenTravel);
   const sharedDocs = await findSharedDocuments(p.id);
+  const otherProjects = await findOtherProjectOverlaps(p.id);
 
   res.json({
+    otherProjects,
     participant: {
       id: p.id,
       name: `${p.firstName} ${p.lastName}`,
