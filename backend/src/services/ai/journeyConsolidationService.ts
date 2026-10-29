@@ -167,7 +167,7 @@ Carefully determine the document type:
    - INTERRAIL_PASS: Interrail or Eurail pass (multi-day rail travel pass)
    - OTHER: Anything else
 
-For HOTEL_INVOICE and MEAL_RECEIPT still extract the total amount, currency, documentDate and merchantName.
+For HOTEL_INVOICE and MEAL_RECEIPT still extract the total amount, currency, documentDate and merchantName. For a HOTEL_INVOICE the documentDate is the check-in date (the first night of the stay), not the date it was booked, invoiced or paid.
 
 CRITICAL: Bank transactions and payment screenshots are NOT tickets!
 - If you see a bank app interface, transaction history, or payment confirmation
@@ -272,7 +272,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!${typeHint ? `
 
 PARTICIPANT'S OWN CLASSIFICATION: ${
       typeHint === 'HOTEL_INVOICE' || typeHint === 'MEAL_RECEIPT'
-        ? `the participant uploaded this as a ${typeHint === 'HOTEL_INVOICE' ? 'hotel/accommodation invoice' : 'meal/food receipt'} for their green-travel extra. Set documentType to ${typeHint} and focus on the total amount, currency, documentDate and merchantName.`
+        ? `the participant uploaded this as a ${typeHint === 'HOTEL_INVOICE' ? 'hotel/accommodation invoice' : 'meal/food receipt'} for their green-travel extra. Set documentType to ${typeHint} and focus on the total amount, currency, documentDate${typeHint === 'HOTEL_INVOICE' ? ' (the check-in date, not the booking or payment date)' : ''} and merchantName.`
         : `the participant uploaded this for a flight as ${typeHint === 'AIRLINE_DECLARATION' ? 'a declaration from the airline confirming they took the flight' : 'their boarding pass'}. Set documentType to ${typeHint} and extract the passenger name, flight number, route and departure date.`
     }` : ''}${options.context ? `\n\n${options.context}` : ''}`;
 

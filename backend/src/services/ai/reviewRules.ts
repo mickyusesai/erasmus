@@ -189,7 +189,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'important',
     label: 'Fuel Check',
     description: 'Fuel claimed for a car trip is much more than the route needs',
-    prompt: 'For CAR trips paid with fuel receipts: estimate the road distance of the route (both directions if both are claimed) and a typical fuel cost of about 7 litres per 100 km at the local price (about €1.60–1.90 per litre in Europe). Only if the fuel claimed is clearly more than about 1.5 times that estimate, or fuel receipts are dated far from the travel days, flag it (category "Fuel Check") with your distance and cost estimate. If it is plausible, do not create a finding.',
+    prompt: 'For CAR trips paid with fuel receipts (not trips entered by kilometres): estimate the road distance of the route (both directions if both are claimed) and a typical fuel cost of about 7 litres per 100 km at the local price (about €1.60–1.90 per litre in Europe). Only if the fuel claimed is clearly more than about 1.5 times that estimate, or fuel receipts are dated far from the travel days, flag it (category "Fuel Check") with your distance and cost estimate. If it is plausible, do not create a finding.',
     enabled: true,
   },
   {

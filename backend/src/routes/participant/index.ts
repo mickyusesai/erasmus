@@ -2,7 +2,6 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
 import path from 'path';
-import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { participantAuth, ensureOwnParticipant } from '../../middleware/auth.js';
@@ -18,6 +17,7 @@ import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { extractionContextFor } from '../../services/ai/extractionContext.js';
 import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
+import { findSameFile, fileHash } from '../../services/checks/sameFile.js';
 import { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
@@ -379,8 +379,8 @@ router.post(
 
     // The same file uploaded again is kept once: reuse the earlier copy (no second AI read,
     // no rebuild), but still honour what the participant told us about it this time
-    const contentHash = createHash('sha256').update(req.file.buffer).digest('hex');
-    const sameFile = await prisma.document.findFirst({ where: { participantId: participant.id, contentHash } });
+    const contentHash = fileHash(req.file.buffer);
+    const sameFile = await findSameFile(participant.id, req.file.buffer, contentHash);
     if (sameFile) {
       let document = sameFile;
       const retype =

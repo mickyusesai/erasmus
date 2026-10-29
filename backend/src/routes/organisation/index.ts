@@ -6,7 +6,6 @@ import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '..
 import { organisationAuth, ensureOwnProject, changeLogActor } from '../../middleware/auth.js';
 import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
-import { createHash } from 'crypto';
 import { bankAccountProblem, maskAccountNumber, normaliseAccountNumber } from '../../utils/bankAccount.js';
 import path from 'path';
 import { ADDABLE_TYPES, type StoredAttachment } from '../../services/email/inbound.js';
@@ -20,6 +19,7 @@ import { summarizeTravelDays } from '../../utils/travelDays.js';
 import { GREEN_TRAVEL_EXTRA_MODES } from '../../utils/greenTravelExtra.js';
 import { buildGreenTravelSuggestion } from '../../services/greenTravel/suggestion.js';
 import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
+import { findSameFile, fileHash } from '../../services/checks/sameFile.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -1199,7 +1199,7 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
     where: { id: participantId },
     include: {
       project: true,
-      documents: { include: { extraction: { select: { amount: true, currency: true, documentDate: true, correctedByOrganisation: true } } } },
+      documents: { include: { extraction: { select: { amount: true, currency: true, documentDate: true, merchantName: true, correctedByOrganisation: true } } } },
       travelItems: {
         orderBy: { departureDate: 'asc' },
       },
@@ -1308,8 +1308,8 @@ router.post('/participants/:id/messages/:messageId/attachments/:index/add', asyn
 
   const storage = getStorageService();
   const buffer = await storage.retrieve(attachment.storedPath);
-  const contentHash = createHash('sha256').update(buffer).digest('hex');
-  let document = await prisma.document.findFirst({ where: { participantId, contentHash } });
+  const contentHash = fileHash(buffer);
+  let document = await findSameFile(participantId, buffer, contentHash);
   const duplicate = !!document;
   if (!document) {
     // A copy of its own, so deleting the document never touches the email's attachment
@@ -2777,8 +2777,8 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
   const documentType = (req.body.documentType as string) || 'OTHER';
 
   // The same file is kept once: return the copy the participant already has
-  const contentHash = createHash('sha256').update(req.file.buffer).digest('hex');
-  const sameFile = await prisma.document.findFirst({ where: { participantId, contentHash } });
+  const contentHash = fileHash(req.file.buffer);
+  const sameFile = await findSameFile(participantId, req.file.buffer, contentHash);
   if (sameFile) {
     const document =
       sameFile.documentType === 'OTHER' && documentType !== 'OTHER'

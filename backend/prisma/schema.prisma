@@ -765,6 +765,7 @@ model ParticipantMessage {
   attachments   String?     // JSON array of { name, contentType, size, storedPath, documentId }
   forwardedTo   String?
   forwardedAt   DateTime?
+  externalId    String?     @unique // Postmark's MessageID, so a resent webhook isn't stored twice
 
   @@index([participantId, receivedAt])
 }

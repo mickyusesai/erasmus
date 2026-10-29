@@ -115,6 +115,40 @@ describe('receipt dates read a year off', () => {
   });
 });
 
+describe('receipts uploaded twice', () => {
+  it('counts the first upload only and says which one counts', () => {
+    const extra = extraTravelDates([trip('2026-08-24'), trip('2026-09-03')], projectStart, projectEnd);
+    const result = calculateGreenTravelExtra({
+      mode: 'RECEIPTS', foodPerDayEur: 20, accommodationPerNightEur: 35, extra, projectStart, projectEnd,
+      receipts: [
+        { id: 'hostel', kind: 'ACCOMMODATION', filename: 'hostel.pdf', date: '2026-08-24', amountEur: 24, sameAs: ['size:81234:2400'] },
+        { id: 'hostel-again', kind: 'ACCOMMODATION', filename: 'hostel (1).pdf', date: '2026-08-24', amountEur: 24, sameAs: ['file:abc', 'size:81234:2400'] },
+        { id: 'other-hotel', kind: 'ACCOMMODATION', filename: 'Other.pdf', date: '2026-08-24', amountEur: 5, sameAs: ['size:5000:500'] },
+      ],
+    });
+    expect(result.accommodationSpentEur).toBe(29);
+    expect(result.notCounted).toEqual([
+      { id: 'hostel-again', filename: 'hostel (1).pdf', kind: 'ACCOMMODATION', date: '2026-08-24', amountEur: 24, reason: 'DUPLICATE', duplicateOf: 'hostel.pdf' },
+    ]);
+  });
+});
+
+describe('a misread year on a project day', () => {
+  it('corrects the year to the trip and gives the real reason', () => {
+    // Travels 5 → 20 Oct for a project 7 → 17 Oct; the bistro receipt of 17 Oct was read as 2025
+    const start = d('2026-10-07');
+    const end = d('2026-10-17');
+    const extra = extraTravelDates([trip('2026-10-05'), trip('2026-10-20')], start, end);
+    const result = calculateGreenTravelExtra({
+      mode: 'RECEIPTS', foodPerDayEur: 20, accommodationPerNightEur: 25, extra, projectStart: start, projectEnd: end,
+      travelWindow: { first: '2026-10-05', last: '2026-10-20' },
+      receipts: [{ id: 'bistro', kind: 'FOOD', filename: 'bistro.jpg', date: '2025-10-17', amountEur: 24.4 }],
+    });
+    expect(result.correctedDates).toEqual([{ id: 'bistro', filename: 'bistro.jpg', from: '2025-10-17', to: '2026-10-17' }]);
+    expect(result.notCounted).toEqual([{ id: 'bistro', filename: 'bistro.jpg', kind: 'FOOD', date: '2026-10-17', amountEur: 24.4, reason: 'DURING_PROJECT' }]);
+  });
+});
+
 describe('green travel extra as a fixed amount', () => {
   it('pays per extra day and per extra night', () => {
     const items = [trip('2026-08-23'), trip('2026-08-24'), trip('2026-09-03'), trip('2026-09-04')];

@@ -507,7 +507,7 @@ ${data.travelItems.map((item, i) => {
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
     if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
     if (item.purchaseDateAutoFilled) flags.push('No purchase date on the ticket: the exchange rate of the travel date is used — this is normal, do not flag it');
-    if (item.distanceKm) flags.push(`Car distance: ${item.distanceKm}km`);
+    if (item.distanceKm) flags.push(`Car trip entered by kilometres: ${item.distanceKm} km × the project's car rate. Fuel receipts are only proof here, so no fuel check`);
     return `${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} | Date: ${item.departureDate || '?'}${item.purchaseDate ? ` | Purchase: ${item.purchaseDate}` : ''} | €${item.amountEur ?? 'MISSING'} (${item.currencyOriginal || 'EUR'})${item.flightNumber ? ` | Flight: ${item.flightNumber}` : ''}${item.bookingReference ? ` | Booking: ${item.bookingReference}` : ''}${flags.length > 0 ? '\n     ⚠ ' + flags.join('\n     ⚠ ') : ''}`;
   }).join('\n')}
 

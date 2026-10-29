@@ -785,6 +785,7 @@ export default function OrgParticipantDetail() {
                             onMoveDown={canMoveDown ? () => moveTravelItemMutation.mutate({ itemId: item.id, direction: 'down' }) : undefined}
                             showMoveArrows={canMoveUp || canMoveDown}
                             moving={moveTravelItemMutation.isPending}
+                            carRatePerKm={participant.project.carRatePerKm}
                             onShowFindingDocuments={showFindingDocuments}
                             onHideFindingDocuments={hideFindingDocuments}
                           />
@@ -1604,6 +1605,7 @@ function TravelItemCard({
   moving,
   onShowFindingDocuments,
   onHideFindingDocuments,
+  carRatePerKm,
 }: {
   item: TravelItem;
   expanded: boolean;
@@ -1628,6 +1630,8 @@ function TravelItemCard({
   moving?: boolean;
   onShowFindingDocuments?: (ids: string[], scroll: boolean) => void;
   onHideFindingDocuments?: () => void;
+  /** The project's car rate, to explain car trips priced by the kilometre */
+  carRatePerKm?: number;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<CreateTravelItemData>({
@@ -1918,13 +1922,18 @@ function TravelItemCard({
                 )}
                 {item.distanceKm && <DetailField label="Distance" value={`${item.distanceKm} km`} />}
                 {item.modeOfTransport === 'CAR' && (() => {
-                  // How a car trip's amount came about: fuel receipts, kilometres, or typed in
+                  // How a car trip's amount came about: kilometres × the car rate (trips added by the
+                  // participant), fuel receipts (trips built by the AI), or typed in
                   const fuel = linkedDocs.filter((d) => d.documentType === 'FUEL_RECEIPT').length;
-                  const how = fuel > 0
-                    ? `${fuel} fuel receipt${fuel === 1 ? '' : 's'} (no kilometres used)`
-                    : item.distanceKm
-                      ? 'Kilometres × the project car rate'
-                      : 'Typed in';
+                  const byKm = !!item.distanceKm && !!carRatePerKm
+                    && Math.abs(item.distanceKm * carRatePerKm - item.amountEur) < 0.01;
+                  const how = byKm
+                    ? `${item.distanceKm!.toLocaleString('de-DE')} km × ${formatCurrency(carRatePerKm!)}/km${fuel > 0 ? ' (fuel receipts are proof only)' : ''}`
+                    : item.isDriverCarpool === false && item.amountEur === 0
+                      ? 'Passenger in a shared car (not paid)'
+                      : fuel > 0 && !item.manuallyEdited && !tripPriceTypedIn(item)
+                        ? `${fuel} fuel receipt${fuel === 1 ? '' : 's'}`
+                        : 'Typed in';
                   return <DetailField label="Amount from" value={how} />;
                 })()}
                 {item.isDriverCarpool && <DetailField label="Driver/Carpool" value="Yes" />}
@@ -2334,6 +2343,9 @@ function ReceiptThumb({ participantId, receipt, onEdit }: { participantId: strin
           {receipt.amountEur != null && receipt.currency && receipt.currency !== 'EUR' && ` · ${formatCurrency(receipt.amountEur)}`}
           {receipt.corrected && ' · corrected'}
         </p>
+        {receipt.duplicateOf && (
+          <p className="text-[10px] text-orange-600 truncate" title={`Same receipt as ${receipt.duplicateOf}`}>Uploaded twice</p>
+        )}
       </button>
       {onEdit && (
         <button
@@ -2355,8 +2367,11 @@ function ReceiptGallery({ participantId, receipts, onEdit }: { participantId: st
   if (receipts.length === 0) {
     return <p className="mt-1">Receipts uploaded: none yet — the participant can still add them.</p>;
   }
-  const meals = receipts.filter((r) => r.documentType === 'MEAL_RECEIPT');
-  const hotels = receipts.filter((r) => r.documentType === 'HOTEL_INVOICE');
+  // A receipt uploaded twice is shown twice but added up once
+  const counted = receipts.filter((r) => !r.duplicateOf);
+  const meals = counted.filter((r) => r.documentType === 'MEAL_RECEIPT');
+  const hotels = counted.filter((r) => r.documentType === 'HOTEL_INVOICE');
+  const twice = receipts.length - counted.length;
   // Grouped by the date on the receipt; the upload date says nothing about when the money was spent
   const dayKey = (r: SuggestionReceipt) => (r.documentDate ? new Date(r.documentDate).toISOString().slice(0, 10) : 'unknown');
   const groups = new Map<string, SuggestionReceipt[]>();
@@ -2379,6 +2394,7 @@ function ReceiptGallery({ participantId, receipts, onEdit }: { participantId: st
           <BedDouble className="inline w-3.5 h-3.5 mr-1 text-sky-500" />{hotels.length} hotel invoice{hotels.length === 1 ? '' : 's'} · <strong>{sumByCurrency(hotels)}</strong>
           {hotelsEur != null && <> ≈ <strong>{formatCurrency(hotelsEur)}</strong></>}
         </span>
+        {twice > 0 && <span className="text-gray-500">{twice} uploaded twice (not added up)</span>}
       </div>
       <div className="mt-2 space-y-2">
         {ordered.map(([day, list]) => (
@@ -2488,6 +2504,7 @@ const NOT_COUNTED_LABELS: Record<GreenTravelNotCountedReason, string> = {
   NO_DATE: 'no date could be read',
   DURING_PROJECT: 'during the project',
   NOT_AN_EXTRA_DAY: 'not on an extra travel day',
+  DUPLICATE: 'uploaded twice',
 };
 
 /**
@@ -2619,6 +2636,7 @@ function GreenTravelCalculationBox({
                       {n.filename}
                       {n.date ? ` (${formatIsoDay(n.date)})` : ''}
                       {n.amountEur != null ? ` · ${formatCurrency(n.amountEur)}` : ''}: {NOT_COUNTED_LABELS[n.reason]}
+                      {n.duplicateOf ? ` (same receipt as ${n.duplicateOf})` : ''}
                     </span>
                   </li>
                 ))}

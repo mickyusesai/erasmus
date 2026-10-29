@@ -1,7 +1,7 @@
 import express, { Router, Request, Response } from 'express';
 import { timingSafeEqual } from 'crypto';
 import { asyncHandler } from '../../middleware/errorHandler.js';
-import { handleInboundEmail, type PostmarkInbound } from '../../services/email/inbound.js';
+import { handleInboundEmail, summariseAndForward, type PostmarkInbound } from '../../services/email/inbound.js';
 
 /**
  * Postmark inbound webhook: participants' replies to reply+<code>@<INBOUND_EMAIL_DOMAIN>.
@@ -26,7 +26,11 @@ router.post('/postmark', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
   const result = await handleInboundEmail(req.body as PostmarkInbound);
+  // Answer Postmark first: the AI summary can take a while, and a slow answer makes Postmark send the email again
   res.json(result);
+  if (result.status === 'stored' && result.messageId) {
+    summariseAndForward(result.messageId).catch((err) => console.error('[Inbound] Summary or forward failed:', err));
+  }
 }));
 
 export default router;

@@ -1391,7 +1391,7 @@ export interface GreenTravelExtra {
  */
 export type GreenTravelExtraMode = 'MANUAL' | 'RECEIPTS' | 'FIXED';
 
-export type GreenTravelNotCountedReason = 'NO_AMOUNT' | 'NO_RATE' | 'NO_DATE' | 'DURING_PROJECT' | 'NOT_AN_EXTRA_DAY';
+export type GreenTravelNotCountedReason = 'NO_AMOUNT' | 'NO_RATE' | 'NO_DATE' | 'DURING_PROJECT' | 'NOT_AN_EXTRA_DAY' | 'DUPLICATE';
 
 /** Amounts suggested by the project's green travel rule (see backend utils/greenTravelExtra.ts) */
 export interface GreenTravelCalculation {
@@ -1405,7 +1405,8 @@ export interface GreenTravelCalculation {
   foodDays: { date: string; spentEur: number; countedEur: number }[];
   accommodationSpentEur: number;
   accommodationCapEur: number;
-  notCounted: { id: string; filename: string; kind: 'FOOD' | 'ACCOMMODATION'; date: string | null; amountEur: number | null; reason: GreenTravelNotCountedReason }[];
+  /** duplicateOf: for DUPLICATE, the upload of the same receipt that counts instead */
+  notCounted: { id: string; filename: string; kind: 'FOOD' | 'ACCOMMODATION'; date: string | null; amountEur: number | null; reason: GreenTravelNotCountedReason; duplicateOf?: string }[];
   /** Receipt dates read a year off that were corrected to the trip's year */
   correctedDates: { id: string; filename: string; from: string; to: string }[];
 }
@@ -1428,6 +1429,8 @@ export interface GreenTravelSuggestion {
     amountEur?: number | null;
     /** Corrected by the organiser */
     corrected?: boolean;
+    /** The same receipt was uploaded before (this file name); it isn't added up twice */
+    duplicateOf?: string | null;
   }[];
   /** The project's rule; the calculation is only there for green travellers when the rule isn't MANUAL */
   mode?: GreenTravelExtraMode;

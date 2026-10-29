@@ -19,7 +19,7 @@ router.use(asyncHandler(supportKeyAuth));
 
 const BANK_FIELDS = ['bankAccountIban'];
 /** Organisation edits are logged masked already; participant edits are not */
-const maskOnce = (value: string | null) => (value?.startsWith('••••') ? value : maskAccountNumber(value));
+const maskOnce = (value: string | null) => (value?.startsWith('••••') || value === '(empty)' ? value : maskAccountNumber(value));
 
 /** GET /api/support/participants?q=joanna — find participants by name or email */
 router.get('/participants', asyncHandler(async (req: Request, res: Response) => {

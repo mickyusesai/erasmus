@@ -83,9 +83,14 @@ export interface ExtraReceipt {
   amountEur: number | null;
   /** True when the amount is in another currency and no exchange rate was found */
   noRate?: boolean;
+  /**
+   * Keys that are the same for the same receipt uploaded twice (file hash, shop + date + amount).
+   * Only the first upload counts.
+   */
+  sameAs?: string[];
 }
 
-export type NotCountedReason = 'NO_AMOUNT' | 'NO_RATE' | 'NO_DATE' | 'DURING_PROJECT' | 'NOT_AN_EXTRA_DAY';
+export type NotCountedReason = 'NO_AMOUNT' | 'NO_RATE' | 'NO_DATE' | 'DURING_PROJECT' | 'NOT_AN_EXTRA_DAY' | 'DUPLICATE';
 
 export interface GreenTravelCalculation {
   mode: 'RECEIPTS' | 'FIXED';
@@ -102,7 +107,16 @@ export interface GreenTravelCalculation {
   accommodationSpentEur: number;
   accommodationCapEur: number;
   /** RECEIPTS: receipts left out, with the reason (amountEur so the organiser can count one anyway) */
-  notCounted: { id: string; filename: string; kind: ExtraReceipt['kind']; date: string | null; amountEur: number | null; reason: NotCountedReason }[];
+  notCounted: {
+    id: string;
+    filename: string;
+    kind: ExtraReceipt['kind'];
+    date: string | null;
+    amountEur: number | null;
+    reason: NotCountedReason;
+    /** DUPLICATE: the file that counts instead */
+    duplicateOf?: string;
+  }[];
   /** RECEIPTS: dates read a year off (e.g. 2025 instead of 2026) that were corrected to the trip */
   correctedDates: { id: string; filename: string; from: string; to: string }[];
 }
@@ -114,6 +128,8 @@ export function calculateGreenTravelExtra(input: {
   extra: ExtraTravelDates;
   projectStart: Date;
   projectEnd: Date;
+  /** First and last travel day (YYYY-MM-DD), to correct a misread year on any receipt of the trip */
+  travelWindow?: { first: string; last: string } | null;
   receipts: ExtraReceipt[];
 }): GreenTravelCalculation {
   const foodPerDay = Math.max(0, input.foodPerDayEur ?? 0);
@@ -154,10 +170,19 @@ export function calculateGreenTravelExtra(input: {
   const counts = (kind: ExtraReceipt['kind'], date: string) =>
     kind === 'FOOD' ? daySet.has(date) : nightSet.has(date) || nightSet.has(dayBefore(date)); // hotel bills are often dated at check-out
   const shiftYear = (date: string, years: number) => `${Number(date.slice(0, 4)) + years}${date.slice(4)}`;
+  const window = input.travelWindow;
+  const duringTrip = (date: string) => !!window && date >= window.first && date <= window.last;
+  const firstCopy = new Map<string, string>(); // sameAs key → filename of the first upload
 
   for (const r of input.receipts) {
-    const leaveOut = (reason: NotCountedReason) =>
-      notCounted.push({ id: r.id, filename: r.filename, kind: r.kind, date: r.date, amountEur: r.amountEur, reason });
+    const leaveOut = (reason: NotCountedReason, date = r.date, duplicateOf?: string) =>
+      notCounted.push({ id: r.id, filename: r.filename, kind: r.kind, date, amountEur: r.amountEur, reason, ...(duplicateOf ? { duplicateOf } : {}) });
+    const original = (r.sameAs ?? []).map((key) => firstCopy.get(key)).find((name) => name !== undefined);
+    if (original !== undefined) {
+      leaveOut('DUPLICATE', r.date, original);
+      continue;
+    }
+    for (const key of r.sameAs ?? []) firstCopy.set(key, r.filename);
     if (r.amountEur == null) {
       leaveOut(r.noRate ? 'NO_RATE' : 'NO_AMOUNT');
       continue;
@@ -167,9 +192,11 @@ export function calculateGreenTravelExtra(input: {
       continue;
     }
     let date = r.date;
-    // A year misread (16-09-2025 on a trip in September 2026): use the trip's year
+    // A year misread (16-09-2025 on a trip in September 2026): use the trip's year. Also when the
+    // corrected day doesn't count, so the organiser sees the real reason (e.g. a project day).
     if (!counts(r.kind, date)) {
-      const fixed = [shiftYear(date, 1), shiftYear(date, -1)].find((d) => counts(r.kind, d));
+      const shifted = [shiftYear(date, 1), shiftYear(date, -1)];
+      const fixed = shifted.find((d) => counts(r.kind, d)) ?? (duringTrip(date) ? undefined : shifted.find(duringTrip));
       if (fixed) {
         correctedDates.push({ id: r.id, filename: r.filename, from: date, to: fixed });
         date = fixed;
@@ -183,7 +210,7 @@ export function calculateGreenTravelExtra(input: {
       accommodationSpent += r.amountEur;
       continue;
     }
-    leaveOut(date >= startDay && date <= endDay ? 'DURING_PROJECT' : 'NOT_AN_EXTRA_DAY');
+    leaveOut(date >= startDay && date <= endDay ? 'DURING_PROJECT' : 'NOT_AN_EXTRA_DAY', date);
   }
 
   const foodDays = days
