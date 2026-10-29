@@ -139,7 +139,8 @@ export async function recalculateProjectExchangeRates(projectId: string): Promis
       if (item.amountOriginal == null) continue;
 
       const currency = (item.currencyOriginal || 'EUR').toUpperCase();
-      const rate = await getEffectiveRate(rateConfig, currencyRates, currency, item.purchaseDate);
+      // Without a purchase date, the rate of the travel date is used
+      const rate = await getEffectiveRate(rateConfig, currencyRates, currency, item.purchaseDate ?? item.departureDate);
 
       const newAmountEur = Math.round(item.amountOriginal * rate * 100) / 100;
       const newLuggageEur =

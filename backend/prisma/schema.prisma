@@ -246,6 +246,7 @@ model Participant {
   country                   String
   magicLinkToken            String                  @unique
   magicLinkActive           Boolean                 @default(true)
+  replyCode                 String?                 @unique // Routes email replies: reply+<code>@<inbound domain>
   status                    ParticipantStatus       @default(DRAFT)
   bankAccountIban           String?
   bankAccountHolderName     String?
@@ -289,6 +290,7 @@ model Participant {
   declarationsOfTravel      DeclarationOfTravel[]
   aiReviewFindings          AiReviewFinding[]
   greenTravelDeclaration    GreenTravelDeclaration?
+  messages                  ParticipantMessage[]
 }
 
 enum ParticipantStatus {
@@ -382,6 +384,9 @@ model DocumentExtraction {
   consolidated          Boolean      @default(false)
   consolidatedAt        DateTime?
 
+  // The organiser corrected amount/currency/date by hand; reading the file again keeps them
+  correctedByOrganisation Boolean    @default(false)
+
   createdAt             DateTime     @default(now())
   updatedAt             DateTime     @updatedAt
 }
@@ -442,6 +447,8 @@ model TravelItem {
   toLocation            String
   departureDate         DateTime
   arrivalDate           DateTime?
+  departureTime         String?               // "HH:MM" from the ticket, when printed (orders trips within a day)
+  sortOrder             Int?                  // Organiser's order within a day (null = automatic)
   bookingReference      String?
   flightNumber          String?
   amountOriginal        Float?                // Nullable: null if price unknown or part of booking
@@ -540,6 +547,7 @@ enum UserType {
   PARTICIPANT
   ADMIN
   ORGANISATION
+  SUPPORT // EasyReimburse support acting in an organisation's dashboard
 }
 
 // AI Review Finding - generated once when participant submits, checkable by org
@@ -552,6 +560,7 @@ model AiReviewFinding {
   severity      String      // 'critical' | 'important' | 'info'
   message       String
   category      String
+  documentIds   String?     // JSON array of the document ids the finding is about
   checked       Boolean     @default(false)
   createdAt     DateTime    @default(now())
 }
@@ -738,4 +747,36 @@ model GreenTravelDeclaration {
   travelDaysClaimed Int?
   summaryJson       String                               // the trip list as printed (audit trail)
   createdAt         DateTime    @default(now())
+}
+
+// A participant's email reply, received through the inbound address (reply+<code>@...)
+// and forwarded to the organisation with an AI summary
+model ParticipantMessage {
+  id            String      @id @default(uuid())
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  fromEmail     String
+  fromName      String?
+  subject       String?
+  textBody      String      // The reply without the quoted earlier emails, when that can be stripped
+  receivedAt    DateTime    @default(now())
+  aiSummary     String?
+  aiSuggestions String?     // JSON array of { text, travelItemId }
+  attachments   String?     // JSON array of { name, contentType, size, storedPath, documentId }
+  forwardedTo   String?
+  forwardedAt   DateTime?
+
+  @@index([participantId, receivedAt])
+}
+
+// Read-only support keys, created in super-admin, valid for 24 hours
+model SupportKey {
+  id         String    @id @default(uuid())
+  keyHash    String    @unique // SHA-256 of the key; the key itself is shown once
+  label      String?
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  useCount   Int       @default(0)
 }

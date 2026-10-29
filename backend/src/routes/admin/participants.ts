@@ -455,7 +455,7 @@ router.post('/:id/send-magic-link', async (req: Request, res: Response) => {
     participant.firstName,
     participant.project.name,
     magicLink,
-    await projectEmailContext(participant.project)
+    await projectEmailContext(participant.project, participant.id)
   );
 
   // Update last sent timestamp
@@ -496,7 +496,7 @@ router.post('/send-magic-links-bulk', async (req: Request, res: Response) => {
         participant.firstName,
         participant.project.name,
         magicLink,
-        await projectEmailContext(participant.project)
+        await projectEmailContext(participant.project, participant.id)
       );
 
       await prisma.participant.update({
@@ -756,6 +756,26 @@ router.delete('/:participantId/documents/:documentId', async (req: Request, res:
   });
 
   res.json({ success: true });
+});
+
+/**
+ * GET /api/admin/participants/:participantId/documents/:documentId/url
+ * Signed URL to open a document (files live in cloud storage, not under /uploads)
+ */
+router.get('/:participantId/documents/:documentId/url', async (req: Request, res: Response) => {
+  try {
+    const doc = await prisma.document.findFirst({
+      where: { id: req.params.documentId, participantId: req.params.participantId },
+    });
+    if (!doc) {
+      res.status(404).json({ error: { message: 'Document not found' } });
+      return;
+    }
+    res.json({ url: await getStorageService().getUrl(doc.storedFilePath) });
+  } catch (error) {
+    console.error('[Admin] Could not create document URL:', error);
+    res.status(500).json({ error: { message: 'Could not open the document' } });
+  }
 });
 
 /**

@@ -80,7 +80,11 @@ export class JourneyConsolidationService {
     documentId: string,
     fileBuffer: Buffer,
     mimeType: string,
-    options: { typeHint?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT' | 'FLIGHT_BOARDING_PASS' | 'AIRLINE_DECLARATION' } = {}
+    options: {
+      typeHint?: 'HOTEL_INVOICE' | 'MEAL_RECEIPT' | 'FLIGHT_BOARDING_PASS' | 'AIRLINE_DECLARATION';
+      /** Who travelled where and when (helps with years and local currencies) */
+      context?: string;
+    } = {}
   ): Promise<void> {
     const typeHint = options.typeHint;
     console.log(`[Consolidation] Extracting data from document ${documentId} using ${this.model}`);
@@ -270,7 +274,7 @@ PARTICIPANT'S OWN CLASSIFICATION: ${
       typeHint === 'HOTEL_INVOICE' || typeHint === 'MEAL_RECEIPT'
         ? `the participant uploaded this as a ${typeHint === 'HOTEL_INVOICE' ? 'hotel/accommodation invoice' : 'meal/food receipt'} for their green-travel extra. Set documentType to ${typeHint} and focus on the total amount, currency, documentDate and merchantName.`
         : `the participant uploaded this for a flight as ${typeHint === 'AIRLINE_DECLARATION' ? 'a declaration from the airline confirming they took the flight' : 'their boarding pass'}. Set documentType to ${typeHint} and extract the passenger name, flight number, route and departure date.`
-    }` : ''}`;
+    }` : ''}${options.context ? `\n\n${options.context}` : ''}`;
 
     contentParts.push({ type: 'text', text: prompt });
 
@@ -671,10 +675,15 @@ RULE 9: AMOUNT HANDLING
 - NEVER use 0 as a substitute for null
 
 RULE 10: CONFLICTING PRICES - USE HIGHEST
-When multiple documents for the same travel leg show different prices:
+When multiple documents for the same travel leg show different prices for the SAME purchase:
 - USE THE HIGHEST price as it likely includes booking fees, service charges, or taxes
 - Example: If invoice shows €50 but bank statement shows €53.50, use €53.50
 - Document your choice in the "priceSourceDocId" field
+EXCEPTION — EXTRAS BOUGHT SEPARATELY ARE NOT A CONFLICTING PRICE:
+- An invoice that only covers extras for a flight (checked or cabin bags, "bagaglio"/"bagagli", "Gepäck", "baggage",
+  priority boarding, "Priorità", seat reservation) is a SEPARATE purchase, even with the same booking reference.
+- Keep the fare from the ticket invoice as "amount" and put the extras invoice in "luggageAmount" (RULE 14).
+- Mention both amounts in "consolidationNotes".
 
 RULE 11: DETECT DUPLICATE DOCUMENTS FOR SAME TRIP
 Multiple documents may describe the SAME trip - DO NOT create duplicate travel items.
@@ -726,7 +735,8 @@ Before finalizing, verify your journey makes logical sense:
 - In "journey_issues" array, list any problems found during validation
 
 RULE 14: LUGGAGE INVOICES - MERGE INTO FLIGHT
-When a LUGGAGE_INVOICE document is detected (separate luggage/baggage fee invoice):
+When a LUGGAGE_INVOICE document is detected (separate luggage/baggage fee invoice), or any invoice that only covers
+extras for a flight (bags, priority boarding, seats — even if it was classified as FLIGHT_INVOICE):
 - Do NOT create a separate travel item for luggage
 - Match it to the corresponding flight by airline, date, passenger name, or booking reference
 - Add the luggage amount to the flight travel item using "luggageAmount" and "luggageCurrency" fields
@@ -774,6 +784,7 @@ Respond with ONLY a JSON object:
       "fromLocation": "City name (exactly as documented)",
       "toLocation": "City name (exactly as documented)",
       "departureDate": "YYYY-MM-DD",
+      "departureTime": "HH:MM (24h, local departure time printed on the ticket/boarding pass) or null if not shown",
       "arrivalDate": "YYYY-MM-DD or null",
       "bookingReference": "Reference or null (links to bookings array)",
       "flightNumber": "Flight number or null",
@@ -1255,6 +1266,10 @@ Do NOT include in warnings (these are handled elsewhere):
             fromLocation: this.toTitleCase(item.fromLocation || 'Unknown'),
             toLocation: this.toTitleCase(item.toLocation || 'Unknown'),
             departureDate: item.departureDate ? new Date(item.departureDate) : new Date(),
+            departureTime: (() => {
+              const m = typeof item.departureTime === 'string' ? item.departureTime.match(/^(\d{1,2}):(\d{2})/) : null;
+              return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
+            })(),
             arrivalDate: item.arrivalDate ? new Date(item.arrivalDate) : null,
             bookingReference: item.bookingReference || null,
             flightNumber: item.flightNumber || null,

@@ -1,3 +1,5 @@
+import { hasGreenMarker } from './countryName.js';
+
 /**
  * Resolves the reimbursement limit that actually applies to a participant.
  *
@@ -38,7 +40,8 @@ export function getEffectiveLimit(
     : countryLimits;
 
   const countryMax = countryLimit?.maxReimbursementAmount || 0;
-  const countryGreen = countryLimit?.greenTravel || false;
+  // A row named like "Poland GREEN" counts as green travel even if its tick was forgotten
+  const countryGreen = countryLimit ? countryLimit.greenTravel || hasGreenMarker(countryLimit.country) : false;
   const isIndividualMax = participant.maxReimbursementOverride != null;
   const isIndividualGreen = participant.greenTravelOverride != null;
 

@@ -133,7 +133,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'info',
     label: 'Exchange Rate',
     description: 'Non-EUR currency without purchase date for exchange rate',
-    prompt: 'ONLY apply this rule when the travel item\'s currency is NOT EUR. Never flag purchase date for EUR items. Non-EUR currency without purchase date (exchange rate may be approximate). IMPORTANT: Do NOT flag this if the travel item already has a purchaseDate value — only flag when purchaseDate is actually null/missing. Do NOT flag this for return legs of round-trip bookings (amountIncludedInRoundTrip=true) — those don\'t need a purchase date since the price is on the outbound leg. Also, if the participant manually filled in the purchase date (manuallyEdited=true), mention that the purchase date was entered by the participant.',
+    prompt: 'ONLY for non-EUR trips that have NEITHER a purchase date NOR a travel date (very rare). Without a purchase date the exchange rate of the travel date is used, which is normal and correct — never flag that, and never call a rate "approximate". Never flag EUR trips or return legs of round-trip bookings.',
     enabled: true,
   },
   {
@@ -177,6 +177,22 @@ export const REVIEW_RULES: ReviewRule[] = [
     enabled: true,
   },
   {
+    id: 'claimed-twice',
+    severity: 'important',
+    label: 'Claimed Twice',
+    description: 'A file or receipt is also claimed by another participant in the project',
+    prompt: 'If a document is marked "ALSO CLAIMED BY" another participant (same file or the same receipt) → flag it (category "Claimed Twice"): name the file and the other participant(s), and say the cost of a shared car, room or booking should only be paid once (or split as agreed). Do not flag it for a multi-person booking that each participant claims only their own part of.',
+    enabled: true,
+  },
+  {
+    id: 'fuel-plausibility',
+    severity: 'important',
+    label: 'Fuel Check',
+    description: 'Fuel claimed for a car trip is much more than the route needs',
+    prompt: 'For CAR trips paid with fuel receipts: estimate the road distance of the route (both directions if both are claimed) and a typical fuel cost of about 7 litres per 100 km at the local price (about €1.60–1.90 per litre in Europe). Only if the fuel claimed is clearly more than about 1.5 times that estimate, or fuel receipts are dated far from the travel days, flag it (category "Fuel Check") with your distance and cost estimate. If it is plausible, do not create a finding.',
+    enabled: true,
+  },
+  {
     id: 'car-distance',
     severity: 'info',
     label: 'Car Distance',
@@ -197,7 +213,7 @@ export const REVIEW_RULES: ReviewRule[] = [
     severity: 'info',
     label: 'Luggage Fee',
     description: 'Luggage fee added from separate invoice — informational',
-    prompt: 'If a luggage fee was added to a flight from a separate invoice → inform the org that this participant bought luggage, mentioning the amount and booking reference. Keep it simple and informational — no action is required from the org.',
+    prompt: 'If a luggage fee was added to a flight from a separate invoice → inform the org that this participant bought luggage, mentioning the amount and booking reference. Keep it simple and informational — no action is required from the org. BUT if a trip is flagged "LUGGAGE/EXTRAS INVOICE NOT COUNTED", or "SEVERAL INVOICES WITH DIFFERENT AMOUNTS" where the smaller one looks like extras bought separately (bags, priority, seats), make it an important finding (category "Luggage Not Counted") that names the file and the amount not included, and says the organiser can add it with Edit → Luggage / extras. If the invoices are simply two receipts of the same purchase, do not flag it.',
     enabled: true,
   },
 ];

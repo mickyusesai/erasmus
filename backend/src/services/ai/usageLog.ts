@@ -5,12 +5,14 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import prisma from '../../utils/prisma.js';
 
-export type AiJob = 'EXTRACTION' | 'CONSOLIDATION' | 'REVIEW';
+export type AiJob = 'EXTRACTION' | 'CONSOLIDATION' | 'REVIEW' | 'EMAIL' | 'MESSAGE';
 
 export const AI_JOB_LABELS: Record<AiJob, string> = {
   EXTRACTION: 'Reading uploaded files',
   CONSOLIDATION: 'Building trips',
   REVIEW: 'AI review',
+  EMAIL: 'Summarising participant emails',
+  MESSAGE: 'Writing messages to participants',
 };
 
 export interface AiUsageContext {

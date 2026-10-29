@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, RefreshCw, Mail, CreditCard, Users, ChevronDown, ChevronRight,
-  RotateCcw, Key, Copy, Check, ArrowRight, GitMerge, AlertTriangle,
+  RotateCcw, Key, Copy, Check, ArrowRight, GitMerge, AlertTriangle, ExternalLink,
 } from 'lucide-react';
 import {
   superAdminApi,
@@ -307,6 +307,17 @@ export default function SuperAdminOrgDetail() {
     retry: false,
   });
 
+  // Opens the organisation's own dashboard in a new tab, as support
+  const openAsSupport = async () => {
+    try {
+      const s = await superAdminApi.startSupportSession(id!);
+      const hash = new URLSearchParams({ token: s.token, org: s.organisation.id, name: s.organisation.name, minutes: String(s.expiresInMinutes) });
+      window.open(`/org/support-session#${hash.toString()}`, '_blank', 'noopener');
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not open a support session');
+    }
+  };
+
   // ---- Form state ----
   const [emailInput, setEmailInput] = useState('');
   const [emailReason, setEmailReason] = useState('');
@@ -410,6 +421,14 @@ export default function SuperAdminOrgDetail() {
           </Link>
           <span className="text-gray-600">/</span>
           <h1 className="text-xl font-bold text-white">{org.name}</h1>
+          <button
+            onClick={openAsSupport}
+            className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 hover:bg-gray-600 text-sm"
+            title="Opens their dashboard in a new tab for 2 hours. Your changes are logged as SUPPORT."
+          >
+            <ExternalLink className="w-4 h-4" />
+            Open their dashboard (support)
+          </button>
         </div>
       </header>
 

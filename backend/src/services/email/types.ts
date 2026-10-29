@@ -66,7 +66,8 @@ export interface EmailService {
   sendSubmissionConfirmation(
     to: string,
     participantName: string,
-    projectName: string
+    projectName: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -88,7 +89,8 @@ export interface EmailService {
     to: string,
     participantName: string,
     projectName: string,
-    amountEur: number
+    amountEur: number,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -98,7 +100,19 @@ export interface EmailService {
     to: string,
     participantName: string,
     projectName: string,
-    amountEur: number
+    amountEur: number,
+    ctx?: ProjectEmailContext
+  ): Promise<EmailResult>;
+
+  /**
+   * Tell a participant that the organisation changed their bank details
+   */
+  sendBankDetailsChanged(
+    to: string,
+    participantName: string,
+    projectName: string,
+    details: { holderName: string | null; maskedAccount: string; bic: string | null },
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -108,7 +122,8 @@ export interface EmailService {
     to: string,
     participantName: string,
     projectName: string,
-    message: string
+    message: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**
@@ -119,7 +134,8 @@ export interface EmailService {
     to: string,
     participantName: string,
     projectName: string,
-    magicLink: string
+    magicLink: string,
+    ctx?: ProjectEmailContext
   ): Promise<EmailResult>;
 
   /**

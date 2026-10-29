@@ -64,12 +64,13 @@ export class ConsoleEmailService implements EmailService {
     });
   }
 
-  async sendSubmissionConfirmation(to: string, participantName: string, projectName: string): Promise<EmailResult> {
+  async sendSubmissionConfirmation(to: string, participantName: string, projectName: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.submissionConfirmationSubject(projectName),
-      text: templates.submissionConfirmationText(participantName, projectName),
-      html: templates.submissionConfirmationHtml(participantName, projectName),
+      text: templates.submissionConfirmationText(participantName, projectName, ctx),
+      html: templates.submissionConfirmationHtml(participantName, projectName, ctx),
+      ...senderFor(ctx),
     });
   }
 
@@ -83,39 +84,59 @@ export class ConsoleEmailService implements EmailService {
     });
   }
 
-  async sendApprovalNotification(to: string, participantName: string, projectName: string, amountEur: number): Promise<EmailResult> {
+  async sendApprovalNotification(to: string, participantName: string, projectName: string, amountEur: number, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.approvalSubject(projectName),
-      text: templates.approvalText(participantName, projectName, amountEur),
-      html: templates.approvalHtml(participantName, projectName, amountEur),
+      text: templates.approvalText(participantName, projectName, amountEur, ctx),
+      html: templates.approvalHtml(participantName, projectName, amountEur, ctx),
+      ...senderFor(ctx),
     });
   }
 
-  async sendPaymentNotification(to: string, participantName: string, projectName: string, amountEur: number): Promise<EmailResult> {
+  async sendPaymentNotification(to: string, participantName: string, projectName: string, amountEur: number, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.paymentSubject(projectName),
-      text: templates.paymentText(participantName, projectName, amountEur),
-      html: templates.paymentHtml(participantName, projectName, amountEur),
+      text: templates.paymentText(participantName, projectName, amountEur, ctx),
+      html: templates.paymentHtml(participantName, projectName, amountEur, ctx),
+      ...senderFor(ctx),
     });
   }
 
-  async sendReopenNotification(to: string, participantName: string, projectName: string, message: string): Promise<EmailResult> {
+  async sendReopenNotification(to: string, participantName: string, projectName: string, message: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.reopenSubject(projectName),
-      text: templates.reopenText(participantName, projectName, message),
-      html: templates.reopenHtml(participantName, projectName, message),
+      text: templates.reopenText(participantName, projectName, message, ctx),
+      html: templates.reopenHtml(participantName, projectName, message, ctx),
+      ...senderFor(ctx),
     });
   }
 
-  async sendAnalysisComplete(to: string, participantName: string, projectName: string, magicLink: string): Promise<EmailResult> {
+  async sendBankDetailsChanged(
+    to: string,
+    participantName: string,
+    projectName: string,
+    details: { holderName: string | null; maskedAccount: string; bic: string | null },
+    ctx?: ProjectEmailContext
+  ): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.bankDetailsChangedSubject(projectName),
+      text: templates.bankDetailsChangedText(participantName, projectName, details, ctx),
+      html: templates.bankDetailsChangedHtml(participantName, projectName, details, ctx),
+      ...senderFor(ctx),
+    });
+  }
+
+  async sendAnalysisComplete(to: string, participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): Promise<EmailResult> {
     return this.send({
       to,
       subject: templates.analysisCompleteSubject(projectName),
-      text: templates.analysisCompleteText(participantName, projectName, magicLink),
-      html: templates.analysisCompleteHtml(participantName, projectName, magicLink),
+      text: templates.analysisCompleteText(participantName, projectName, magicLink, ctx),
+      html: templates.analysisCompleteHtml(participantName, projectName, magicLink, ctx),
+      ...senderFor(ctx),
     });
   }
 

@@ -233,6 +233,14 @@ export default function ParticipantDetail() {
                     <DocumentCard
                       key={doc.id}
                       document={doc}
+                      onView={async () => {
+                        try {
+                          const { url } = await adminApi.getDocumentUrl(participant.id, doc.id);
+                          window.open(url, '_blank', 'noopener,noreferrer');
+                        } catch {
+                          toast.error('Could not open the document');
+                        }
+                      }}
                       onDelete={() => deleteDocMutation.mutate(doc.id)}
                     />
                   ))}
@@ -463,7 +471,7 @@ export default function ParticipantDetail() {
   );
 }
 
-function DocumentCard({ document, onDelete }: { document: Document; onDelete: () => void }) {
+function DocumentCard({ document, onView, onDelete }: { document: Document; onView: () => void; onDelete: () => void }) {
   const docTypeLabels: Record<string, string> = {
     FLIGHT_INVOICE: 'Flight Invoice',
     FLIGHT_BOARDING_PASS: 'Boarding Pass',
@@ -495,15 +503,13 @@ function DocumentCard({ document, onDelete }: { document: Document; onDelete: ()
         </div>
       </div>
       <div className="flex gap-2 mt-3">
-        <a
-          href={`/uploads/${document.storedFilePath}`}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={onView}
           className="text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
         >
           <ExternalLink className="w-3 h-3" />
           View
-        </a>
+        </button>
         <button
           onClick={onDelete}
           className="text-xs text-red-500 hover:text-red-600 font-medium flex items-center gap-1"

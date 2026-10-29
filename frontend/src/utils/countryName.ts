@@ -6,6 +6,13 @@
  */
 const MARKERS = /[\s\-_(\[]*(green(\s*travel(ler|er)?)?|eco|sustainable)[\s)\]]*$/i;
 
+/** A row named like "Poland GREEN" is meant for green travellers: it counts as green travel */
+const GREEN_MARKER = /[\s\-_(\[]+(green(\s*travel(ler|er)?)?|eco|sustainable)[\s)\]]*$/i;
+
+export function hasGreenMarker(name: string | null | undefined): boolean {
+  return !!name && GREEN_MARKER.test(name.trim());
+}
+
 export function normalizeCountryName(name: string | null | undefined): string {
   if (!name) return '';
   return name.replace(MARKERS, '').replace(/[\s\-_]+$/, '').trim();

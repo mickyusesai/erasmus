@@ -11,8 +11,9 @@ import prisma from '../../utils/prisma.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { normalizeCountryName, sameCountry } from '../../utils/countryName.js';
 import { isReceiptDocument } from '../../utils/documentKinds.js';
-import { flightHasProof, flightDeclarationsAccepted } from '../../utils/flightProof.js';
+import { flightHasProof, flightDeclarationsAccepted, linkedDocumentIds } from '../../utils/flightProof.js';
 import { tripHasNoPrice, tripPriceTypedIn } from '../../utils/tripPrice.js';
+import { bankAccountProblem } from '../../utils/bankAccount.js';
 import { recordAiUsage } from './usageLog.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
@@ -107,12 +108,15 @@ export class ClaudeAiService implements TravelDocumentAiService {
     const missingItems: MissingItem[] = [];
     const warnings: string[] = [];
 
-    // Check for bank details
+    // Check for bank details (an IBAN must add up; other account numbers must look like one)
     if (!participant.bankAccountIban) {
       missingItems.push({
         type: 'field',
         description: 'Bank account IBAN is required',
       });
+    } else {
+      const problem = bankAccountProblem(participant.bankAccountIban);
+      if (problem) missingItems.push({ type: 'field', description: `Bank account: ${problem}` });
     }
 
     if (!participant.bankAccountHolderName) {
@@ -200,10 +204,10 @@ export class ClaudeAiService implements TravelDocumentAiService {
         }
       }
 
-      // Check non-EUR currency has purchase date
-      if (item.currencyOriginal !== 'EUR' && !item.purchaseDate) {
+      // The exchange rate needs a date: the purchase date, otherwise the travel date
+      if (item.currencyOriginal !== 'EUR' && !item.purchaseDate && !item.departureDate) {
         warnings.push(
-          `Travel item with ${item.currencyOriginal} currency is missing purchase date for exchange rate`
+          `Travel item with ${item.currencyOriginal} currency has no purchase or travel date for the exchange rate`
         );
       }
     }
@@ -382,6 +386,8 @@ export async function generateParticipantReview(data: {
     distanceKm: number | null;
     validationWarnings: string | null;
     documentId: string | null;
+    additionalDocumentIds?: string | null;
+    luggageDocumentId?: string | null;
     amountIncludedInRoundTrip: boolean;
     luggageAmount: number | null;
     luggageAmountEur: number | null;
@@ -399,7 +405,11 @@ export async function generateParticipantReview(data: {
       passengerName: string | null;
       amount: number | null;
       currency: string | null;
+      documentDate?: string | null;
+      merchantName?: string | null;
     } | null;
+    /** Other participants in the project who claimed the same file or receipt */
+    sharedWith?: string[];
   }>;
   declarationsOnHonor: Array<{
     missingDocumentType: string;
@@ -425,7 +435,9 @@ export async function generateParticipantReview(data: {
     amountToReimburse: number | null;
   } | null;
   bankDetailsComplete: boolean;
-}, usageContext: { participantId?: string; projectId?: string } = {}): Promise<(ReviewFinding & { travelItemId?: string | null })[]> {
+}, usageContext: { participantId?: string; projectId?: string } = {}): Promise<(ReviewFinding & { travelItemId?: string | null; documentIds?: string[] })[]> {
+  // One fixed numbering of the travel documents, used in the prompt and to map the answer back
+  const travelDocs = data.documents.filter((d) => !isReceiptDocument(d));
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return [{ severity: 'info', message: 'AI review unavailable (API key not configured).', category: 'System' }];
@@ -465,6 +477,20 @@ ${data.travelItems.map((item, i) => {
       flags.push(`AMOUNT MANUALLY CHANGED by participant: AI detected €${item.originalAmountFromAi}, participant set €${item.amountEur}`);
     }
     if (tripHasNoPrice(item)) flags.push('PRICE IS MISSING');
+    // Invoices on this trip that are not (all) counted, e.g. extras bought separately
+    if (!item.amountIncludedInRoundTrip && !item.excludedFromReimbursement) {
+      const linked = linkedDocumentIds(item)
+        .map((id) => data.documents.find((d) => d.id === id))
+        .filter((d): d is (typeof data.documents)[number] => !!d);
+      if (!item.luggageAmount && linked.some((d) => d.documentType === 'LUGGAGE_INVOICE')) {
+        flags.push('LUGGAGE/EXTRAS INVOICE NOT COUNTED: a luggage invoice is linked to this trip but no luggage amount is included');
+      }
+      const priced = linked.filter((d) => ['FLIGHT_INVOICE', 'TRAIN_TICKET', 'BUS_TICKET', 'LUGGAGE_INVOICE'].includes(d.documentType) && d.extraction?.amount != null);
+      const amounts = new Set(priced.map((d) => Math.round((d.extraction!.amount as number) * 100)));
+      if (!item.luggageAmount && amounts.size > 1) {
+        flags.push(`SEVERAL INVOICES WITH DIFFERENT AMOUNTS linked: ${priced.map((d) => `"${d.originalFilename}" ${d.extraction!.amount} ${d.extraction!.currency || ''}`.trim()).join(', ')} — only €${item.amountEur} is counted`);
+      }
+    }
     if (!item.documentId) flags.push('NO SUPPORTING DOCUMENT LINKED');
     if (item.modeOfTransport === 'PLANE' && !item.flightNumber) flags.push('FLIGHT NUMBER NOT FILLED IN');
     if (item.numberOfPassengers && item.numberOfPassengers > 1) flags.push(`MULTI-PERSON BOOKING: ${item.numberOfPassengers} passengers on this booking (full amount claimed by this participant)`);
@@ -480,13 +506,17 @@ ${data.travelItems.map((item, i) => {
     }
     if (item.amountIncludedInRoundTrip) flags.push('Price already counted in outbound round-trip leg');
     if (item.luggageAmount) flags.push(`LUGGAGE FEE of €${item.luggageAmountEur || item.luggageAmount} was added from separate luggage invoice`);
-    if (item.purchaseDateAutoFilled) flags.push('Purchase date was AUTO-FILLED from flight date (no purchase date found in documents)');
+    if (item.purchaseDateAutoFilled) flags.push('No purchase date on the ticket: the exchange rate of the travel date is used — this is normal, do not flag it');
     if (item.distanceKm) flags.push(`Car distance: ${item.distanceKm}km`);
     return `${i + 1}. [${item.modeOfTransport}] ${item.fromLocation || '?'} → ${item.toLocation || '?'} | Date: ${item.departureDate || '?'}${item.purchaseDate ? ` | Purchase: ${item.purchaseDate}` : ''} | €${item.amountEur ?? 'MISSING'} (${item.currencyOriginal || 'EUR'})${item.flightNumber ? ` | Flight: ${item.flightNumber}` : ''}${item.bookingReference ? ` | Booking: ${item.bookingReference}` : ''}${flags.length > 0 ? '\n     ⚠ ' + flags.join('\n     ⚠ ') : ''}`;
   }).join('\n')}
 
-=== TRAVEL DOCUMENTS (${data.documents.filter((d) => !isReceiptDocument(d)).length}) ===
-${data.documents.filter((d) => !isReceiptDocument(d)).map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}`).join('\n')}
+=== TRAVEL DOCUMENTS (${travelDocs.length}) ===
+${travelDocs.map((doc, i) => `${i + 1}. [${doc.documentType}] "${doc.originalFilename}"${doc.extraction ? ` — AI confidence: ${(doc.extraction.confidence * 100).toFixed(0)}%${doc.extraction.passengerName ? `, passenger: ${doc.extraction.passengerName}` : ''}` : ''}${
+  doc.documentType === 'FUEL_RECEIPT' && doc.extraction
+    ? ` | fuel: ${doc.extraction.amount ?? '?'} ${doc.extraction.currency || ''} on ${doc.extraction.documentDate || '?'}${doc.extraction.merchantName ? ` at ${doc.extraction.merchantName}` : ''}`
+    : ''
+}${doc.sharedWith?.length ? ` | ALSO CLAIMED BY: ${doc.sharedWith.join(', ')}` : ''}`).join('\n')}
 ${(() => { const r = data.documents.filter(isReceiptDocument); return r.length > 0 ? `
 === FOOD & ACCOMMODATION RECEIPTS (${r.length}) ===
 ${r.filter((d) => d.documentType === 'MEAL_RECEIPT').length} meal receipt(s), ${r.filter((d) => d.documentType === 'HOTEL_INVOICE').length} hotel invoice(s). These support the green-travel extra that the organisation decides separately. They are NEVER linked to travel items — do not flag them as unlinked, unused or missing.
@@ -526,6 +556,7 @@ Return a JSON array. Each finding:
 - "message": Clear, specific sentence (max 20 words). Mention routes, amounts, flight numbers when relevant.
 - "category": Accurate 2-3 word label. Examples: "Declaration Check", "Amount Changed", "Flight Edit", "Missing Price", "No Document", "Route Mismatch", "Shared Booking", "Participant Note", "Bank Details", "Car Distance"
 - "travelItemIndex": The 1-based index number of the travel item this finding relates to (from the TRAVEL ITEMS list above), or null if the finding is general / not about a specific travel item.
+- "documentIndexes": The 1-based numbers (from the TRAVEL DOCUMENTS list above) of the files this finding is about, e.g. [3, 10] for duplicate or unlinked files; [] when it is not about specific files. The organisation's screen highlights these files.
 
 IMPORTANT RULES:
 - ACTIONABILITY TEST (apply this to every potential finding before including it): Ask yourself "What specific action must the organisation take, and do I have concrete evidence of a real problem?" If your only answer is "check" or "verify" with no actual evidence of wrongdoing, do NOT include it.
@@ -549,6 +580,7 @@ IMPORTANT RULES:
 - If everything is fine, pick ONE of these messages at random (vary your choice for each participant — never pick the same one twice in a row): "Everything looks perfect! Nothing to review here — go grab a coffee!", "Flawless submission! All documents check out. Time for a well-deserved break!", "All clear! This participant has their travel docs in perfect order. Gold star!", "Spotless! Every document, route, and amount checks out. Enjoy the free time!", "Nothing to flag here — this reimbursement is as clean as it gets!", "A+ submission! All checks passed with flying colors. You can skip to the next one!", "Zero issues found. This participant deserves an award for organisation!", "Everything matches perfectly. We checked twice — still perfect!". Return it as: [{"severity":"info","message":"<your chosen message>","category":"All Clear"}]
 - Maximum 12 findings, prioritize critical > important > info
 - travelItemIndex MUST be a valid 1-based index from the TRAVEL ITEMS list, or null. Do NOT guess.
+- In "message", refer to files by their file name in quotes (e.g. "bagaglio volo andata.jpeg"), never as "Doc 3" or "Documents 3 and 10" — the organisation does not see your numbering
 - Return ONLY the JSON array`;
 
   try {
@@ -573,20 +605,25 @@ IMPORTANT RULES:
       return [{ severity: 'info', message: 'Unable to parse AI review response.', category: 'System' }];
     }
 
-    const rawFindings: Array<ReviewFinding & { travelItemIndex?: number | null }> = JSON.parse(jsonMatch[0]);
+    const rawFindings: Array<ReviewFinding & { travelItemIndex?: number | null; documentIndexes?: unknown }> = JSON.parse(jsonMatch[0]);
     // Map travelItemIndex (1-based) to travelItemId, then strip the index
-    const findings: (ReviewFinding & { travelItemId?: string | null })[] = rawFindings
+    const findings: (ReviewFinding & { travelItemId?: string | null; documentIds?: string[] })[] = rawFindings
       .filter((f) => f.severity && f.message && f.category)
       .map((f) => {
         let travelItemId: string | null = null;
         if (f.travelItemIndex != null && f.travelItemIndex >= 1 && f.travelItemIndex <= data.travelItems.length) {
           travelItemId = data.travelItems[f.travelItemIndex - 1].id;
         }
+        const documentIds = (Array.isArray(f.documentIndexes) ? f.documentIndexes : [])
+          .map((n) => Number(n))
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= travelDocs.length)
+          .map((n) => travelDocs[n - 1].id);
         return {
           severity: f.severity,
           message: f.message,
           category: f.category,
           travelItemId,
+          documentIds: [...new Set(documentIds)],
         };
       })
       // "No Document" findings must reference a real travel item — never an inferred/missing leg

@@ -1537,26 +1537,13 @@ function Step2CheckData({
       });
     }
 
-    // Check for non-EUR currencies without purchase date (skip amountIncludedInRoundTrip items)
-    const itemsNeedingPurchaseDate = data.travelItems.filter(
-      t => t.currencyOriginal !== 'EUR' && !t.purchaseDate && !t.amountIncludedInRoundTrip
-    );
-    if (itemsNeedingPurchaseDate.length > 0) {
-      w.push({
-        id: 'missing-purchase-date',
-        type: 'warning',
-        message: `${itemsNeedingPurchaseDate.length} travel item(s) with non-EUR currency need a purchase date for exchange rate conversion.`,
-        dismissible: true,
-      });
-    }
-
-    // Notify about auto-filled purchase dates
+    // Without a purchase date on the ticket, the exchange rate of the travel date is used (no action needed)
     const autoFilledItems = data.travelItems.filter(t => t.purchaseDateAutoFilled);
     if (autoFilledItems.length > 0) {
       w.push({
         id: 'auto-filled-purchase-date',
         type: 'info',
-        message: `The purchase date for ${autoFilledItems.length} item(s) was automatically set to the flight date because no purchase date was found. You can change this manually if the actual purchase date was different.`,
+        message: `${autoFilledItems.length} ticket(s) show no purchase date, so the exchange rate of the travel date is used. You can change the purchase date if you know it.`,
         dismissible: true,
       });
     }

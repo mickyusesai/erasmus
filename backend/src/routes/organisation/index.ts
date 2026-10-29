@@ -3,10 +3,13 @@ import { z } from 'zod';
 import { parseParticipantCsv, alignCountry, CsvReadError, FIELD_LABELS, type CsvParticipant, type ParticipantCsvResult } from '../../utils/participantCsv.js';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '../../middleware/errorHandler.js';
-import { organisationAuth, ensureOwnProject } from '../../middleware/auth.js';
+import { organisationAuth, ensureOwnProject, changeLogActor } from '../../middleware/auth.js';
 import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
+import { bankAccountProblem, maskAccountNumber, normaliseAccountNumber } from '../../utils/bankAccount.js';
+import path from 'path';
+import { ADDABLE_TYPES, type StoredAttachment } from '../../services/email/inbound.js';
 import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { getStorageService } from '../../services/storage/index.js';
@@ -14,7 +17,9 @@ import { generateAuditPdf } from '../../services/pdf/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
 import { getEffectiveLimit } from '../../utils/effectiveLimit.js';
 import { summarizeTravelDays } from '../../utils/travelDays.js';
-import { extraTravelDates, calculateGreenTravelExtra, GREEN_TRAVEL_EXTRA_MODES, type ExtraReceipt, type GreenTravelCalculation } from '../../utils/greenTravelExtra.js';
+import { GREEN_TRAVEL_EXTRA_MODES } from '../../utils/greenTravelExtra.js';
+import { buildGreenTravelSuggestion } from '../../services/greenTravel/suggestion.js';
+import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -468,7 +473,7 @@ router.post('/projects/:id/notify-ended', ensureOwnProject, asyncHandler(async (
     include: {
       participants: {
         where: { status: 'DRAFT', magicLinkActive: true },
-        select: { email: true, firstName: true, magicLinkToken: true },
+        select: { id: true, email: true, firstName: true, magicLinkToken: true },
       },
     },
   });
@@ -481,9 +486,9 @@ router.post('/projects/:id/notify-ended', ensureOwnProject, asyncHandler(async (
 
   const emailService = getEmailService();
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const emailCtx = await projectEmailContext(project);
   for (const p of project.participants) {
     const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
+    const emailCtx = await projectEmailContext(project, p.id);
     emailService
       .sendProjectEnded(p.email, p.firstName, project.name, magicLink, emailCtx)
       .catch((err) => console.error(`[Project End] Failed to email ${p.email}:`, err));
@@ -1194,7 +1199,7 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
     where: { id: participantId },
     include: {
       project: true,
-      documents: { include: { extraction: { select: { amount: true, currency: true, documentDate: true } } } },
+      documents: { include: { extraction: { select: { amount: true, currency: true, documentDate: true, correctedByOrganisation: true } } } },
       travelItems: {
         orderBy: { departureDate: 'asc' },
       },
@@ -1205,6 +1210,7 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
       changeLogEntries: {
         orderBy: { changedAt: 'desc' },
       },
+      messages: { orderBy: { receivedAt: 'desc' }, take: 30 },
     },
   });
 
@@ -1226,73 +1232,114 @@ router.get('/participants/:id', asyncHandler(async (req: Request, res: Response)
   });
   const effectiveLimit = getEffectiveLimit(participant, countryLimit);
 
-  // Helps the organiser decide a green travel extra: days travelled + hotel/meal receipts
-  const travelDays = summarizeTravelDays(participant.travelItems, participant.project.startDate, participant.project.endDate);
-  const greenTravelSuggestion = {
-    ...travelDays,
-    receipts: participant.documents
-      .filter((d) => d.documentType === 'HOTEL_INVOICE' || d.documentType === 'MEAL_RECEIPT')
-      .map((d) => ({
-        id: d.id,
-        renamedFilename: d.renamedFilename,
-        documentType: d.documentType,
-        mimeType: d.mimeType,
-        uploadDate: d.uploadDate,
-        amount: d.extraction?.amount ?? null,
-        currency: d.extraction?.currency ?? null,
-        documentDate: d.extraction?.documentDate ?? null,
-      })),
-  };
-
-  // The project's green travel rule suggests the amounts for green travellers (the organiser still saves them)
-  const { greenTravelExtraMode: ruleMode, greenTravelFoodPerDayEur, greenTravelAccommodationPerNightEur } = participant.project;
-  let calculation: GreenTravelCalculation | null = null;
-  if (effectiveLimit.greenTravel && (ruleMode === 'RECEIPTS' || ruleMode === 'FIXED')) {
-    const receipts: ExtraReceipt[] = await Promise.all(
-      participant.documents
-        .filter((d) => d.documentType === 'HOTEL_INVOICE' || d.documentType === 'MEAL_RECEIPT')
-        .map(async (d): Promise<ExtraReceipt> => {
-          const date = d.extraction?.documentDate ?? null;
-          const receipt: ExtraReceipt = {
-            id: d.id,
-            kind: d.documentType === 'HOTEL_INVOICE' ? 'ACCOMMODATION' : 'FOOD',
-            filename: d.renamedFilename,
-            date: date ? date.toISOString().slice(0, 10) : null,
-            amountEur: null,
-          };
-          const amount = d.extraction?.amount;
-          if (amount == null) return receipt;
-          try {
-            // Same rate rules as the tickets (project mode + per-currency overrides); no currency read = EUR
-            receipt.amountEur = await convertToEurForParticipant(participant.id, amount, d.extraction?.currency || 'EUR', date);
-          } catch {
-            receipt.noRate = true;
-          }
-          return receipt;
-        })
-    );
-    calculation = calculateGreenTravelExtra({
-      mode: ruleMode,
-      foodPerDayEur: greenTravelFoodPerDayEur,
-      accommodationPerNightEur: greenTravelAccommodationPerNightEur,
-      extra: extraTravelDates(participant.travelItems, participant.project.startDate, participant.project.endDate),
-      projectStart: participant.project.startDate,
-      projectEnd: participant.project.endDate,
-      receipts,
-    });
-  }
+  // Days travelled, receipts (in EUR) and the project's green travel rule, for the green travel extra card
+  const greenTravelSuggestion = await buildGreenTravelSuggestion(participant, effectiveLimit.greenTravel);
+  // Files other participants in the project claimed too (e.g. the fuel receipts of a shared car)
+  const sharedDocs = await findSharedDocuments(participant.id);
 
   res.json({
     participant: {
       ...participant,
       travelItems: sortTravelItemsByJourney(participant.travelItems),
+      documents: participant.documents.map((d) => ({ ...d, sharedWith: sharedDocs.get(d.id) ?? [] })),
       maxReimbursementForCountry: effectiveLimit.maxReimbursement,
       greenTravel: effectiveLimit.greenTravel,
       countryMaxReimbursement: effectiveLimit.countryMax,
       countryGreenTravel: effectiveLimit.countryGreen,
-      greenTravelSuggestion: { ...greenTravelSuggestion, mode: ruleMode, calculation },
+      greenTravelSuggestion,
+      // Email replies from the participant (via the inbox), with the AI summary
+      messages: participant.messages.map((m) => ({
+        ...m,
+        aiSuggestions: parseJsonArray<{ text: string; travelItemId: string | null }>(m.aiSuggestions),
+        attachments: parseJsonArray<StoredAttachment>(m.attachments).map(({ storedPath: _path, ...a }) => a),
+      })),
     },
   });
+}));
+
+function parseJsonArray<T>(value: string | null): T[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Loads one attachment of a participant's email reply (organisation access checked) */
+async function loadMessageAttachment(org: Organisation, participantId: string, messageId: string, index: number) {
+  await verifyOrgParticipant(org, participantId);
+  const message = await prisma.participantMessage.findFirst({ where: { id: messageId, participantId } });
+  if (!message) throw new NotFoundError('Message not found');
+  const attachments = parseJsonArray<StoredAttachment>(message.attachments);
+  const attachment = attachments[index];
+  if (!attachment) throw new NotFoundError('Attachment not found');
+  return { message, attachments, attachment };
+}
+
+/**
+ * GET /api/organisation/participants/:id/messages/:messageId/attachments/:index/url
+ * Signed URL to look at a file the participant sent by email
+ */
+router.get('/participants/:id/messages/:messageId/attachments/:index/url', asyncHandler(async (req: Request, res: Response) => {
+  const { attachment } = await loadMessageAttachment(req.organisation!, req.params.id, req.params.messageId, Number(req.params.index));
+  const url = await getStorageService().getUrl(attachment.storedPath);
+  res.json({ url });
+}));
+
+/**
+ * POST /api/organisation/participants/:id/messages/:messageId/attachments/:index/add
+ * Add a file the participant sent by email to their documents (read by the AI like an upload)
+ */
+router.post('/participants/:id/messages/:messageId/attachments/:index/add', asyncHandler(async (req: Request, res: Response) => {
+  const participantId = req.params.id;
+  const index = Number(req.params.index);
+  const { message, attachments, attachment } = await loadMessageAttachment(req.organisation!, participantId, req.params.messageId, index);
+  if (!ADDABLE_TYPES.test(attachment.contentType)) throw new ValidationError('Only PDFs and images can be added to the documents');
+
+  const existing = attachment.documentId
+    ? await prisma.document.findFirst({ where: { id: attachment.documentId, participantId } })
+    : null;
+  if (existing) {
+    res.json({ document: existing, duplicate: true });
+    return;
+  }
+
+  const storage = getStorageService();
+  const buffer = await storage.retrieve(attachment.storedPath);
+  const contentHash = createHash('sha256').update(buffer).digest('hex');
+  let document = await prisma.document.findFirst({ where: { participantId, contentHash } });
+  const duplicate = !!document;
+  if (!document) {
+    // A copy of its own, so deleting the document never touches the email's attachment
+    const storedPath = `participants/${participantId}/documents/${uuidv4()}${path.extname(attachment.name).toLowerCase()}`;
+    await storage.store({ buffer, originalname: attachment.name, mimetype: attachment.contentType, size: buffer.length }, storedPath);
+    document = await prisma.document.create({
+      data: {
+        participantId,
+        storedFilePath: storedPath,
+        originalFilename: attachment.name,
+        renamedFilename: attachment.name,
+        mimeType: attachment.contentType,
+        fileSize: buffer.length,
+        documentType: 'OTHER',
+        contentHash,
+      },
+    });
+    await prisma.changeLogEntry.create({
+      data: { participantId, userType: changeLogActor(req), fieldName: 'document.addedFromEmail', previousValue: null, newValue: attachment.name },
+    });
+    // Read by the AI like any upload, so it gets its type, amount and dates
+    const { JourneyConsolidationService } = await import('../../services/ai/journeyConsolidationService.js');
+    const { extractionContextFor } = await import('../../services/ai/extractionContext.js');
+    new JourneyConsolidationService()
+      .extractAndStoreDocumentData(document.id, buffer, attachment.contentType, { context: await extractionContextFor(participantId) })
+      .catch((error) => console.error(`[Inbox] Extraction failed for ${document!.id}:`, error));
+  }
+  attachments[index] = { ...attachment, documentId: document.id };
+  await prisma.participantMessage.update({ where: { id: message.id }, data: { attachments: JSON.stringify(attachments) } });
+  res.json({ document, duplicate });
 }));
 
 /**
@@ -1305,6 +1352,8 @@ const greenTravelExtraSchema = z.object({
   foodEur: z.number().min(0).nullable(),
   accommodationEur: z.number().min(0).nullable(),
   note: z.string().max(500).nullish(),
+  /** Email the participant about the new amounts (default yes) */
+  notify: z.boolean().optional(),
 });
 
 router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Request, res: Response) => {
@@ -1346,7 +1395,7 @@ router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Re
     await prisma.changeLogEntry.create({
       data: {
         participantId,
-        userType: 'ORGANISATION',
+        userType: changeLogActor(req),
         fieldName: `greenTravelExtra.${field}`,
         previousValue: String(before ?? ''),
         newValue: String(after ?? ''),
@@ -1358,7 +1407,8 @@ router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Re
   await getAiService().recalculateParticipantSummary(participantId);
   const summary = await prisma.reimbursementSummary.findUnique({ where: { participantId } });
 
-  if (foodChanged || accommodationChanged) {
+  const emailed = (foodChanged || accommodationChanged) && result.data.notify !== false;
+  if (emailed) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
     getEmailService()
@@ -1368,7 +1418,7 @@ router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Re
         participant.project.name,
         { foodEur: food ?? 0, accommodationEur: accommodation ?? 0, note, newTotalEur: summary?.amountToReimburse ?? 0 },
         magicLink,
-        await projectEmailContext(participant.project)
+        await projectEmailContext(participant.project, participant.id)
       )
       .catch((err: unknown) => console.error('[Email] Failed to send green travel extra notification:', err));
   }
@@ -1381,7 +1431,155 @@ router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Re
       greenTravelExtraUpdatedAt: updated.greenTravelExtraUpdatedAt,
     },
     reimbursementSummary: summary,
+    emailed,
   });
+}));
+
+/**
+ * PATCH /api/organisation/participants/:id/bank-details
+ * The organiser corrects a participant's bank details (e.g. a missing or mistyped IBAN).
+ * The IBAN must add up; the change is logged and the participant gets an email about it.
+ */
+const bankDetailsSchema = z.object({
+  bankAccountIban: z.string().trim().min(1, 'The bank account number is required'),
+  bankAccountHolderName: z.string().trim().min(1, 'The account holder is required'),
+  bankAccountBic: z.string().trim().nullish(),
+  bankName: z.string().trim().nullish(),
+});
+
+router.patch('/participants/:id/bank-details', asyncHandler(async (req: Request, res: Response) => {
+  const participantId = req.params.id;
+  const participant = await verifyOrgParticipant(req.organisation!, participantId);
+  if (participant.status === 'PAID') throw new ForbiddenError('This participant has already been paid');
+  const result = bankDetailsSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+  const iban = normaliseAccountNumber(result.data.bankAccountIban);
+  const problem = bankAccountProblem(iban);
+  if (problem) throw new ValidationError(problem);
+  const bic = result.data.bankAccountBic ? result.data.bankAccountBic.replace(/\s/g, '').toUpperCase() : null;
+  const data = {
+    bankAccountIban: iban,
+    bankAccountHolderName: result.data.bankAccountHolderName,
+    bankAccountBic: bic,
+    bankName: result.data.bankName || null,
+  };
+
+  await prisma.participant.update({ where: { id: participantId }, data });
+  const changes: [string, string | null, string | null][] = [
+    ['bankAccountIban', maskAccountNumber(participant.bankAccountIban), maskAccountNumber(iban)],
+    ['bankAccountHolderName', participant.bankAccountHolderName, data.bankAccountHolderName],
+    ['bankAccountBic', participant.bankAccountBic, bic],
+    ['bankName', participant.bankName, data.bankName],
+  ];
+  for (const [field, before, after] of changes) {
+    if ((before ?? '') === (after ?? '')) continue;
+    await prisma.changeLogEntry.create({
+      data: { participantId, userType: changeLogActor(req), fieldName: field, previousValue: before, newValue: after },
+    });
+  }
+
+  const { getAiService } = await import('../../services/ai/index.js');
+  await getAiService().recalculateParticipantSummary(participantId);
+
+  // Always tell the participant, so a wrong change can't go unnoticed
+  getEmailService()
+    .sendBankDetailsChanged(
+      participant.email,
+      participant.firstName,
+      participant.project.name,
+      { holderName: data.bankAccountHolderName, maskedAccount: maskAccountNumber(iban), bic },
+      await projectEmailContext(participant.project, participant.id)
+    )
+    .catch((err: unknown) => console.error('[Email] Failed to send bank details notification:', err));
+
+  res.json({ success: true });
+}));
+
+const RECEIPT_TYPES = ['HOTEL_INVOICE', 'MEAL_RECEIPT'] as const;
+
+/**
+ * PATCH /api/organisation/participants/:id/receipts/:docId
+ * The organiser corrects what the AI read from a receipt (amount, currency, date, meal or hotel).
+ * Corrected receipts keep these values when the receipts are read again.
+ */
+const receiptCorrectionSchema = z.object({
+  amount: z.number().min(0).nullable(),
+  currency: z.string().trim().length(3).transform((s) => s.toUpperCase()),
+  documentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  documentType: z.enum(RECEIPT_TYPES),
+});
+
+router.patch('/participants/:id/receipts/:docId', asyncHandler(async (req: Request, res: Response) => {
+  const participantId = req.params.id;
+  const participant = await verifyOrgParticipant(req.organisation!, participantId);
+  if (participant.status === 'PAID') throw new ForbiddenError('This participant has already been paid');
+  const doc = await prisma.document.findFirst({ where: { id: req.params.docId, participantId }, include: { extraction: true } });
+  if (!doc || !(RECEIPT_TYPES as readonly string[]).includes(doc.documentType)) throw new NotFoundError('Receipt not found');
+  const result = receiptCorrectionSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+  const { amount, currency, documentDate, documentType } = result.data;
+  const date = documentDate ? new Date(`${documentDate}T00:00:00Z`) : null;
+
+  await prisma.documentExtraction.upsert({
+    where: { documentId: doc.id },
+    create: { documentId: doc.id, detectedDocumentType: documentType, confidence: 1, amount, currency, documentDate: date, correctedByOrganisation: true },
+    update: { amount, currency, documentDate: date, detectedDocumentType: documentType, correctedByOrganisation: true },
+  });
+  if (doc.documentType !== documentType) await prisma.document.update({ where: { id: doc.id }, data: { documentType } });
+
+  const before = doc.extraction
+    ? `${doc.extraction.amount ?? '?'} ${doc.extraction.currency ?? ''} ${doc.extraction.documentDate?.toISOString().slice(0, 10) ?? 'no date'}`
+    : 'not read';
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId,
+      userType: changeLogActor(req),
+      fieldName: 'receipt.corrected',
+      previousValue: `${doc.renamedFilename}: ${before}`,
+      newValue: `${amount ?? '?'} ${currency} ${documentDate ?? 'no date'} (${documentType === 'HOTEL_INVOICE' ? 'hotel' : 'meal'})`,
+    },
+  });
+  res.json({ success: true });
+}));
+
+/**
+ * POST /api/organisation/participants/:id/receipts/reread
+ * Read the participant's receipts again with the trip as context (year, local currency).
+ * Receipts the organiser corrected by hand are left alone.
+ */
+router.post('/participants/:id/receipts/reread', asyncHandler(async (req: Request, res: Response) => {
+  const participantId = req.params.id;
+  const participant = await verifyOrgParticipant(req.organisation!, participantId);
+  if (participant.status === 'PAID') throw new ForbiddenError('This participant has already been paid');
+  const docs = await prisma.document.findMany({
+    where: { participantId, documentType: { in: [...RECEIPT_TYPES] } },
+    include: { extraction: { select: { correctedByOrganisation: true } } },
+  });
+  const toRead = docs.filter((d) => !d.extraction?.correctedByOrganisation);
+  const { JourneyConsolidationService } = await import('../../services/ai/journeyConsolidationService.js');
+  const { extractionContextFor } = await import('../../services/ai/extractionContext.js');
+  const service = new JourneyConsolidationService();
+  const context = await extractionContextFor(participantId);
+  const storage = getStorageService();
+  let read = 0;
+  // A few at a time keeps it quick without flooding the AI
+  for (let i = 0; i < toRead.length; i += 3) {
+    await Promise.all(
+      toRead.slice(i, i + 3).map(async (d) => {
+        try {
+          const buffer = await storage.retrieve(d.storedFilePath);
+          await service.extractAndStoreDocumentData(d.id, buffer, d.mimeType, { typeHint: d.documentType as (typeof RECEIPT_TYPES)[number], context });
+          read++;
+        } catch (err) {
+          console.error(`[Receipts] Could not read ${d.id} again:`, err);
+        }
+      })
+    );
+  }
+  await prisma.changeLogEntry.create({
+    data: { participantId, userType: changeLogActor(req), fieldName: 'receipts.reread', previousValue: null, newValue: `${read} receipt(s) read again` },
+  });
+  res.json({ read, skippedCorrected: docs.length - toRead.length });
 }));
 
 /**
@@ -1447,8 +1645,30 @@ router.get('/participants/:id/review-findings', asyncHandler(async (req: Request
   const severityOrder: Record<string, number> = { critical: 0, important: 1, info: 2 };
   findings.sort((a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3));
 
-  res.json({ findings });
+  res.json({ findings: findings.map(withDocumentIds) });
 }));
+
+/**
+ * POST /api/organisation/participants/:id/draft-message
+ * AI draft of a short, friendly message to the participant listing what to fix, based on
+ * the open (unticked) AI review findings. The organiser edits it before sending.
+ */
+router.post('/participants/:id/draft-message', asyncHandler(async (req: Request, res: Response) => {
+  await verifyOrgParticipant(req.organisation!, req.params.id);
+  const { draftMessageToParticipant } = await import('../../services/ai/participantAssistant.js');
+  const { AiUnavailableError } = await import('../../services/ai/claudeJson.js');
+  try {
+    res.json({ message: await draftMessageToParticipant(req.params.id) });
+  } catch (err) {
+    if (err instanceof AiUnavailableError) throw new ValidationError('The AI is not available right now. Please write the message yourself.');
+    throw err;
+  }
+}));
+
+/** Findings with the ids of the documents they are about (stored as JSON) */
+function withDocumentIds<T extends { documentIds: string | null }>(finding: T): Omit<T, 'documentIds'> & { documentIds: string[] } {
+  return { ...finding, documentIds: parseJsonArray<string>(finding.documentIds) };
+}
 
 /**
  * PATCH /api/organisation/participants/:id/review-findings/:findingId/toggle
@@ -1499,7 +1719,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     where: { id: participantId },
     include: {
       project: true,
-      documents: { include: { extraction: true } },
+      documents: { include: { extraction: true }, orderBy: [{ uploadDate: 'asc' }, { id: 'asc' }] },
       travelItems: {
         orderBy: { departureDate: 'asc' },
         include: { declarationsOfTravel: true },
@@ -1537,6 +1757,8 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     where: { projectId: participant.projectId, country: participant.country },
   });
   const effectiveLimit = getEffectiveLimit(participant, countryLimit);
+  // Files other participants in the project claimed too (e.g. the fuel receipts of a shared car)
+  const sharedDocs = await findSharedDocuments(participant.id);
 
   const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
   const findings = await generateParticipantReview({
@@ -1580,6 +1802,8 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
       distanceKm: item.distanceKm,
       validationWarnings: item.validationWarnings,
       documentId: item.documentId,
+      additionalDocumentIds: item.additionalDocumentIds,
+      luggageDocumentId: item.luggageDocumentId,
       amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
       isRoundTrip: item.isRoundTrip,
       bookingId: item.bookingId,
@@ -1599,7 +1823,10 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
         passengerName: doc.extraction.passengerName,
         amount: doc.extraction.amount,
         currency: doc.extraction.currency,
+        documentDate: doc.extraction.documentDate?.toISOString().slice(0, 10) ?? null,
+        merchantName: doc.extraction.merchantName,
       } : null,
+      sharedWith: (sharedDocs.get(doc.id) ?? []).map((s) => `${s.name} (${s.how})`),
     })),
     declarationsOnHonor: participant.declarationsOnHonor.map((d) => ({
       missingDocumentType: d.missingDocumentType,
@@ -1636,6 +1863,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
         message: f.message,
         category: f.category,
         travelItemId: (f as any).travelItemId || null,
+        documentIds: f.documentIds?.length ? JSON.stringify(f.documentIds) : null,
       })),
     });
   }
@@ -1652,7 +1880,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
   // Mark review as complete
   await prisma.participant.update({ where: { id: participantId }, data: { aiReviewStatus: AiReviewStatus.COMPLETE } });
 
-  res.json({ findings: storedFindings });
+  res.json({ findings: storedFindings.map(withDocumentIds) });
 }));
 
 /**
@@ -1708,7 +1936,7 @@ router.patch('/participants/:id', asyncHandler(async (req: Request, res: Respons
       await prisma.changeLogEntry.create({
         data: {
           participantId,
-          userType: 'ORGANISATION',
+          userType: changeLogActor(req),
           fieldName: `participant.${field}`,
           previousValue: String((participant as Record<string, unknown>)[field] ?? ''),
           newValue: String((result.data as Record<string, unknown>)[field] ?? ''),
@@ -1832,7 +2060,7 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
     participant.firstName,
     participant.project.name,
     magicLink,
-    await projectEmailContext(participant.project)
+    await projectEmailContext(participant.project, participant.id)
   );
 
   // Update last sent timestamp and refresh token expiry (180 days from project end, or 180 days from now if past end)
@@ -1875,7 +2103,7 @@ router.post('/participants/:id/rebuild-trips', asyncHandler(async (req: Request,
   await prisma.changeLogEntry.create({
     data: {
       participantId,
-      userType: 'ORGANISATION',
+      userType: changeLogActor(req),
       fieldName: 'travelItems.rebuilt',
       previousValue: '',
       newValue: result.success ? `Rebuilt ${result.travelItems.length} trip(s) from documents` : `Rebuild failed: ${result.message}`,
@@ -1967,7 +2195,7 @@ router.post('/participants/:id/reset', asyncHandler(async (req: Request, res: Re
     participant.firstName,
     participant.project.name,
     magicLink,
-    await projectEmailContext(participant.project)
+    await projectEmailContext(participant.project, participant.id)
   );
   await prisma.participant.update({
     where: { id: participantId },
@@ -2012,7 +2240,7 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
         participant.firstName,
         participant.project.name,
         magicLink,
-        await projectEmailContext(participant.project)
+        await projectEmailContext(participant.project, participant.id)
       );
 
       const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
@@ -2066,7 +2294,7 @@ router.post('/participants/:id/send-reminder', asyncHandler(async (req: Request,
     participant.project.name,
     magicLink,
     participant.project.organisation.name,
-    await projectEmailContext(participant.project)
+    await projectEmailContext(participant.project, participant.id)
   );
 
   res.json({ success: true });
@@ -2107,7 +2335,7 @@ router.post('/participants/send-reminders-bulk', asyncHandler(async (req: Reques
         participant.project.name,
         magicLink,
         participant.project.organisation.name,
-        await projectEmailContext(participant.project)
+        await projectEmailContext(participant.project, participant.id)
       );
 
       results.push({ id, success: true });
@@ -2173,7 +2401,8 @@ router.post('/participants/:id/approve', asyncHandler(async (req: Request, res: 
     participant.email,
     participant.firstName,
     participant.project.name,
-    approvedAmount
+    approvedAmount,
+    await projectEmailContext(participant.project, participant.id)
   ).catch((err) => console.error('[Email] Failed to send approval notification:', err));
 
   res.json({ success: true });
@@ -2227,7 +2456,8 @@ router.post('/participants/:id/mark-paid', asyncHandler(async (req: Request, res
     participant.email,
     participant.firstName,
     participant.project.name,
-    paidAmount
+    paidAmount,
+    await projectEmailContext(participant.project, participant.id)
   ).catch((err) => console.error('[Email] Failed to send payment notification:', err));
 
   res.json({ success: true });
@@ -2312,6 +2542,8 @@ const orgCreateTravelItemSchema = z.object({
   comment: z.string().nullable().optional(),
   documentId: z.string().nullable().optional(),
   companyName: z.string().nullable().optional(),
+  // Luggage or other extras bought separately, in EUR (added on top of the fare)
+  luggageAmountEur: z.number().min(0).nullable().optional(),
 });
 
 const orgUpdateTravelItemSchema = z.object({
@@ -2332,6 +2564,8 @@ const orgUpdateTravelItemSchema = z.object({
   exclusionReason: z.enum(['HOSTING_ORG_PAID', 'OTHER', 'ORGANISATION']).nullable().optional(),
   exchangeRateOverride: z.number().nullable().optional(),
   companyName: z.string().nullable().optional(),
+  // Luggage or other extras bought separately, in EUR (added on top of the fare)
+  luggageAmountEur: z.number().min(0).nullable().optional(),
 });
 
 /** Helper: verify org owns participant */
@@ -2358,13 +2592,13 @@ router.post('/participants/:id/travel-items', asyncHandler(async (req: Request, 
   if (!result.success) throw new ValidationError(result.error.errors[0].message);
 
   const travelItem = await prisma.travelItem.create({
-    data: { participantId, ...result.data },
+    data: { participantId, ...result.data, luggageAmount: result.data.luggageAmountEur ?? null },
   });
 
   await prisma.changeLogEntry.create({
     data: {
       participantId,
-      userType: 'ORGANISATION',
+      userType: changeLogActor(req),
       fieldName: 'travelItem.created',
       previousValue: null,
       newValue: `${result.data.fromLocation} → ${result.data.toLocation}`,
@@ -2395,6 +2629,32 @@ router.patch('/participants/:id/travel-items/:itemId', asyncHandler(async (req: 
 
   // Handle exchange rate override: recalculate amountEur
   const updateData = { ...result.data } as Record<string, unknown>;
+  // A trip moved to another day loses its place in the old day's manual order
+  if (result.data.departureDate && result.data.departureDate.getTime() !== current.departureDate.getTime()) {
+    updateData.sortOrder = null;
+  }
+
+  // Luggage / extras typed by the organiser are in EUR; an unchanged value keeps the original currency
+  if ('luggageAmountEur' in result.data) {
+    if ((result.data.luggageAmountEur ?? null) !== (current.luggageAmountEur ?? null)) {
+      updateData.luggageAmount = result.data.luggageAmountEur ?? null;
+    } else {
+      delete updateData.luggageAmountEur;
+    }
+  }
+
+  // A new purchase date changes the exchange rate (unless the organiser set the rate by hand);
+  // without a purchase date the travel date is used
+  if (result.data.purchaseDate !== undefined) {
+    const newPurchase = result.data.purchaseDate;
+    const changed = (newPurchase?.getTime() ?? null) !== (current.purchaseDate?.getTime() ?? null);
+    if (changed) {
+      updateData.purchaseDateAutoFilled = false;
+      if (!('amountEur' in result.data) && current.amountOriginal != null && current.currencyOriginal !== 'EUR' && current.exchangeRateOverride == null) {
+        updateData.amountEur = await convertToEurForParticipant(participantId, current.amountOriginal, current.currencyOriginal, newPurchase ?? current.departureDate);
+      }
+    }
+  }
   if ('exchangeRateOverride' in result.data) {
     if (result.data.exchangeRateOverride != null && current.amountOriginal != null) {
       // Manual override: amountEur = amountOriginal * overrideRate
@@ -2418,7 +2678,7 @@ router.patch('/participants/:id/travel-items/:itemId', asyncHandler(async (req: 
       await prisma.changeLogEntry.create({
         data: {
           participantId,
-          userType: 'ORGANISATION',
+          userType: changeLogActor(req),
           fieldName: `travelItem.${field}`,
           previousValue: String(previousValue ?? ''),
           newValue: String(newValue ?? ''),
@@ -2432,6 +2692,44 @@ router.patch('/participants/:id/travel-items/:itemId', asyncHandler(async (req: 
   await aiService.recalculateParticipantSummary(participantId);
 
   res.json(travelItem);
+}));
+
+/**
+ * POST /api/organisation/participants/:id/travel-items/:itemId/move
+ * Move a trip one place up or down within its day. The dates still decide the order of
+ * the days; the organiser's order is saved for that day and used everywhere (incl. the PDF).
+ */
+router.post('/participants/:id/travel-items/:itemId/move', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const participantId = req.params.id;
+  await verifyOrgParticipant(org, participantId);
+  const direction = req.body?.direction;
+  if (direction !== 'up' && direction !== 'down') throw new ValidationError('direction must be "up" or "down"');
+
+  const ordered = sortTravelItemsByJourney(await prisma.travelItem.findMany({ where: { participantId } }));
+  const target = ordered.find((i) => i.id === req.params.itemId);
+  if (!target) throw new NotFoundError('Travel item not found');
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const sameDay = ordered.filter((i) => day(i.departureDate) === day(target.departureDate));
+  const from = sameDay.indexOf(target);
+  const to = direction === 'up' ? from - 1 : from + 1;
+  if (to < 0 || to >= sameDay.length) {
+    throw new ValidationError(direction === 'up' ? 'This is already the first trip of that day' : 'This is already the last trip of that day');
+  }
+  [sameDay[from], sameDay[to]] = [sameDay[to], sameDay[from]];
+  await prisma.$transaction(
+    sameDay.map((item, index) => prisma.travelItem.update({ where: { id: item.id }, data: { sortOrder: index } }))
+  );
+  await prisma.changeLogEntry.create({
+    data: {
+      participantId,
+      userType: changeLogActor(req),
+      fieldName: 'travelItem.order',
+      previousValue: `${target.fromLocation} → ${target.toLocation}`,
+      newValue: `moved ${direction}`,
+    },
+  });
+  res.json({ success: true });
 }));
 
 /**
@@ -2451,7 +2749,7 @@ router.delete('/participants/:id/travel-items/:itemId', asyncHandler(async (req:
   await prisma.changeLogEntry.create({
     data: {
       participantId,
-      userType: 'ORGANISATION',
+      userType: changeLogActor(req),
       fieldName: 'travelItem.deleted',
       previousValue: `${item.fromLocation} → ${item.toLocation}`,
       newValue: null,
@@ -2521,7 +2819,7 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
   await prisma.changeLogEntry.create({
     data: {
       participantId,
-      userType: 'ORGANISATION',
+      userType: changeLogActor(req),
       fieldName: 'document.uploaded',
       previousValue: null,
       newValue: req.file.originalname,
@@ -2532,8 +2830,9 @@ router.post('/participants/:id/documents/upload', upload.single('file'), asyncHa
   // participant uploads, so they show up with amounts in the green-travel card
   if (documentType === 'HOTEL_INVOICE' || documentType === 'MEAL_RECEIPT') {
     const { JourneyConsolidationService } = await import('../../services/ai/journeyConsolidationService.js');
+    const { extractionContextFor } = await import('../../services/ai/extractionContext.js');
     new JourneyConsolidationService()
-      .extractAndStoreDocumentData(document.id, fileBuffer, req.file.mimetype, { typeHint: documentType })
+      .extractAndStoreDocumentData(document.id, fileBuffer, req.file.mimetype, { typeHint: documentType, context: await extractionContextFor(participantId) })
       .catch((error) => console.error(`[OrgUpload] Receipt extraction failed for ${document.id}:`, error));
   }
 
@@ -2559,7 +2858,7 @@ router.delete('/participants/:id/documents/:docId', asyncHandler(async (req: Req
   await prisma.changeLogEntry.create({
     data: {
       participantId,
-      userType: 'ORGANISATION',
+      userType: changeLogActor(req),
       fieldName: 'document.deleted',
       previousValue: doc.originalFilename,
       newValue: null,
@@ -2713,7 +3012,7 @@ router.post('/participants/:id/reopen', asyncHandler(async (req: Request, res: R
     prisma.changeLogEntry.create({
       data: {
         participantId,
-        userType: 'ORGANISATION',
+        userType: changeLogActor(req),
         fieldName: 'status',
         previousValue: participant.status,
         newValue: 'DRAFT (reopened)',
@@ -2728,7 +3027,8 @@ router.post('/participants/:id/reopen', asyncHandler(async (req: Request, res: R
       participant.email,
       participant.firstName,
       participant.project.name,
-      message.trim()
+      message.trim(),
+      await projectEmailContext(participant.project, participant.id)
     );
   } catch (err) {
     console.error('[Email] Failed to send reopen notification:', err);

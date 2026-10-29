@@ -101,8 +101,10 @@ export interface GreenTravelCalculation {
   /** RECEIPTS: accommodation receipts on the extra nights, and the cap (nights × limit) */
   accommodationSpentEur: number;
   accommodationCapEur: number;
-  /** RECEIPTS: receipts left out, with the reason */
-  notCounted: { id: string; filename: string; kind: ExtraReceipt['kind']; date: string | null; reason: NotCountedReason }[];
+  /** RECEIPTS: receipts left out, with the reason (amountEur so the organiser can count one anyway) */
+  notCounted: { id: string; filename: string; kind: ExtraReceipt['kind']; date: string | null; amountEur: number | null; reason: NotCountedReason }[];
+  /** RECEIPTS: dates read a year off (e.g. 2025 instead of 2026) that were corrected to the trip */
+  correctedDates: { id: string; filename: string; from: string; to: string }[];
 }
 
 export function calculateGreenTravelExtra(input: {
@@ -134,6 +136,7 @@ export function calculateGreenTravelExtra(input: {
       accommodationSpentEur: 0,
       accommodationCapEur: round2(nights.length * perNight),
       notCounted: [],
+      correctedDates: [],
     };
   }
 
@@ -146,10 +149,15 @@ export function calculateGreenTravelExtra(input: {
   const spentPerDay = new Map<string, number>();
   let accommodationSpent = 0;
   const notCounted: GreenTravelCalculation['notCounted'] = [];
+  const correctedDates: GreenTravelCalculation['correctedDates'] = [];
+
+  const counts = (kind: ExtraReceipt['kind'], date: string) =>
+    kind === 'FOOD' ? daySet.has(date) : nightSet.has(date) || nightSet.has(dayBefore(date)); // hotel bills are often dated at check-out
+  const shiftYear = (date: string, years: number) => `${Number(date.slice(0, 4)) + years}${date.slice(4)}`;
 
   for (const r of input.receipts) {
     const leaveOut = (reason: NotCountedReason) =>
-      notCounted.push({ id: r.id, filename: r.filename, kind: r.kind, date: r.date, reason });
+      notCounted.push({ id: r.id, filename: r.filename, kind: r.kind, date: r.date, amountEur: r.amountEur, reason });
     if (r.amountEur == null) {
       leaveOut(r.noRate ? 'NO_RATE' : 'NO_AMOUNT');
       continue;
@@ -158,16 +166,24 @@ export function calculateGreenTravelExtra(input: {
       leaveOut('NO_DATE');
       continue;
     }
-    if (r.kind === 'FOOD' && daySet.has(r.date)) {
-      spentPerDay.set(r.date, (spentPerDay.get(r.date) ?? 0) + r.amountEur);
+    let date = r.date;
+    // A year misread (16-09-2025 on a trip in September 2026): use the trip's year
+    if (!counts(r.kind, date)) {
+      const fixed = [shiftYear(date, 1), shiftYear(date, -1)].find((d) => counts(r.kind, d));
+      if (fixed) {
+        correctedDates.push({ id: r.id, filename: r.filename, from: date, to: fixed });
+        date = fixed;
+      }
+    }
+    if (r.kind === 'FOOD' && counts('FOOD', date)) {
+      spentPerDay.set(date, (spentPerDay.get(date) ?? 0) + r.amountEur);
       continue;
     }
-    // A hotel bill is often dated at check-out, the morning after the night
-    if (r.kind === 'ACCOMMODATION' && (nightSet.has(r.date) || nightSet.has(dayBefore(r.date)))) {
+    if (r.kind === 'ACCOMMODATION' && counts('ACCOMMODATION', date)) {
       accommodationSpent += r.amountEur;
       continue;
     }
-    leaveOut(r.date >= startDay && r.date <= endDay ? 'DURING_PROJECT' : 'NOT_AN_EXTRA_DAY');
+    leaveOut(date >= startDay && date <= endDay ? 'DURING_PROJECT' : 'NOT_AN_EXTRA_DAY');
   }
 
   const foodDays = days
@@ -187,5 +203,6 @@ export function calculateGreenTravelExtra(input: {
     accommodationSpentEur,
     accommodationCapEur,
     notCounted,
+    correctedDates,
   };
 }

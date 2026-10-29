@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Input } from '../ui/Input';
+import { hasGreenMarker } from '../../utils/countryName';
 
 interface CountryLimitRowProps {
   limit: { id: string; country: string; maxReimbursementAmount: number; greenTravel?: boolean };
@@ -18,6 +19,9 @@ interface CountryLimitRowProps {
  */
 export function CountryLimitRow({ limit, participantCount, onSaveAmount, onToggleGreen, onDelete }: CountryLimitRowProps) {
   const needsAmount = limit.maxReimbursementAmount === 0;
+  // "Poland GREEN" style rows always count as green travel (the name says so)
+  const greenByName = hasGreenMarker(limit.country);
+  const isGreen = !!limit.greenTravel || greenByName;
   const serverValue = needsAmount ? '' : String(limit.maxReimbursementAmount);
   const [value, setValue] = useState(serverValue);
   const [focused, setFocused] = useState(false);
@@ -46,7 +50,7 @@ export function CountryLimitRow({ limit, participantCount, onSaveAmount, onToggl
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-gray-900">{limit.country}</span>
-          {limit.greenTravel && (
+          {isGreen && (
             <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
               Green travel
             </span>
@@ -59,12 +63,16 @@ export function CountryLimitRow({ limit, participantCount, onSaveAmount, onToggl
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <label className="flex items-center gap-1.5 text-xs text-gray-500">
+        <label
+          className="flex items-center gap-1.5 text-xs text-gray-500"
+          title={greenByName ? 'Counts as green travel because the name says so' : undefined}
+        >
           <input
             type="checkbox"
-            checked={limit.greenTravel || false}
+            checked={isGreen}
             onChange={onToggleGreen}
-            className="rounded border-gray-300 w-3.5 h-3.5"
+            disabled={greenByName}
+            className="rounded border-gray-300 w-3.5 h-3.5 disabled:opacity-60"
           />
           Green
         </label>

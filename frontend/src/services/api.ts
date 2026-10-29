@@ -300,6 +300,13 @@ export const adminApi = {
   },
 
   // Documents (Admin)
+  getDocumentUrl: async (participantId: string, documentId: string) => {
+    const res = await fetch(`${API_BASE}/admin/participants/${participantId}/documents/${documentId}/url`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ url: string }>(res);
+  },
+
   deleteDocument: async (participantId: string, documentId: string) => {
     const res = await fetch(`${API_BASE}/admin/participants/${participantId}/documents/${documentId}`, {
       method: 'DELETE',
@@ -794,7 +801,7 @@ export const organisationApi = {
   // Organiser-decided green travel extra for one participant (emails the participant)
   setGreenTravelExtra: async (
     participantId: string,
-    data: { foodEur: number | null; accommodationEur: number | null; note?: string | null }
+    data: { foodEur: number | null; accommodationEur: number | null; note?: string | null; notify?: boolean }
   ) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/green-travel-extra`, {
       method: 'PATCH',
@@ -804,6 +811,8 @@ export const organisationApi = {
     return handleResponse<{
       participant: { greenTravelFoodEur: number | null; greenTravelAccommodationEur: number | null; greenTravelExtraNote: string | null; greenTravelExtraUpdatedAt: string | null };
       reimbursementSummary: ReimbursementSummary | null;
+      /** The participant was emailed about the new amounts */
+      emailed?: boolean;
     }>(res);
   },
 
@@ -1065,6 +1074,78 @@ export const organisationApi = {
     return handleResponse<TravelItem>(res);
   },
 
+  /** Correct a participant's bank details (the participant is emailed about it) */
+  updateBankDetails: async (
+    participantId: string,
+    data: { bankAccountIban: string; bankAccountHolderName: string; bankAccountBic?: string | null; bankName?: string | null }
+  ) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/bank-details`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  /** Correct what the AI read from a receipt (amount, currency, date, meal or hotel) */
+  correctReceipt: async (
+    participantId: string,
+    documentId: string,
+    data: { amount: number | null; currency: string; documentDate: string | null; documentType: 'MEAL_RECEIPT' | 'HOTEL_INVOICE' }
+  ) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/receipts/${documentId}`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
+  /** Read the receipts again with the trip as context (corrected ones are kept) */
+  rereadReceipts: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/receipts/reread`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ read: number; skippedCorrected: number }>(res);
+  },
+
+  /** AI draft of a message to the participant, based on the open findings */
+  draftMessage: async (participantId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/draft-message`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ message: string }>(res);
+  },
+
+  /** Signed URL of a file the participant sent by email */
+  getMessageAttachmentUrl: async (participantId: string, messageId: string, index: number) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/messages/${messageId}/attachments/${index}/url`, {
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ url: string }>(res);
+  },
+
+  /** Add a file the participant sent by email to their documents */
+  addMessageAttachment: async (participantId: string, messageId: string, index: number) => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/messages/${messageId}/attachments/${index}/add`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+    });
+    return handleResponse<{ document: Document; duplicate: boolean }>(res);
+  },
+
+  /** Move a trip one place up or down within its day */
+  moveTravelItem: async (participantId: string, itemId: string, direction: 'up' | 'down') => {
+    const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}/move`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ direction }),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
   deleteTravelItem: async (participantId: string, itemId: string) => {
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/travel-items/${itemId}`, {
       method: 'DELETE',
@@ -1324,7 +1405,9 @@ export interface GreenTravelCalculation {
   foodDays: { date: string; spentEur: number; countedEur: number }[];
   accommodationSpentEur: number;
   accommodationCapEur: number;
-  notCounted: { id: string; filename: string; kind: 'FOOD' | 'ACCOMMODATION'; date: string | null; reason: GreenTravelNotCountedReason }[];
+  notCounted: { id: string; filename: string; kind: 'FOOD' | 'ACCOMMODATION'; date: string | null; amountEur: number | null; reason: GreenTravelNotCountedReason }[];
+  /** Receipt dates read a year off that were corrected to the trip's year */
+  correctedDates: { id: string; filename: string; from: string; to: string }[];
 }
 
 export interface GreenTravelSuggestion {
@@ -1332,7 +1415,20 @@ export interface GreenTravelSuggestion {
   extraTravelDays: number;
   firstTravelDate: string | null;
   lastTravelDate: string | null;
-  receipts: { id: string; renamedFilename: string; documentType: DocumentType; mimeType?: string; uploadDate?: string; amount: number | null; currency: string | null; documentDate: string | null }[];
+  receipts: {
+    id: string;
+    renamedFilename: string;
+    documentType: DocumentType;
+    mimeType?: string;
+    uploadDate?: string;
+    amount: number | null;
+    currency: string | null;
+    documentDate: string | null;
+    /** In EUR (green travellers only), null when unknown */
+    amountEur?: number | null;
+    /** Corrected by the organiser */
+    corrected?: boolean;
+  }[];
   /** The project's rule; the calculation is only there for green travellers when the rule isn't MANUAL */
   mode?: GreenTravelExtraMode;
   calculation?: GreenTravelCalculation | null;
@@ -1474,6 +1570,21 @@ export interface OrgParticipant {
   };
 }
 
+/** A participant's email reply, received through the inbox and summarised by AI */
+export interface OrgParticipantMessage {
+  id: string;
+  fromEmail: string;
+  fromName: string | null;
+  subject: string | null;
+  textBody: string;
+  receivedAt: string;
+  aiSummary: string | null;
+  aiSuggestions: { text: string; travelItemId: string | null }[];
+  attachments: { name: string; contentType: string; size: number; documentId: string | null }[];
+  forwardedTo: string | null;
+  forwardedAt: string | null;
+}
+
 export interface OrgParticipantDetail extends OrgParticipant {
   magicLinkToken: string;
   magicLinkActive: boolean;
@@ -1507,6 +1618,8 @@ export interface OrgParticipantDetail extends OrgParticipant {
   greenTravelExtraUpdatedAt?: string | null;
   greenTravelSuggestion?: GreenTravelSuggestion;
   greenTravelDeclaration?: GreenTravelDeclarationSummary | null;
+  /** Email replies from the participant (via the inbox), newest first */
+  messages?: OrgParticipantMessage[];
   project: {
     id: string;
     name: string;
@@ -1691,6 +1804,8 @@ export interface Document {
   ocrText?: string;
   /** Quick AI read of the document (amount/date for receipts) */
   extraction?: { amount: number | null; currency: string | null; documentDate: string | null; merchantName: string | null } | null;
+  /** Other participants in the project who claimed the same file or receipt (organiser view) */
+  sharedWith?: { participantId: string; name: string; filename: string; how: 'same file' | 'same receipt' }[];
 }
 
 export type DocumentType =
@@ -1718,6 +1833,10 @@ export interface TravelItem {
   toLocation: string;
   departureDate: string;
   arrivalDate?: string;
+  /** "HH:MM" from the ticket, when printed */
+  departureTime?: string | null;
+  /** Organiser's order within a day (null = automatic) */
+  sortOrder?: number | null;
   bookingReference?: string;
   flightNumber?: string;
   amountOriginal: number;
@@ -1775,7 +1894,7 @@ export interface CreateTravelItemData {
   flightNumber?: string;
   amountOriginal: number;
   currencyOriginal: string;
-  purchaseDate?: string;
+  purchaseDate?: string | null;
   amountEur: number;
   comment?: string;
   // Document linking (for updates)
@@ -1787,6 +1906,8 @@ export interface CreateTravelItemData {
   // Organisation overrides
   exchangeRateOverride?: number | null;
   companyName?: string | null;
+  // Luggage or other extras bought separately (EUR, organiser)
+  luggageAmountEur?: number | null;
   // Reimbursement decision
   excludedFromReimbursement?: boolean;
   exclusionReason?: 'HOSTING_ORG_PAID' | 'OTHER' | 'ORGANISATION' | null;
@@ -1812,7 +1933,7 @@ export interface CreateDeclarationData {
 export interface ChangeLogEntry {
   id: string;
   participantId: string;
-  userType: 'PARTICIPANT' | 'ADMIN';
+  userType: 'PARTICIPANT' | 'ADMIN' | 'ORGANISATION' | 'SUPPORT';
   fieldName: string;
   previousValue?: string;
   newValue?: string;
@@ -1826,6 +1947,8 @@ export interface ReviewFinding {
   category: string;
   checked: boolean;
   travelItemId?: string | null;
+  /** The documents this finding is about (highlighted in the documents list) */
+  documentIds?: string[];
   createdAt: string;
 }
 
@@ -2151,7 +2274,49 @@ export interface SuperAdminOrg {
   purchases: SuperAdminPurchase[];
 }
 
+export interface SupportKeyInfo {
+  id: string;
+  label: string | null;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  useCount: number;
+  active: boolean;
+}
+
 export const superAdminApi = {
+  /** Open an organisation's own dashboard as support (2 hours) */
+  startSupportSession: async (organisationId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/organisations/${organisationId}/support-session`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ token: string; organisation: { id: string; name: string }; expiresInMinutes: number }>(res);
+  },
+
+  getSupportKeys: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/support-keys`, { headers: getSuperAdminHeaders() });
+    return handleResponse<{ keys: SupportKeyInfo[] }>(res);
+  },
+
+  createSupportKey: async (label: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/support-keys`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ label }),
+    });
+    return handleResponse<{ key: string; id: string; expiresAt: string }>(res);
+  },
+
+  revokeSupportKey: async (id: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/support-keys/${id}/revoke`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ success: boolean }>(res);
+  },
+
   getOrganisations: async () => {
     const res = await fetch(`${API_BASE}/super-admin/organisations`, { headers: getSuperAdminHeaders() });
     return handleResponse<{ organisations: SuperAdminOrg[]; stats: { totalOrganisations: number; totalProjects: number; totalCreditsOutstanding: number } }>(res);

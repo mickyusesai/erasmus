@@ -9,6 +9,8 @@ export interface OrganisationTokenPayload {
   type: 'organisation';
   organisationId: string;
   email: string;
+  /** Set when EasyReimburse support opened the organisation's dashboard from super-admin */
+  support?: { adminEmail: string };
 }
 
 export interface SuperAdminTokenPayload {
@@ -49,6 +51,23 @@ export function generateOrganisationToken(organisation: Organisation): string {
     email: organisation.email,
   };
   return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' });
+}
+
+/** A short support session in an organisation's dashboard, opened from super-admin */
+export function generateSupportSessionToken(organisation: Organisation, admin: SuperAdmin): string {
+  const payload: OrganisationTokenPayload = {
+    type: 'organisation',
+    organisationId: organisation.id,
+    email: organisation.email,
+    support: { adminEmail: admin.email },
+  };
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '2h' });
+}
+
+/** Who to write in the change log for organisation actions: the organisation, or support acting for it */
+export function changeLogActor(req: Request): 'ORGANISATION' | 'SUPPORT' {
+  const payload = req.tokenPayload;
+  return payload?.type === 'organisation' && payload.support ? 'SUPPORT' : 'ORGANISATION';
 }
 
 export function generateSuperAdminToken(admin: SuperAdmin): string {
@@ -197,7 +216,8 @@ export const organisationAuth = asyncHandler(async (
     throw new UnauthorizedError('Organisation not found');
   }
 
-  if (!organisation.isActive) {
+  // Support may look into a deactivated organisation's dashboard
+  if (!organisation.isActive && !payload.support) {
     throw new ForbiddenError('Organisation account is deactivated');
   }
 

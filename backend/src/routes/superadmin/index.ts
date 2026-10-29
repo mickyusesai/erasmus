@@ -4,7 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { ValidationError, NotFoundError } from '../../middleware/errorHandler.js';
-import { superAdminAuth } from '../../middleware/auth.js';
+import { superAdminAuth, generateSupportSessionToken } from '../../middleware/auth.js';
+import { createSupportKey } from '../../services/support/supportKeys.js';
 import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { AI_JOB_LABELS, estimateCostUsd, type AiJob } from '../../services/ai/usageLog.js';
@@ -138,6 +139,51 @@ router.get('/organisations', asyncHandler(async (req: Request, res: Response) =>
  * GET /api/super-admin/organisations/:id
  * Get single organisation with full details including projects and participants
  */
+/**
+ * POST /api/super-admin/organisations/:id/support-session
+ * Open the organisation's own dashboard as support (2 hours). Changes made there are
+ * logged as "SUPPORT" in the participants' change logs.
+ */
+router.post('/organisations/:id/support-session', asyncHandler(async (req: Request, res: Response) => {
+  const organisation = await prisma.organisation.findUnique({ where: { id: req.params.id } });
+  if (!organisation) throw new NotFoundError('Organisation not found');
+  const token = generateSupportSessionToken(organisation, req.superAdmin!);
+  console.log(`[Support] ${req.superAdmin!.email} opened the dashboard of "${organisation.name}"`);
+  res.json({ token, organisation: { id: organisation.id, name: organisation.name }, expiresInMinutes: 120 });
+}));
+
+/**
+ * Read-only support keys (24 hours) for looking into participants from outside the app,
+ * e.g. by Claude while helping with support questions. The key is only shown once.
+ */
+router.get('/support-keys', asyncHandler(async (_req: Request, res: Response) => {
+  const keys = await prisma.supportKey.findMany({ orderBy: { createdAt: 'desc' }, take: 20 });
+  res.json({
+    keys: keys.map((k) => ({
+      id: k.id,
+      label: k.label,
+      createdAt: k.createdAt,
+      expiresAt: k.expiresAt,
+      revokedAt: k.revokedAt,
+      lastUsedAt: k.lastUsedAt,
+      useCount: k.useCount,
+      active: !k.revokedAt && k.expiresAt > new Date(),
+    })),
+  });
+}));
+
+router.post('/support-keys', asyncHandler(async (req: Request, res: Response) => {
+  const label = typeof req.body?.label === 'string' ? req.body.label.trim().slice(0, 100) : null;
+  const { key, record } = await createSupportKey(label || null);
+  console.log(`[Support] ${req.superAdmin!.email} created a support key (${record.id})`);
+  res.status(201).json({ key, id: record.id, expiresAt: record.expiresAt });
+}));
+
+router.post('/support-keys/:id/revoke', asyncHandler(async (req: Request, res: Response) => {
+  await prisma.supportKey.update({ where: { id: req.params.id }, data: { revokedAt: new Date() } });
+  res.json({ success: true });
+}));
+
 router.get('/organisations/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -425,7 +471,8 @@ router.post('/participants/:participantId/force-reopen', asyncHandler(async (req
       participant.email,
       participant.firstName,
       participant.project.name,
-      message
+      message,
+      await projectEmailContext(participant.project, participant.id)
     );
   } catch (err) {
     console.error('[SuperAdmin] Failed to send reopen notification:', err);
@@ -503,7 +550,7 @@ router.post('/participants/:participantId/regenerate-token', asyncHandler(async 
         participant.firstName,
         participant.project.name,
         magicLink,
-        await projectEmailContext(participant.project)
+        await projectEmailContext(participant.project, participant.id)
       );
     } catch (err) {
       console.error('[SuperAdmin] Failed to send magic link email:', err);

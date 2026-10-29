@@ -42,6 +42,10 @@ import {
   Utensils,
   Eye,
   EyeOff,
+  ArrowUp,
+  ArrowDown,
+  Mail,
+  Paperclip,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -145,32 +149,6 @@ function deleteDocumentMessage(doc: Document, travelItems: TravelItem[], documen
   return lines.join('\n');
 }
 
-// Group travel items belonging to the same booking (round-trip / multi-leg).
-// Legs of one booking share a non-null bookingId; everything else is standalone.
-interface OrgTravelItemGroup {
-  key: string;
-  items: TravelItem[];
-}
-function groupOrgTravelItemsByBooking(items: TravelItem[]): OrgTravelItemGroup[] {
-  const groups: OrgTravelItemGroup[] = [];
-  const byBooking = new Map<string, OrgTravelItemGroup>();
-  for (const item of items) {
-    const bookingId = item.bookingId || null;
-    if (bookingId) {
-      let group = byBooking.get(bookingId);
-      if (!group) {
-        group = { key: `booking-${bookingId}`, items: [] };
-        byBooking.set(bookingId, group);
-        groups.push(group);
-      }
-      group.items.push(item);
-    } else {
-      groups.push({ key: item.id, items: [item] });
-    }
-  }
-  return groups;
-}
-
 function parseValidationWarnings(warnings?: string): string[] {
   if (!warnings || warnings === '[]') return [];
   try {
@@ -194,6 +172,7 @@ export default function OrgParticipantDetail() {
 
   // CRUD modal states
   const [showReopenModal, setShowReopenModal] = useState(false);
+  const [showBankModal, setShowBankModal] = useState(false);
   const [reopenMessage, setReopenMessage] = useState('');
   const [reopenClearAi, setReopenClearAi] = useState(false);
   const [reopenClearItems, setReopenClearItems] = useState(false);
@@ -400,6 +379,14 @@ export default function OrgParticipantDetail() {
     onError: (error: Error) => toast.error(error.message || 'Failed to update travel item'),
   });
 
+  // Move a trip one place up or down within its day
+  const moveTravelItemMutation = useMutation({
+    mutationFn: ({ itemId, direction }: { itemId: string; direction: 'up' | 'down' }) =>
+      organisationApi.moveTravelItem(id!, itemId, direction),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['org-participant', id] }),
+    onError: (error: Error) => toast.error(error.message || 'Could not move the trip'),
+  });
+
   // The organisation decides not to reimburse a trip (or reimburses it again); the trip stays visible
   const excludeTravelItemMutation = useMutation({
     mutationFn: async ({ itemId, exclude }: { itemId: string; exclude: boolean }) => {
@@ -483,6 +470,40 @@ export default function OrgParticipantDetail() {
     });
   }, []);
 
+  // Documents a finding is about: highlighted while hovering, scrolled to on click
+  const [highlightedDocIds, setHighlightedDocIds] = useState<string[]>([]);
+  const docHighlightTimer = useRef<number | undefined>(undefined);
+  const showFindingDocuments = useCallback((ids: string[], scroll: boolean) => {
+    window.clearTimeout(docHighlightTimer.current);
+    docHighlightTimer.current = undefined;
+    setHighlightedDocIds(ids);
+    if (scroll && ids[0]) {
+      document.getElementById(`document-${ids[0]}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // After a click the files stay lit for a moment, even when the mouse moves away
+      docHighlightTimer.current = window.setTimeout(() => {
+        docHighlightTimer.current = undefined;
+        setHighlightedDocIds([]);
+      }, 4000);
+    }
+  }, []);
+  const hideFindingDocuments = useCallback(() => {
+    if (docHighlightTimer.current === undefined) setHighlightedDocIds([]);
+  }, []);
+
+  const [draftingMessage, setDraftingMessage] = useState(false);
+  const draftReopenMessage = async () => {
+    if (reopenMessage.trim() && !window.confirm('Replace your message with a draft written by the AI?')) return;
+    setDraftingMessage(true);
+    try {
+      const { message } = await organisationApi.draftMessage(id!);
+      setReopenMessage(message);
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not write a draft');
+    } finally {
+      setDraftingMessage(false);
+    }
+  };
+
   const scrollToTravelItem = useCallback((travelItemId: string) => {
     // Expand the item first
     setExpandedItems(prev => {
@@ -550,6 +571,25 @@ export default function OrgParticipantDetail() {
   for (const doc of participant.documents) {
     docsById[doc.id] = doc;
   }
+
+  // The open findings as a numbered list, e.g. to paste into an email
+  const copyOpenFindings = async () => {
+    const tripLabel = (itemId?: string | null) => {
+      const t = itemId ? participant.travelItems.find((i) => i.id === itemId) : null;
+      return t ? ` (${t.fromLocation} → ${t.toLocation}, ${formatDate(t.departureDate)})` : '';
+    };
+    const open = findings.filter((f: ReviewFinding) => !f.checked && f.category !== 'All Clear');
+    const text = [
+      `Open points for ${participant.firstName} ${participant.lastName}:`,
+      ...open.map((f: ReviewFinding, i: number) => `${i + 1}. ${f.category}: ${f.message}${tripLabel(f.travelItemId)}`),
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`Copied ${open.length} open finding${open.length === 1 ? '' : 's'}`);
+    } catch {
+      toast.error('Could not copy to the clipboard');
+    }
+  };
 
   const handleRefreshReview = () => {
     if (checkedCount > 0) {
@@ -676,6 +716,11 @@ export default function OrgParticipantDetail() {
           {/* ── Green travel extra (decided by the organiser) ── */}
           <GreenTravelExtraCard participant={participant} />
 
+          {/* ── Email replies from the participant (via the inbox) ── */}
+          {participant.messages && participant.messages.length > 0 && (
+            <MessagesCard participant={participant} onGoToTrip={scrollToTravelItem} />
+          )}
+
           {/* ── Two Column Layout ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* ── Main Column (2/3) ── */}
@@ -700,8 +745,20 @@ export default function OrgParticipantDetail() {
                 <CardContent>
                   {participant.travelItems.length > 0 ? (
                     <div className="space-y-3">
-                      {groupOrgTravelItemsByBooking(participant.travelItems).map((group) => {
-                        const renderCard = (item: typeof group.items[number]) => (
+                      {participant.travelItems.map((item, index, all) => {
+                        // Trips are listed in travel order; legs of one booking keep their own place
+                        const bookingLegs = item.bookingId ? all.filter((t) => t.bookingId === item.bookingId) : [];
+                        const bookingLabel =
+                          bookingLegs.length > 1
+                            ? `${bookingLegs.some((t) => t.amountIncludedInRoundTrip) ? 'Round trip' : 'Multi-leg booking'} · ${item.amountIncludedInRoundTrip ? 'price on the outbound leg' : 'one purchase'}`
+                            : null;
+                        // The arrows move a trip within its day; the dates order the days
+                        const day = (t: typeof item) => String(t.departureDate).slice(0, 10);
+                        const prev = all[index - 1];
+                        const next = all[index + 1];
+                        const canMoveUp = !!prev && day(prev) === day(item);
+                        const canMoveDown = !!next && day(next) === day(item);
+                        return (
                           <TravelItemCard
                             key={item.id}
                             item={item}
@@ -723,29 +780,14 @@ export default function OrgParticipantDetail() {
                             onLinkDocument={(itemId, docId) => linkDocumentMutation.mutate({ itemId, docId })}
                             onUnlinkDocument={(itemId, docId) => unlinkDocumentMutation.mutate({ itemId, docId })}
                             isMutating={updateTravelItemMutation.isPending || deleteTravelItemMutation.isPending || excludeTravelItemMutation.isPending}
+                            bookingLabel={bookingLabel}
+                            onMoveUp={canMoveUp ? () => moveTravelItemMutation.mutate({ itemId: item.id, direction: 'up' }) : undefined}
+                            onMoveDown={canMoveDown ? () => moveTravelItemMutation.mutate({ itemId: item.id, direction: 'down' }) : undefined}
+                            showMoveArrows={canMoveUp || canMoveDown}
+                            moving={moveTravelItemMutation.isPending}
+                            onShowFindingDocuments={showFindingDocuments}
+                            onHideFindingDocuments={hideFindingDocuments}
                           />
-                        );
-
-                        if (group.items.length < 2) {
-                          return renderCard(group.items[0]);
-                        }
-
-                        const isRoundTrip = group.items.some((i) => i.amountIncludedInRoundTrip);
-                        return (
-                          <div key={group.key} className="rounded-xl border-2 border-purple-200 bg-purple-50/40 p-2.5">
-                            <div className="flex items-center gap-2 mb-2 px-1">
-                              <Repeat className="w-3.5 h-3.5 text-purple-600" />
-                              <span className="text-xs font-semibold text-purple-800">
-                                {isRoundTrip ? 'Round-trip booking' : 'Multi-leg booking'}
-                              </span>
-                              <span className="text-[11px] text-purple-500">
-                                · {group.items.length} legs · one purchase · price counted once
-                              </span>
-                            </div>
-                            <div className="space-y-3">
-                              {group.items.map((item) => renderCard(item))}
-                            </div>
-                          </div>
                         );
                       })}
                     </div>
@@ -780,6 +822,7 @@ export default function OrgParticipantDetail() {
                           key={doc.id}
                           document={doc}
                           participantId={participant.id}
+                          highlighted={highlightedDocIds.includes(doc.id)}
                           onDelete={() => {
                             if (confirm(deleteDocumentMessage(doc, participant.travelItems, participant.documents))) {
                               deleteDocumentMutation.mutate(doc.id);
@@ -797,7 +840,19 @@ export default function OrgParticipantDetail() {
               {/* Bank & Payment Details */}
               <Card>
                 <CardHeader>
-                  <h3 className="font-semibold text-gray-900">Bank & Payment Details</h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-gray-900">Bank & Payment Details</h3>
+                    {participant.status !== 'PAID' && (
+                      <button
+                        onClick={() => setShowBankModal(true)}
+                        className="p-1 rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                        title="Correct the bank details (the participant gets an email about it)"
+                        aria-label="Correct bank details"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -890,6 +945,15 @@ export default function OrgParticipantDetail() {
                             {checkedCount}/{findings.length}
                           </span>
                         )}
+                        {findings.some((f: ReviewFinding) => !f.checked && f.category !== 'All Clear') && (
+                          <button
+                            onClick={copyOpenFindings}
+                            className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                            title="Copy the open findings as text"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
                           onClick={handleRefreshReview}
                           disabled={refreshReviewMutation.isPending}
@@ -933,6 +997,8 @@ export default function OrgParticipantDetail() {
                               finding={finding}
                               onToggle={() => toggleFindingMutation.mutate({ findingId: finding.id })}
                               onNavigate={finding.travelItemId ? () => scrollToTravelItem(finding.travelItemId!) : undefined}
+                              onShowDocuments={showFindingDocuments}
+                              onHideDocuments={hideFindingDocuments}
                             />
                           ))}
                         </div>
@@ -1094,7 +1160,19 @@ export default function OrgParticipantDetail() {
               This will set the participant's status back to Draft and allow them to edit and resubmit their reimbursement.
             </p>
             <div>
-              <label className="label">Message to participant *</label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="label">Message to participant *</label>
+                <button
+                  type="button"
+                  onClick={draftReopenMessage}
+                  disabled={draftingMessage}
+                  className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-50 mb-1"
+                  title="Drafts a short, friendly message from the open AI review findings. You can edit it before sending."
+                >
+                  {draftingMessage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  {draftingMessage ? 'Writing…' : 'Write with AI'}
+                </button>
+              </div>
               <textarea
                 value={reopenMessage}
                 onChange={(e) => setReopenMessage(e.target.value)}
@@ -1131,6 +1209,9 @@ export default function OrgParticipantDetail() {
             </div>
           </div>
         </Modal>
+
+        {/* ── Correct bank details ── */}
+        {showBankModal && <BankDetailsModal participant={participant} onClose={() => setShowBankModal(false)} />}
 
         {/* ── Add Travel Item Modal ── */}
         <Modal isOpen={showAddItemModal} onClose={() => setShowAddItemModal(false)} title="Add Travel Item" size="lg">
@@ -1209,7 +1290,7 @@ function TravelItemForm({
   loading: boolean;
   submitLabel: string;
 }) {
-  const update = (field: string, value: string | number | undefined) => {
+  const update = (field: string, value: string | number | null | undefined) => {
     onChange({ ...data, [field]: value });
   };
 
@@ -1255,6 +1336,18 @@ function TravelItemForm({
           <label className="label">Amount (original currency)</label>
           <input type="number" step="0.01" value={data.amountOriginal} onChange={(e) => update('amountOriginal', parseFloat(e.target.value) || 0)} className="input" />
         </div>
+        <div>
+          <label className="label">Luggage / extras (€)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={data.luggageAmountEur ?? ''}
+            onChange={(e) => update('luggageAmountEur', e.target.value === '' ? null : parseFloat(e.target.value))}
+            className="input"
+            placeholder="Bought separately, e.g. bags"
+          />
+        </div>
         {data.modeOfTransport === 'PLANE' && (
           <div>
             <label className="label">Flight number</label>
@@ -1292,13 +1385,22 @@ function FindingItem({
   finding,
   onToggle,
   onNavigate,
+  onShowDocuments,
+  onHideDocuments,
 }: {
   finding: ReviewFinding;
   onToggle: () => void;
   onNavigate?: () => void;
+  onShowDocuments?: (ids: string[], scroll: boolean) => void;
+  onHideDocuments?: () => void;
 }) {
+  const docIds = finding.documentIds ?? [];
+  const hasDocs = docIds.length > 0 && !!onShowDocuments;
   return (
-    <div className={clsx(
+    <div
+      onMouseEnter={hasDocs ? () => onShowDocuments!(docIds, false) : undefined}
+      onMouseLeave={hasDocs ? onHideDocuments : undefined}
+      className={clsx(
       'flex items-start gap-2 p-2 rounded-lg text-sm w-full text-left transition-colors',
       finding.checked
         ? 'bg-gray-50 opacity-60'
@@ -1356,6 +1458,16 @@ function FindingItem({
           )}>
             {finding.category}
           </span>
+          {hasDocs && !finding.checked && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onShowDocuments!(docIds, true); }}
+              className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-amber-700"
+              title="Show these files in the documents list"
+            >
+              <Paperclip className="w-3 h-3" />
+              {docIds.length} file{docIds.length === 1 ? '' : 's'}
+            </button>
+          )}
           {/* Navigate arrow for item-linked findings */}
           {onNavigate && !finding.checked && (
             <button
@@ -1388,7 +1500,7 @@ function FindingItem({
 
 // ── DocumentChip (compact view for All Documents section) ─────
 
-function DocumentChip({ document, participantId, onDelete }: { document: Document; participantId: string; onDelete?: () => void }) {
+function DocumentChip({ document, participantId, onDelete, highlighted }: { document: Document; participantId: string; onDelete?: () => void; highlighted?: boolean }) {
   const handleView = async () => {
     try {
       const { url } = await organisationApi.getDocumentUrl(participantId, document.id);
@@ -1399,12 +1511,23 @@ function DocumentChip({ document, participantId, onDelete }: { document: Documen
   };
 
   return (
-    <div className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left group">
+    <div
+      id={`document-${document.id}`}
+      className={clsx(
+        'flex items-center gap-2 p-2.5 rounded-lg transition-colors text-left group',
+        highlighted ? 'bg-amber-50 ring-2 ring-amber-400' : 'bg-gray-50 hover:bg-gray-100',
+      )}
+    >
       <button onClick={handleView} className="flex items-center gap-2 flex-1 min-w-0">
         <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-gray-900 truncate">{document.renamedFilename}</p>
           <p className="text-xs text-gray-500">{docTypeLabels[document.documentType] || document.documentType}</p>
+          {document.sharedWith && document.sharedWith.length > 0 && (
+            <p className="text-[11px] text-amber-700 truncate" title={document.sharedWith.map((s) => `${s.name}: ${s.filename} (${s.how})`).join('\n')}>
+              Also claimed by {document.sharedWith.map((s) => s.name).join(', ')}
+            </p>
+          )}
         </div>
         <ExternalLink className="w-3 h-3 text-gray-300 group-hover:text-primary-500 flex-shrink-0" />
       </button>
@@ -1474,6 +1597,13 @@ function TravelItemCard({
   onLinkDocument,
   onUnlinkDocument,
   isMutating,
+  bookingLabel,
+  onMoveUp,
+  onMoveDown,
+  showMoveArrows,
+  moving,
+  onShowFindingDocuments,
+  onHideFindingDocuments,
 }: {
   item: TravelItem;
   expanded: boolean;
@@ -1490,6 +1620,14 @@ function TravelItemCard({
   onLinkDocument: (itemId: string, docId: string) => void;
   onUnlinkDocument: (itemId: string, docId: string) => void;
   isMutating: boolean;
+  /** "Round trip · price on the outbound leg" when the trip belongs to a booking with several legs */
+  bookingLabel?: string | null;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  showMoveArrows?: boolean;
+  moving?: boolean;
+  onShowFindingDocuments?: (ids: string[], scroll: boolean) => void;
+  onHideFindingDocuments?: () => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<CreateTravelItemData>({
@@ -1505,11 +1643,20 @@ function TravelItemCard({
     bookingReference: item.bookingReference || undefined,
     distanceKm: item.distanceKm || undefined,
     comment: item.comment || undefined,
+    luggageAmountEur: item.luggageAmountEur ?? null,
   });
   const [showLinkDropdown, setShowLinkDropdown] = useState(false);
   const [exchangeRateInput, setExchangeRateInput] = useState('');
   const [editingExchangeRate, setEditingExchangeRate] = useState(false);
   const [editingCompanyName, setEditingCompanyName] = useState(false);
+  // Purchase date: decides the exchange rate (without one, the travel date is used)
+  const [editingPurchaseDate, setEditingPurchaseDate] = useState(false);
+  const [purchaseDateInput, setPurchaseDateInput] = useState('');
+  const savePurchaseDate = () => {
+    setEditingPurchaseDate(false);
+    const before = item.purchaseDate ? String(item.purchaseDate).slice(0, 10) : '';
+    if (purchaseDateInput !== before) onEdit(item.id, { purchaseDate: purchaseDateInput || null });
+  };
   const [companyNameInput, setCompanyNameInput] = useState(item.companyName || '');
 
   const Icon = transportIcons[item.modeOfTransport];
@@ -1539,10 +1686,11 @@ function TravelItemCard({
         !highlighted && 'bg-gray-50',
       )}
     >
-      {/* Collapsed header (always visible) */}
+      {/* Collapsed header (always visible), with the order arrows beside it */}
+      <div className="flex items-stretch">
       <button
         onClick={onToggleExpand}
-        className="w-full p-4 flex items-start gap-4 text-left"
+        className="flex-1 min-w-0 p-4 flex items-start gap-4 text-left"
       >
         <div className="w-10 h-10 rounded-lg bg-white border border-gray-200 flex items-center justify-center flex-shrink-0">
           <Icon className="w-5 h-5 text-gray-500" />
@@ -1566,6 +1714,12 @@ function TravelItemCard({
             {tripHasNoPrice(item) && (
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">No price</span>
             )}
+            {bookingLabel && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 flex items-center gap-1" title="Several legs bought together; the price is counted once">
+                <Repeat className="w-3 h-3" />
+                {bookingLabel}
+              </span>
+            )}
             {item.routeMatchesCountry === false && (
               <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Route mismatch</span>
             )}
@@ -1580,7 +1734,7 @@ function TravelItemCard({
             )}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
-            <span>{formatDate(item.departureDate)}{item.arrivalDate ? ` - ${formatDate(item.arrivalDate)}` : ''}</span>
+            <span>{formatDate(item.departureDate)}{item.departureTime ? ` ${item.departureTime}` : ''}{item.arrivalDate ? ` - ${formatDate(item.arrivalDate)}` : ''}</span>
             {item.flightNumber && <span>Flight: {item.flightNumber}</span>}
             {item.bookingReference && <span>Ref: {item.bookingReference}</span>}
             {item.companyName && <span>{item.companyName}</span>}
@@ -1626,6 +1780,29 @@ function TravelItemCard({
           {expanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
         </div>
       </button>
+      {showMoveArrows && (
+        <div className="flex flex-col justify-center gap-1 pr-2">
+          <button
+            onClick={onMoveUp}
+            disabled={!onMoveUp || moving}
+            className="p-1 rounded-md text-gray-400 hover:text-primary-600 hover:bg-white disabled:opacity-25 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+            title="Move up (earlier that day)"
+            aria-label="Move trip up"
+          >
+            <ArrowUp className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onMoveDown}
+            disabled={!onMoveDown || moving}
+            className="p-1 rounded-md text-gray-400 hover:text-primary-600 hover:bg-white disabled:opacity-25 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+            title="Move down (later that day)"
+            aria-label="Move trip down"
+          >
+            <ArrowDown className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+      </div>
 
       {/* Expanded details */}
       {expanded && (
@@ -1687,12 +1864,38 @@ function TravelItemCard({
                 <DetailField label="Mode" value={item.modeOfTransport} />
                 <DetailField label="Departure" value={formatDate(item.departureDate)} />
                 {item.arrivalDate && <DetailField label="Arrival" value={formatDate(item.arrivalDate)} />}
-                {item.purchaseDate && (
-                  <DetailField
-                    label="Purchase Date"
-                    value={`${formatDate(item.purchaseDate)}${item.purchaseDateAutoFilled ? ' (auto)' : ''}`}
-                  />
-                )}
+                <div>
+                  <p className="text-gray-400 text-xs">Purchase Date</p>
+                  {editingPurchaseDate ? (
+                    <input
+                      type="date"
+                      autoFocus
+                      value={purchaseDateInput}
+                      onChange={(e) => setPurchaseDateInput(e.target.value)}
+                      onBlur={savePurchaseDate}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') setEditingPurchaseDate(false);
+                      }}
+                      className="input py-1 text-sm"
+                    />
+                  ) : (
+                    <p
+                      className={clsx('font-medium text-sm cursor-pointer hover:text-primary-600', item.purchaseDate ? 'text-gray-900' : 'text-gray-400 italic')}
+                      onClick={() => {
+                        setPurchaseDateInput(item.purchaseDate ? String(item.purchaseDate).slice(0, 10) : '');
+                        setEditingPurchaseDate(true);
+                      }}
+                      title={item.currencyOriginal !== 'EUR'
+                        ? 'Click to edit. The exchange rate follows this date; without it, the travel date is used.'
+                        : 'Click to edit'}
+                    >
+                      {item.purchaseDate
+                        ? `${formatDate(item.purchaseDate)}${item.purchaseDateAutoFilled ? ' (travel date)' : ''}`
+                        : 'Not set'}
+                    </p>
+                  )}
+                </div>
                 {item.flightNumber && <DetailField label="Flight #" value={item.flightNumber} />}
                 {item.bookingReference && <DetailField label="Booking Ref" value={item.bookingReference} />}
                 <DetailField label="Amount (EUR)" value={formatCurrency(item.amountEur)} />
@@ -1714,6 +1917,16 @@ function TravelItemCard({
                   </>
                 )}
                 {item.distanceKm && <DetailField label="Distance" value={`${item.distanceKm} km`} />}
+                {item.modeOfTransport === 'CAR' && (() => {
+                  // How a car trip's amount came about: fuel receipts, kilometres, or typed in
+                  const fuel = linkedDocs.filter((d) => d.documentType === 'FUEL_RECEIPT').length;
+                  const how = fuel > 0
+                    ? `${fuel} fuel receipt${fuel === 1 ? '' : 's'} (no kilometres used)`
+                    : item.distanceKm
+                      ? 'Kilometres × the project car rate'
+                      : 'Typed in';
+                  return <DetailField label="Amount from" value={how} />;
+                })()}
                 {item.isDriverCarpool && <DetailField label="Driver/Carpool" value="Yes" />}
                 {item.luggageAmountEur != null && item.luggageAmountEur > 0 && (
                   <DetailField label="Luggage Fee" value={formatCurrency(item.luggageAmountEur)} />
@@ -1932,6 +2145,8 @@ function TravelItemCard({
                     key={finding.id}
                     finding={finding}
                     onToggle={() => onToggleFinding(finding.id)}
+                    onShowDocuments={onShowFindingDocuments}
+                    onHideDocuments={onHideFindingDocuments}
                   />
                 ))}
               </div>
@@ -2064,8 +2279,16 @@ function sumByCurrency(list: SuggestionReceipt[]): string {
   return parts.length > 0 ? parts.join(' + ') : '—';
 }
 
-/** One receipt tile: image thumbnail (signed URL fetched lazily) or a PDF icon; click opens the file */
-function ReceiptThumb({ participantId, receipt }: { participantId: string; receipt: SuggestionReceipt }) {
+/** Total in EUR when every receipt with an amount could be converted (other currencies included) */
+function eurTotal(list: SuggestionReceipt[]): number | null {
+  const withAmount = list.filter((r) => r.amount != null);
+  if (withAmount.length === 0 || withAmount.some((r) => r.amountEur == null)) return null;
+  if (withAmount.every((r) => (r.currency || 'EUR') === 'EUR')) return null; // already shown in EUR
+  return withAmount.reduce((sum, r) => sum + (r.amountEur ?? 0), 0);
+}
+
+/** One receipt tile: image thumbnail (signed URL fetched lazily) or a PDF icon; click opens the file, the pencil corrects it */
+function ReceiptThumb({ participantId, receipt, onEdit }: { participantId: string; receipt: SuggestionReceipt; onEdit?: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   const isImage = !!receipt.mimeType && receipt.mimeType.startsWith('image/');
   const isHotel = receipt.documentType === 'HOTEL_INVOICE';
@@ -2093,30 +2316,42 @@ function ReceiptThumb({ participantId, receipt }: { participantId: string; recei
     : 'amount unclear';
 
   return (
-    <button
-      type="button"
-      onClick={openFile}
-      title={`${receipt.renamedFilename} — open`}
-      className="w-24 flex-shrink-0 text-left group"
-    >
-      <div className={`w-24 h-24 rounded-xl overflow-hidden border bg-white flex items-center justify-center ${isHotel ? 'border-sky-200' : 'border-amber-200'} group-hover:ring-2 group-hover:ring-emerald-400`}>
-        {url ? (
-          <img src={url} alt={receipt.renamedFilename} className="w-full h-full object-cover" loading="lazy" />
-        ) : (
-          <div className={`flex flex-col items-center gap-1 ${isHotel ? 'text-sky-500' : 'text-amber-500'}`}>
-            {isHotel ? <BedDouble className="w-6 h-6" /> : <Utensils className="w-6 h-6" />}
-            <span className="text-[10px] uppercase tracking-wide">{isImage ? 'photo' : 'PDF'}</span>
-          </div>
-        )}
-      </div>
-      <p className="text-[11px] mt-1 font-medium text-gray-800 truncate">{amount}</p>
-      <p className="text-[10px] text-gray-500 truncate">{isHotel ? 'Hotel' : 'Meal'}</p>
-    </button>
+    <div className="w-24 flex-shrink-0 relative group">
+      <button type="button" onClick={openFile} title={`${receipt.renamedFilename} — open`} className="text-left w-full">
+        <div className={`w-24 h-24 rounded-xl overflow-hidden border bg-white flex items-center justify-center ${isHotel ? 'border-sky-200' : 'border-amber-200'} group-hover:ring-2 group-hover:ring-emerald-400`}>
+          {url ? (
+            <img src={url} alt={receipt.renamedFilename} className="w-full h-full object-cover" loading="lazy" />
+          ) : (
+            <div className={`flex flex-col items-center gap-1 ${isHotel ? 'text-sky-500' : 'text-amber-500'}`}>
+              {isHotel ? <BedDouble className="w-6 h-6" /> : <Utensils className="w-6 h-6" />}
+              <span className="text-[10px] uppercase tracking-wide">{isImage ? 'photo' : 'PDF'}</span>
+            </div>
+          )}
+        </div>
+        <p className="text-[11px] mt-1 font-medium text-gray-800 truncate">{amount}</p>
+        <p className="text-[10px] text-gray-500 truncate">
+          {isHotel ? 'Hotel' : 'Meal'}
+          {receipt.amountEur != null && receipt.currency && receipt.currency !== 'EUR' && ` · ${formatCurrency(receipt.amountEur)}`}
+          {receipt.corrected && ' · corrected'}
+        </p>
+      </button>
+      {onEdit && (
+        <button
+          type="button"
+          onClick={onEdit}
+          className="absolute top-1 right-1 p-1 rounded-md bg-white/90 text-gray-500 hover:text-primary-600 shadow-sm"
+          title="Correct the amount, currency or date"
+          aria-label="Correct this receipt"
+        >
+          <Pencil className="w-3 h-3" />
+        </button>
+      )}
+    </div>
   );
 }
 
-/** Receipts grouped by day, with meal and hotel totals, for deciding the green travel extra */
-function ReceiptGallery({ participantId, receipts }: { participantId: string; receipts: SuggestionReceipt[] }) {
+/** Receipts grouped by the date on them, with meal and hotel totals, for deciding the green travel extra */
+function ReceiptGallery({ participantId, receipts, onEdit }: { participantId: string; receipts: SuggestionReceipt[]; onEdit?: (r: SuggestionReceipt) => void }) {
   if (receipts.length === 0) {
     return <p className="mt-1">Receipts uploaded: none yet — the participant can still add them.</p>;
   }
@@ -2130,12 +2365,20 @@ function ReceiptGallery({ participantId, receipts }: { participantId: string; re
     groups.set(k, [...(groups.get(k) || []), r]);
   }
   const ordered = [...groups.entries()].sort(([a], [b]) => (a === 'unknown' ? 1 : b === 'unknown' ? -1 : a.localeCompare(b)));
+  const mealsEur = eurTotal(meals);
+  const hotelsEur = eurTotal(hotels);
 
   return (
     <div className="mt-2">
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        <span><Utensils className="inline w-3.5 h-3.5 mr-1 text-amber-500" />{meals.length} meal receipt{meals.length === 1 ? '' : 's'} · <strong>{sumByCurrency(meals)}</strong></span>
-        <span><BedDouble className="inline w-3.5 h-3.5 mr-1 text-sky-500" />{hotels.length} hotel invoice{hotels.length === 1 ? '' : 's'} · <strong>{sumByCurrency(hotels)}</strong></span>
+        <span>
+          <Utensils className="inline w-3.5 h-3.5 mr-1 text-amber-500" />{meals.length} meal receipt{meals.length === 1 ? '' : 's'} · <strong>{sumByCurrency(meals)}</strong>
+          {mealsEur != null && <> ≈ <strong>{formatCurrency(mealsEur)}</strong></>}
+        </span>
+        <span>
+          <BedDouble className="inline w-3.5 h-3.5 mr-1 text-sky-500" />{hotels.length} hotel invoice{hotels.length === 1 ? '' : 's'} · <strong>{sumByCurrency(hotels)}</strong>
+          {hotelsEur != null && <> ≈ <strong>{formatCurrency(hotelsEur)}</strong></>}
+        </span>
       </div>
       <div className="mt-2 space-y-2">
         {ordered.map(([day, list]) => (
@@ -2144,13 +2387,92 @@ function ReceiptGallery({ participantId, receipts }: { participantId: string; re
               {day === 'unknown' ? 'Date unclear' : formatDate(day)} · {list.length}
             </p>
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {list.map((r) => <ReceiptThumb key={r.id} participantId={participantId} receipt={r} />)}
+              {list.map((r) => <ReceiptThumb key={r.id} participantId={participantId} receipt={r} onEdit={onEdit ? () => onEdit(r) : undefined} />)}
             </div>
           </div>
         ))}
       </div>
-      <p className="text-[11px] text-emerald-800/70 mt-1">Amounts are read by the AI from the receipts; click a tile to open the file.</p>
+      <p className="text-[11px] text-emerald-800/70 mt-1">
+        Amounts are read by the AI from the receipts; click a tile to open the file, or the pencil to correct what was read.
+      </p>
     </div>
+  );
+}
+
+const RECEIPT_CURRENCIES = ['EUR', 'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'SEK', 'DKK', 'NOK', 'ISK', 'CHF', 'GBP', 'TRY', 'RSD', 'MKD', 'ALL', 'BAM', 'GEL', 'AMD', 'AZN', 'UAH', 'MDL'];
+
+/** Correct what the AI read from one receipt */
+function ReceiptEditModal({ participantId, receipt, onClose }: { participantId: string; receipt: SuggestionReceipt; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [type, setType] = useState<'MEAL_RECEIPT' | 'HOTEL_INVOICE'>(receipt.documentType === 'HOTEL_INVOICE' ? 'HOTEL_INVOICE' : 'MEAL_RECEIPT');
+  const [amount, setAmount] = useState(receipt.amount != null ? String(receipt.amount) : '');
+  const [currency, setCurrency] = useState((receipt.currency || 'EUR').toUpperCase());
+  const [date, setDate] = useState(receipt.documentDate ? new Date(receipt.documentDate).toISOString().slice(0, 10) : '');
+  const currencies = RECEIPT_CURRENCIES.includes(currency) ? RECEIPT_CURRENCIES : [currency, ...RECEIPT_CURRENCIES];
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      organisationApi.correctReceipt(participantId, receipt.id, {
+        amount: amount.trim() === '' ? null : parseFloat(amount.replace(',', '.')),
+        currency,
+        documentDate: date || null,
+        documentType: type,
+      }),
+    onSuccess: () => {
+      toast.success('Receipt corrected');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', participantId] });
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message || 'Could not save the correction'),
+  });
+  const parsed = amount.trim() === '' ? null : parseFloat(amount.replace(',', '.'));
+  const invalid = parsed != null && (isNaN(parsed) || parsed < 0);
+
+  const openFile = async () => {
+    try {
+      const r = await organisationApi.getDocumentUrl(participantId, receipt.id);
+      window.open(r.url, '_blank', 'noopener,noreferrer');
+    } catch {
+      toast.error('Could not open the receipt');
+    }
+  };
+
+  return (
+    <Modal isOpen onClose={onClose} title="Correct receipt">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          <button type="button" onClick={openFile} className="text-primary-600 hover:underline">{receipt.renamedFilename}</button>
+          {' '}— fix what the AI read. Your correction is kept, also when the receipts are read again.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Type</label>
+            <select value={type} onChange={(e) => setType(e.target.value as 'MEAL_RECEIPT' | 'HOTEL_INVOICE')} className="input">
+              <option value="MEAL_RECEIPT">Meal / food</option>
+              <option value="HOTEL_INVOICE">Hotel / accommodation</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Date on the receipt</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="input" />
+          </div>
+          <div>
+            <label className="label">Amount</label>
+            <input type="number" min="0" step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="input" />
+          </div>
+          <div>
+            <label className="label">Currency</label>
+            <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="input">
+              {currencies.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} loading={mutation.isPending} disabled={invalid}>Save correction</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2168,21 +2490,45 @@ const NOT_COUNTED_LABELS: Record<GreenTravelNotCountedReason, string> = {
   NOT_AN_EXTRA_DAY: 'not on an extra travel day',
 };
 
-/** What the project's green travel rule suggests, step by step, with a button to fill in the amounts */
+/**
+ * What the project's green travel rule suggests, step by step. The organiser can pay a day or the
+ * hotels in full, or count a left-out receipt anyway, before filling in the amounts.
+ */
 function GreenTravelCalculationBox({
   calc,
   onFillIn,
-  alreadyFilledIn,
+  current,
   disabled,
 }: {
   calc: GreenTravelCalculation;
-  onFillIn: () => void;
-  alreadyFilledIn: boolean;
+  onFillIn: (foodEur: number, accommodationEur: number) => void;
+  current: { food: number; accommodation: number };
   disabled: boolean;
 }) {
+  const [payFullDays, setPayFullDays] = useState<Set<string>>(new Set());
+  const [payFullHotels, setPayFullHotels] = useState(false);
+  const [countAnyway, setCountAnyway] = useState<Set<string>>(new Set());
+  const toggle = (set: Set<string>, key: string) => {
+    const next = new Set(set);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  };
+
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const noLimits = calc.foodPerDayEur === 0 && calc.accommodationPerNightEur === 0;
   const listDays = (days: string[]) => (days.length > 0 ? days.map(formatIsoDay).join(', ') : 'none');
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // The suggestion after the organiser's own choices
+  const extraFood = calc.notCounted.filter((n) => n.kind === 'FOOD' && countAnyway.has(n.id)).reduce((s, n) => s + (n.amountEur ?? 0), 0);
+  const extraHotels = calc.notCounted.filter((n) => n.kind === 'ACCOMMODATION' && countAnyway.has(n.id)).reduce((s, n) => s + (n.amountEur ?? 0), 0);
+  const food = calc.mode === 'FIXED'
+    ? calc.foodEur
+    : round2(calc.foodDays.reduce((s, d) => s + (payFullDays.has(d.date) ? d.spentEur : d.countedEur), 0) + extraFood);
+  const accommodation = calc.mode === 'FIXED'
+    ? calc.accommodationEur
+    : round2((payFullHotels ? calc.accommodationSpentEur : Math.min(calc.accommodationSpentEur, calc.accommodationCapEur)) + extraHotels);
+  const filledIn = current.food === food && current.accommodation === accommodation;
 
   return (
     <div className="mt-3 p-3 rounded-xl bg-white border border-emerald-200 text-sm text-gray-700">
@@ -2210,35 +2556,70 @@ function GreenTravelCalculationBox({
         <div className="mt-2 space-y-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-700/80">Food</p>
           {calc.foodDays.length === 0 && <p className="text-gray-500">No meal receipts on the extra travel days.</p>}
-          {calc.foodDays.map((d) => (
-            <p key={d.date} className="flex justify-between gap-3">
-              <span>
-                {formatIsoDay(d.date)}: spent {formatCurrency(d.spentEur)}
-                {d.countedEur < d.spentEur && <span className="text-gray-500"> (limit {formatCurrency(calc.foodPerDayEur)})</span>}
-              </span>
-              <span>{formatCurrency(d.countedEur)}</span>
-            </p>
-          ))}
+          {calc.foodDays.map((d) => {
+            const overLimit = d.countedEur < d.spentEur;
+            const full = payFullDays.has(d.date);
+            return (
+              <div key={d.date} className="flex justify-between gap-3">
+                <span>
+                  {formatIsoDay(d.date)}: spent {formatCurrency(d.spentEur)}
+                  {overLimit && !full && <span className="text-gray-500"> (limit {formatCurrency(calc.foodPerDayEur)})</span>}
+                  {overLimit && (
+                    <label className="ml-2 inline-flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                      <input type="checkbox" checked={full} onChange={() => setPayFullDays((s) => toggle(s, d.date))} className="rounded border-gray-300 w-3 h-3" />
+                      pay in full
+                    </label>
+                  )}
+                </span>
+                <span>{formatCurrency(full ? d.spentEur : d.countedEur)}</span>
+              </div>
+            );
+          })}
           <p className="flex justify-between gap-3 border-t border-gray-100 pt-1">
             <span>Food total</span>
-            <strong>{formatCurrency(calc.foodEur)}</strong>
+            <strong>{formatCurrency(food)}</strong>
           </p>
           <p className="text-xs font-semibold uppercase tracking-wide text-sky-700/80 pt-1">Accommodation</p>
-          <p className="flex justify-between gap-3">
+          <div className="flex justify-between gap-3">
             <span>
               Hotel receipts {formatCurrency(calc.accommodationSpentEur)}, limit {plural(calc.extraNights.length, 'night', 'nights')} ×{' '}
               {formatCurrency(calc.accommodationPerNightEur)} = {formatCurrency(calc.accommodationCapEur)}
+              {calc.accommodationSpentEur > calc.accommodationCapEur && (
+                <label className="ml-2 inline-flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                  <input type="checkbox" checked={payFullHotels} onChange={() => setPayFullHotels((v) => !v)} className="rounded border-gray-300 w-3 h-3" />
+                  pay in full
+                </label>
+              )}
             </span>
-            <strong>{formatCurrency(calc.accommodationEur)}</strong>
-          </p>
+            <strong>{formatCurrency(accommodation)}</strong>
+          </div>
+          {calc.correctedDates.length > 0 && (
+            <p className="text-xs text-gray-500 pt-1">
+              Date corrected to the trip year: {calc.correctedDates.map((c) => `${c.filename} (${formatIsoDay(c.from)} → ${formatIsoDay(c.to)})`).join(', ')}
+            </p>
+          )}
           {calc.notCounted.length > 0 && (
             <div className="pt-1">
-              <p className="text-xs text-gray-500">Not counted ({calc.notCounted.length}). You can still add these yourself below:</p>
-              <ul className="text-xs text-gray-500 list-disc pl-5">
+              <p className="text-xs text-gray-500">Not counted ({calc.notCounted.length}). Tick one to count it anyway (in full):</p>
+              <ul className="text-xs text-gray-600 space-y-0.5 mt-0.5">
                 {calc.notCounted.map((n) => (
-                  <li key={n.id}>
-                    {n.filename}
-                    {n.date ? ` (${formatIsoDay(n.date)})` : ''}: {NOT_COUNTED_LABELS[n.reason]}
+                  <li key={n.id} className="flex items-center gap-1.5">
+                    {n.amountEur != null ? (
+                      <input
+                        type="checkbox"
+                        checked={countAnyway.has(n.id)}
+                        onChange={() => setCountAnyway((s) => toggle(s, n.id))}
+                        className="rounded border-gray-300 w-3 h-3"
+                        aria-label={`Count ${n.filename} anyway`}
+                      />
+                    ) : (
+                      <span className="w-3" />
+                    )}
+                    <span>
+                      {n.filename}
+                      {n.date ? ` (${formatIsoDay(n.date)})` : ''}
+                      {n.amountEur != null ? ` · ${formatCurrency(n.amountEur)}` : ''}: {NOT_COUNTED_LABELS[n.reason]}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -2253,11 +2634,35 @@ function GreenTravelCalculationBox({
         </p>
       )}
       <div className="mt-3 flex items-center justify-between gap-3">
-        <p className="text-xs text-gray-500">Suggested: {formatCurrency(calc.foodEur + calc.accommodationEur)}</p>
-        <Button size="sm" variant="secondary" onClick={onFillIn} disabled={disabled || alreadyFilledIn}>
-          {alreadyFilledIn ? 'Filled in below' : 'Fill in these amounts'}
+        <p className="text-xs text-gray-500">Suggested: {formatCurrency(food + accommodation)}</p>
+        <Button size="sm" variant="secondary" onClick={() => onFillIn(food, accommodation)} disabled={disabled || filledIn}>
+          {filledIn ? 'Filled in below' : 'Fill in these amounts'}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** A short explanation of how green travel works in the app */
+function GreenTravelGuide() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="text-xs font-medium text-emerald-700 hover:text-emerald-900 flex items-center gap-1">
+        <Info className="w-3.5 h-3.5" />
+        How green travel works
+        {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+      </button>
+      {open && (
+        <ul className="mt-2 p-3 rounded-xl bg-emerald-50/60 text-xs text-gray-700 space-y-1.5 list-disc pl-6">
+          <li><strong>Who is a green traveller:</strong> participants whose country row is marked green (or named like "Poland GREEN"), or set to "Yes" under Individual limit → Green travel.</li>
+          <li><strong>Max Allowed</strong> is the amount of their country row; their travel costs are paid up to that maximum.</li>
+          <li><strong>Green travel extra</strong> is paid on top of the maximum: food and accommodation on the travel days outside the project dates. What you save here is paid in full.</li>
+          <li><strong>How it's worked out</strong> is set per project (Settings → Green travel extra): you decide per participant, receipts up to a limit per day/night, or a fixed amount per day/night. With a rule, this card shows the calculation; you can pay a day in full or count a left-out receipt before filling in.</li>
+          <li><strong>Receipts:</strong> participants add them on their own page until they are paid. If the AI read an amount, currency or date wrongly, click the pencil on the receipt.</li>
+          <li><strong>Saving</strong> updates "To Reimburse" straight away. Untick "Email the participant" to save without sending an email.</li>
+        </ul>
+      )}
     </div>
   );
 }
@@ -2277,6 +2682,8 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
   const [food, setFood] = useState(initialFood);
   const [accommodation, setAccommodation] = useState(initialAccommodation);
   const [note, setNote] = useState(participant.greenTravelExtraNote || '');
+  const [notify, setNotify] = useState(true);
+  const [editingReceipt, setEditingReceipt] = useState<SuggestionReceipt | null>(null);
   useEffect(() => {
     setFood(initialFood);
     setAccommodation(initialAccommodation);
@@ -2289,13 +2696,23 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
         foodEur: food.trim() === '' ? null : parseFloat(food),
         accommodationEur: accommodation.trim() === '' ? null : parseFloat(accommodation),
         note: note.trim() || null,
+        notify,
       }),
-    onSuccess: () => {
-      toast.success('Green travel extra saved — the participant has been notified');
+    onSuccess: (r) => {
+      toast.success(r.emailed ? `Green travel extra saved — ${participant.firstName} has been emailed` : 'Green travel extra saved (no email sent)');
       queryClient.invalidateQueries({ queryKey: ['org-participant', participant.id] });
       if (participant.project?.id) queryClient.invalidateQueries({ queryKey: ['org-participants', participant.project.id] });
     },
     onError: (err: Error) => toast.error(err.message || 'Failed to save'),
+  });
+
+  const rereadMutation = useMutation({
+    mutationFn: () => organisationApi.rereadReceipts(participant.id),
+    onSuccess: (r) => {
+      toast.success(`${r.read} receipt${r.read === 1 ? '' : 's'} read again${r.skippedCorrected ? ` (${r.skippedCorrected} corrected by you kept as they are)` : ''}`);
+      queryClient.invalidateQueries({ queryKey: ['org-participant', participant.id] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Could not read the receipts again'),
   });
 
   const isPaid = participant.status === 'PAID';
@@ -2307,11 +2724,11 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
     parsedFood !== (participant.greenTravelFoodEur ?? 0) ||
     parsedAcc !== (participant.greenTravelAccommodationEur ?? 0) ||
     (note.trim() || '') !== (participant.greenTravelExtraNote || '');
-  const filledIn = !!calc && parsedFood === calc.foodEur && parsedAcc === calc.accommodationEur;
 
   const handleSave = () => {
     if (invalid) { toast.error('Amounts must be numbers of 0 or more'); return; }
-    if (window.confirm(`Save a green travel extra of ${formatCurrency(parsedFood + parsedAcc)}? This amount is paid on top of the travel maximum and the participant will receive an email.`)) {
+    const email = notify ? ' and the participant will receive an email' : ' (no email will be sent)';
+    if (window.confirm(`Save a green travel extra of ${formatCurrency(parsedFood + parsedAcc)}? This amount is paid on top of the travel maximum${email}.`)) {
       mutation.mutate();
     }
   };
@@ -2330,8 +2747,9 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
             </p>
             <p className="text-sm text-gray-500 mt-0.5">
               Food and accommodation you pay on top of the travel maximum. The amounts you save are paid in full, so
-              enter what the participant should receive (not a budget). The participant is emailed when you save.
+              enter what the participant should receive (not a budget).
             </p>
+            <GreenTravelGuide />
           </div>
           {current > 0 && participant.greenTravelExtraUpdatedAt && (
             <p className="text-xs text-gray-400">Set {formatDate(participant.greenTravelExtraUpdatedAt)} · {formatCurrency(current)}</p>
@@ -2340,20 +2758,34 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
 
         {isGreen && s && (
           <div className="mt-3 p-3 rounded-xl bg-emerald-50 text-sm text-emerald-900">
-            <p>
-              Travelled <strong>{s.totalTravelDays} day{s.totalTravelDays === 1 ? '' : 's'}</strong> in total
-              {s.firstTravelDate && s.lastTravelDate && ` (${formatDate(s.firstTravelDate)} → ${formatDate(s.lastTravelDate)})`},
-              {' '}<strong>{s.extraTravelDays}</strong> beyond the project dates.
-            </p>
-            <ReceiptGallery participantId={participant.id} receipts={s.receipts} />
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <p>
+                Travelled <strong>{s.totalTravelDays} day{s.totalTravelDays === 1 ? '' : 's'}</strong> in total
+                {s.firstTravelDate && s.lastTravelDate && ` (${formatDate(s.firstTravelDate)} → ${formatDate(s.lastTravelDate)})`},
+                {' '}<strong>{s.extraTravelDays}</strong> beyond the project dates.
+              </p>
+              {s.receipts.length > 0 && !isPaid && (
+                <button
+                  type="button"
+                  onClick={() => rereadMutation.mutate()}
+                  disabled={rereadMutation.isPending}
+                  className="text-xs font-medium text-emerald-700 hover:text-emerald-900 flex items-center gap-1 disabled:opacity-50"
+                  title="Let the AI read the receipts again, knowing the trip's dates and countries. Receipts you corrected stay as they are."
+                >
+                  {rereadMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  {rereadMutation.isPending ? 'Reading…' : 'Read receipts again'}
+                </button>
+              )}
+            </div>
+            <ReceiptGallery participantId={participant.id} receipts={s.receipts} onEdit={isPaid ? undefined : setEditingReceipt} />
             {calc ? (
               <GreenTravelCalculationBox
                 calc={calc}
-                alreadyFilledIn={filledIn}
+                current={{ food: invalid ? -1 : parsedFood, accommodation: invalid ? -1 : parsedAcc }}
                 disabled={isPaid || mutation.isPending}
-                onFillIn={() => {
-                  setFood(String(calc.foodEur));
-                  setAccommodation(String(calc.accommodationEur));
+                onFillIn={(f, a) => {
+                  setFood(String(f));
+                  setAccommodation(String(a));
                 }}
               />
             ) : (
@@ -2367,17 +2799,193 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
           <Input label="Accommodation to pay (€)" type="number" min="0" step="0.01" value={accommodation} onChange={(e) => setAccommodation(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="0" />
           <Input label="Note to participant (optional)" value={note} onChange={(e) => setNote(e.target.value)} disabled={isPaid || mutation.isPending} placeholder="e.g. 2 nights, as agreed" />
         </div>
-        <div className="mt-3 flex items-center justify-between gap-3">
+        <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
           <p className="text-xs text-gray-400">
             {isPaid
               ? 'This participant has been paid — the extra can no longer be changed.'
               : `Total extra: ${formatCurrency(invalid ? 0 : parsedFood + parsedAcc)}${dirty ? ' · not saved yet' : ''}`}
           </p>
-          <Button size="sm" onClick={handleSave} loading={mutation.isPending} disabled={isPaid || !dirty || invalid}>
-            Save & notify participant
-          </Button>
+          <div className="flex items-center gap-3">
+            {!isPaid && (
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="rounded border-gray-300 w-3.5 h-3.5" />
+                Email the participant
+              </label>
+            )}
+            <Button size="sm" onClick={handleSave} loading={mutation.isPending} disabled={isPaid || !dirty || invalid}>
+              Save
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+      {editingReceipt && (
+        <ReceiptEditModal participantId={participant.id} receipt={editingReceipt} onClose={() => setEditingReceipt(null)} />
+      )}
+    </Card>
+  );
+}
+
+/** Emails the participant sent in reply to ours, with the AI summary, suggested steps and their files */
+function MessagesCard({ participant, onGoToTrip }: { participant: OrgParticipantDetailData; onGoToTrip: (travelItemId: string) => void }) {
+  const queryClient = useQueryClient();
+  const messages = participant.messages ?? [];
+  const [openId, setOpenId] = useState<string | null>(messages[0]?.id ?? null);
+  const [showEmail, setShowEmail] = useState<Record<string, boolean>>({});
+
+  const addMutation = useMutation({
+    mutationFn: ({ messageId, index }: { messageId: string; index: number }) =>
+      organisationApi.addMessageAttachment(participant.id, messageId, index),
+    onSuccess: (r) => {
+      toast.success(r.duplicate ? 'This file was already in the documents' : 'Added to the documents. The AI is reading it now.');
+      queryClient.invalidateQueries({ queryKey: ['org-participant', participant.id] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Could not add the file'),
+  });
+
+  const viewAttachment = async (messageId: string, index: number) => {
+    try {
+      const { url } = await organisationApi.getMessageAttachmentUrl(participant.id, messageId, index);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch {
+      toast.error('Could not open the file');
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2">
+          <Mail className="w-4 h-4 text-primary-500" />
+          <p className="font-semibold text-gray-900">Emails from {participant.firstName}</p>
+          <span className="text-xs text-gray-400">{messages.length}</span>
+        </div>
+        <p className="text-sm text-gray-500 mt-0.5">
+          Replies to our emails arrive here and in your inbox. The summary and the suggested steps are written by AI; check them against the email.
+        </p>
+        <div className="mt-3 space-y-3">
+          {messages.map((m) => (
+            <div key={m.id} className="rounded-xl border border-gray-200 p-3">
+              <button className="w-full text-left flex items-start justify-between gap-3" onClick={() => setOpenId(openId === m.id ? null : m.id)}>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{m.subject || '(no subject)'}</p>
+                  <p className="text-xs text-gray-500">
+                    {formatDate(m.receivedAt)} · {m.fromName || m.fromEmail}
+                    {m.attachments.length > 0 && ` · ${m.attachments.length} file${m.attachments.length === 1 ? '' : 's'}`}
+                  </p>
+                </div>
+                {openId === m.id ? <ChevronUp className="w-4 h-4 text-gray-400 flex-shrink-0" /> : <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />}
+              </button>
+              {m.aiSummary && (
+                <p className="mt-2 text-sm text-gray-700 flex items-start gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0 mt-0.5" />
+                  <span>{m.aiSummary}</span>
+                </p>
+              )}
+              {openId === m.id && (
+                <div className="mt-2 space-y-3">
+                  {m.aiSuggestions.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500">Suggested next steps</p>
+                      <ol className="list-decimal pl-5 text-sm text-gray-700 space-y-1 mt-1">
+                        {m.aiSuggestions.map((s, i) => (
+                          <li key={i}>
+                            {s.text}
+                            {s.travelItemId && (
+                              <button onClick={() => onGoToTrip(s.travelItemId!)} className="ml-1.5 text-xs text-primary-600 hover:underline">
+                                Go to trip
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+                  {m.attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {m.attachments.map((a, i) => (
+                        <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded-lg text-xs">
+                          <FileText className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                          <button onClick={() => viewAttachment(m.id, i)} className="truncate max-w-[200px] text-gray-800 hover:text-primary-600" title="Open the file">
+                            {a.name}
+                          </button>
+                          {a.documentId ? (
+                            <span className="text-emerald-600 flex items-center gap-1 whitespace-nowrap"><Check className="w-3 h-3" />In documents</span>
+                          ) : (
+                            <button
+                              onClick={() => addMutation.mutate({ messageId: m.id, index: i })}
+                              disabled={addMutation.isPending}
+                              className="text-primary-600 font-medium hover:underline whitespace-nowrap disabled:opacity-50"
+                            >
+                              Add to documents
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button onClick={() => setShowEmail((s) => ({ ...s, [m.id]: !s[m.id] }))} className="text-xs text-gray-500 hover:text-gray-700 underline">
+                    {showEmail[m.id] ? 'Hide the email' : 'Show the email'}
+                  </button>
+                  {showEmail[m.id] && (
+                    <pre className="whitespace-pre-wrap break-words text-sm text-gray-700 bg-gray-50 rounded-lg p-3 font-sans">{m.textBody}</pre>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/** Correct a participant's bank details; deliberate on purpose (confirmation, email to the participant) */
+function BankDetailsModal({ participant, onClose }: { participant: OrgParticipantDetailData; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [iban, setIban] = useState(participant.bankAccountIban || '');
+  const [holder, setHolder] = useState(participant.bankAccountHolderName || `${participant.firstName} ${participant.lastName}`);
+  const [bic, setBic] = useState(participant.bankAccountBic || '');
+  const [bankName, setBankName] = useState(participant.bankName || '');
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      organisationApi.updateBankDetails(participant.id, {
+        bankAccountIban: iban,
+        bankAccountHolderName: holder,
+        bankAccountBic: bic || null,
+        bankName: bankName || null,
+      }),
+    onSuccess: () => {
+      toast.success(`Bank details saved — ${participant.firstName} has been emailed`);
+      queryClient.invalidateQueries({ queryKey: ['org-participant', participant.id] });
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message || 'Could not save the bank details'),
+  });
+
+  const save = () => {
+    if (window.confirm(`Change ${participant.firstName}'s bank details? ${participant.firstName} will get an email about this change.`)) {
+      mutation.mutate();
+    }
+  };
+
+  return (
+    <Modal isOpen onClose={onClose} title="Correct bank details">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          Only change these when the participant gave you the right details. The change is logged, and {participant.firstName} gets an email about it.
+        </p>
+        <Input label="IBAN / account number" value={iban} onChange={(e) => setIban(e.target.value)} className="font-mono" />
+        <Input label="Account holder" value={holder} onChange={(e) => setHolder(e.target.value)} />
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="BIC (optional)" value={bic} onChange={(e) => setBic(e.target.value)} className="font-mono" />
+          <Input label="Bank name (optional)" value={bankName} onChange={(e) => setBankName(e.target.value)} />
+        </div>
+        <div className="flex justify-end gap-3">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} loading={mutation.isPending} disabled={!iban.trim() || !holder.trim()}>Save bank details</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

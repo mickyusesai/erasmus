@@ -15,6 +15,9 @@ import { JourneyConsolidationService } from '../../services/ai/journeyConsolidat
 import { ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { getEmailService } from '../../services/email/index.js';
+import { projectEmailContext } from '../../services/email/context.js';
+import { extractionContextFor } from '../../services/ai/extractionContext.js';
+import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
 import { generateDeclarationPdf, generateGreenTravelDeclarationPdf } from '../../services/pdf/index.js';
 import { validateCityCountry } from '../../services/geocoding/index.js';
 import { sortTravelItemsByJourney } from '../../utils/sortTravelItems.js';
@@ -489,11 +492,13 @@ router.post(
 
     // Extract document data in the background (don't block the response)
     // This enables the AI to analyze the document so consolidation works later
+    // The trip as context helps with years and local currencies ("zł" = PLN)
+    const extractionContext = await extractionContextFor(participant.id);
     consolidationService.extractAndStoreDocumentData(
       document.id,
       req.file.buffer,
       req.file.mimetype,
-      typeHint ? { typeHint } : undefined
+      { ...(typeHint ? { typeHint } : {}), context: extractionContext }
     ).catch((error) => {
       console.error(`[Upload] Background extraction failed for document ${document.id}:`, error);
     });
@@ -580,7 +585,8 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
         fullParticipant.email,
         fullParticipant.firstName,
         fullParticipant.project.name,
-        magicLink
+        magicLink,
+        await projectEmailContext(fullParticipant.project, fullParticipant.id)
       )
       .catch((err) => console.error('[Consolidation] Failed to send analysis-complete email:', err));
   }
@@ -745,11 +751,12 @@ router.post('/travel-items', participantAuth, asyncHandler(async (req: Request, 
   const currencyOriginal = result.data.currencyOriginal as string;
   if (!amountEur && amountOriginal && currencyOriginal) {
     const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
+    // Without a purchase date, the rate of the travel date is used
     amountEur = await convertToEurForParticipant(
       participant.id,
       amountOriginal,
       currencyOriginal,
-      (result.data.purchaseDate as Date | null) || undefined
+      (result.data.purchaseDate as Date | null) || (result.data.departureDate as Date | undefined) || undefined
     );
   }
 
@@ -840,6 +847,10 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
 
   // Prepare update data
   const updateData: Record<string, unknown> = { ...result.data };
+  // A trip moved to another day loses its place in the old day's manual order
+  if (result.data.departureDate instanceof Date && result.data.departureDate.getTime() !== current.departureDate.getTime()) {
+    updateData.sortOrder = null;
+  }
 
   // If amount is being changed, mark as manually edited
   if (isAmountChange) {
@@ -868,7 +879,9 @@ router.patch('/travel-items/:id', participantAuth, asyncHandler(async (req: Requ
         updateData.amountEur = Math.round(newAmount * current.exchangeRateOverride * 100) / 100;
       } else {
         const { convertToEurForParticipant } = await import('../../services/exchangeRate/index.js');
-        updateData.amountEur = await convertToEurForParticipant(participant.id, newAmount, currency, newPurchaseDate);
+        // Without a purchase date, the rate of the travel date is used
+        const rateDate = newPurchaseDate ?? (result.data.departureDate as Date | undefined) ?? current.departureDate;
+        updateData.amountEur = await convertToEurForParticipant(participant.id, newAmount, currency, rateDate);
       }
     }
   }
@@ -1835,7 +1848,8 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
     emailService.sendSubmissionConfirmation(
       participantWithProject.email,
       participantWithProject.firstName,
-      participantWithProject.project.name
+      participantWithProject.project.name,
+      await projectEmailContext(participantWithProject.project, participantWithProject.id)
     ).catch((err) => console.error('[Email] Failed to send submission confirmation:', err));
   }
 
@@ -1847,7 +1861,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         where: { id: participant.id },
         include: {
           project: true,
-          documents: { include: { extraction: true } },
+          documents: { include: { extraction: true }, orderBy: [{ uploadDate: 'asc' }, { id: 'asc' }] },
           travelItems: {
             orderBy: { departureDate: 'asc' },
             include: { declarationsOfTravel: true },
@@ -1867,6 +1881,8 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         where: { projectId: fullParticipant.projectId, country: fullParticipant.country },
       });
       const effectiveLimit = getEffectiveLimit(fullParticipant, countryLimit);
+      // Files other participants in the project claimed too (e.g. the fuel receipts of a shared car)
+      const sharedDocs = await findSharedDocuments(fullParticipant.id);
 
       const { generateParticipantReview } = await import('../../services/ai/claudeAiService.js');
       const findings = await generateParticipantReview({
@@ -1907,6 +1923,8 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
           distanceKm: item.distanceKm,
           validationWarnings: item.validationWarnings,
           documentId: item.documentId,
+          additionalDocumentIds: item.additionalDocumentIds,
+          luggageDocumentId: item.luggageDocumentId,
           amountIncludedInRoundTrip: item.amountIncludedInRoundTrip,
           luggageAmount: item.luggageAmount,
           luggageAmountEur: item.luggageAmountEur,
@@ -1924,7 +1942,10 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
             passengerName: doc.extraction.passengerName,
             amount: doc.extraction.amount,
             currency: doc.extraction.currency,
+            documentDate: doc.extraction.documentDate?.toISOString().slice(0, 10) ?? null,
+            merchantName: doc.extraction.merchantName,
           } : null,
+          sharedWith: (sharedDocs.get(doc.id) ?? []).map((s) => `${s.name} (${s.how})`),
         })),
         declarationsOnHonor: fullParticipant.declarationsOnHonor.map((d) => ({
           missingDocumentType: d.missingDocumentType,
@@ -1961,6 +1982,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
             message: f.message,
             category: f.category,
             travelItemId: (f as any).travelItemId || null,
+            documentIds: f.documentIds?.length ? JSON.stringify(f.documentIds) : null,
           })),
         });
       }

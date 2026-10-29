@@ -300,7 +300,7 @@ export function submissionConfirmationSubject(projectName: string): string {
   return `Reimbursement Submitted - ${projectName}`;
 }
 
-export function submissionConfirmationText(participantName: string, projectName: string): string {
+export function submissionConfirmationText(participantName: string, projectName: string, ctx?: ProjectEmailContext): string {
   return `Hello ${participantName},
 
 Your travel reimbursement for "${projectName}" has been submitted successfully!
@@ -314,13 +314,13 @@ What happens next:
 You do not need to take any further action. If the organisation needs additional information, they will contact you.
 
 Best regards,
-The ${projectName} Team
+${ctx?.organisationName || `The ${projectName} Team`}
 
 ---
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+${textFooter(ctx)}`;
 }
 
-export function submissionConfirmationHtml(participantName: string, projectName: string): string {
+export function submissionConfirmationHtml(participantName: string, projectName: string, ctx?: ProjectEmailContext): string {
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
     ${successBox('Your travel reimbursement for <strong>"' + projectName + '"</strong> has been submitted successfully!')}
@@ -332,7 +332,7 @@ export function submissionConfirmationHtml(participantName: string, projectName:
       <li>After approval, payment will be processed to your bank account</li>
     </ol>
     ${infoBox('You do not need to take any further action. If the organisation needs additional information, they will contact you.')}
-  `);
+  `, ctx);
 }
 
 // =============================================================================
@@ -402,7 +402,7 @@ export function approvalSubject(projectName: string): string {
   return `Reimbursement Approved - ${projectName}`;
 }
 
-export function approvalText(participantName: string, projectName: string, amountEur: number): string {
+export function approvalText(participantName: string, projectName: string, amountEur: number, ctx?: ProjectEmailContext): string {
   const formatted = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amountEur);
   return `Hello ${participantName},
 
@@ -413,13 +413,13 @@ Approved amount: ${formatted}
 Payment will be processed to the bank account you provided. The timing depends on the project organisation's payment schedule.
 
 Best regards,
-The ${projectName} Team
+${ctx?.organisationName || `The ${projectName} Team`}
 
 ---
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+${textFooter(ctx)}`;
 }
 
-export function approvalHtml(participantName: string, projectName: string, amountEur: number): string {
+export function approvalHtml(participantName: string, projectName: string, amountEur: number, ctx?: ProjectEmailContext): string {
   const formatted = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amountEur);
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
@@ -429,7 +429,7 @@ export function approvalHtml(participantName: string, projectName: string, amoun
       <p style="font-size: 28px; font-weight: 700; color: #059669; margin: 0;">${formatted}</p>
     </div>
     ${infoBox('Payment will be processed to the bank account you provided. The timing depends on the project organisation\'s payment schedule.')}
-  `);
+  `, ctx);
 }
 
 // =============================================================================
@@ -440,7 +440,7 @@ export function paymentSubject(projectName: string): string {
   return `Payment Processed - ${projectName}`;
 }
 
-export function paymentText(participantName: string, projectName: string, amountEur: number): string {
+export function paymentText(participantName: string, projectName: string, amountEur: number, ctx?: ProjectEmailContext): string {
   const formatted = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amountEur);
   return `Hello ${participantName},
 
@@ -451,13 +451,13 @@ Amount: ${formatted}
 The payment has been initiated to the bank account you provided. Please allow a few business days for it to appear in your account.
 
 Best regards,
-The ${projectName} Team
+${ctx?.organisationName || `The ${projectName} Team`}
 
 ---
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+${textFooter(ctx)}`;
 }
 
-export function paymentHtml(participantName: string, projectName: string, amountEur: number): string {
+export function paymentHtml(participantName: string, projectName: string, amountEur: number, ctx?: ProjectEmailContext): string {
   const formatted = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amountEur);
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
@@ -467,7 +467,7 @@ export function paymentHtml(participantName: string, projectName: string, amount
       <p style="font-size: 28px; font-weight: 700; color: #059669; margin: 0;">${formatted}</p>
     </div>
     ${infoBox('The payment has been initiated to the bank account you provided. Please allow a few business days for it to appear in your account.')}
-  `);
+  `, ctx);
 }
 
 // =============================================================================
@@ -478,7 +478,7 @@ export function reopenSubject(projectName: string): string {
   return `Action Required - Your Reimbursement Needs Changes - ${projectName}`;
 }
 
-export function reopenText(participantName: string, projectName: string, message: string): string {
+export function reopenText(participantName: string, projectName: string, message: string, ctx?: ProjectEmailContext): string {
   return `Hello ${participantName},
 
 Your travel reimbursement for "${projectName}" has been reopened by the organisation.
@@ -489,22 +489,22 @@ Message from the organisation:
 Please log in using your original link and make the requested changes, then submit again.
 
 Best regards,
-The ${projectName} Team
+${ctx?.organisationName || `The ${projectName} Team`}
 
 ---
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+${textFooter(ctx)}`;
 }
 
-export function reopenHtml(participantName: string, projectName: string, message: string): string {
+export function reopenHtml(participantName: string, projectName: string, message: string, ctx?: ProjectEmailContext): string {
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
     ${warningBox('Your reimbursement for <strong>"' + projectName + '"</strong> has been reopened and needs changes.')}
     <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin: 20px 0;">
       <p style="font-size: 13px; color: #6b7280; margin: 0 0 8px 0; font-weight: 600;">Message from the organisation:</p>
-      <p style="margin: 0; color: #374151; white-space: pre-wrap;">${message}</p>
+      <p style="margin: 0; color: #374151; white-space: pre-wrap;">${escapeHtml(message)}</p>
     </div>
     ${infoBox('Please open your original reimbursement link and make the requested changes, then submit again.')}
-  `);
+  `, ctx);
 }
 
 // =============================================================================
@@ -515,7 +515,7 @@ export function analysisCompleteSubject(projectName: string): string {
   return `Your travel documents have been analysed – ${projectName}`;
 }
 
-export function analysisCompleteText(participantName: string, projectName: string, magicLink: string): string {
+export function analysisCompleteText(participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): string {
   return `Hello ${participantName},
 
 Great news! We have finished analysing all your travel documents for the Erasmus+ project "${projectName}".
@@ -530,16 +530,16 @@ What to do next:
 - Correct any amounts, dates or locations if needed
 - Add your bank details and submit
 
-If you have any questions, please contact the project team.
+If you have any questions, ${ctx?.replyTo ? 'just reply to this email' : 'please contact the project team'}.
 
 Best regards,
-The EasyReimburse Team
+${ctx?.organisationName || 'The EasyReimburse Team'}
 
---
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+---
+${textFooter(ctx)}`;
 }
 
-export function analysisCompleteHtml(participantName: string, projectName: string, magicLink: string): string {
+export function analysisCompleteHtml(participantName: string, projectName: string, magicLink: string, ctx?: ProjectEmailContext): string {
   return wrapInLayout(`
     <p>Hello <strong>${participantName}</strong>,</p>
     ${successBox('Great news! We have finished analysing all your travel documents for <strong>"' + projectName + '"</strong>.')}
@@ -553,7 +553,7 @@ export function analysisCompleteHtml(participantName: string, projectName: strin
       <li>Add your bank details and submit</li>
     </ul>
     <p>If you have any questions, please contact your project team.</p>
-  `);
+  `, ctx);
 }
 
 // =============================================================================
@@ -668,5 +668,121 @@ export function greenTravelExtraHtml(participantName: string, projectName: strin
     ${amounts.note ? infoBox(`<strong>Note from ${who}:</strong> ${escapeHtml(amounts.note)}`) : ''}
     <p>Your reimbursement total is now <strong>${eur(amounts.newTotalEur)}</strong>.</p>
     ${button(magicLink, 'View my reimbursement')}
+  `, ctx);
+}
+
+// =============================================================================
+// PARTICIPANT REPLY (forwarded to the organisation, with an AI summary)
+// =============================================================================
+
+export interface ForwardedReply {
+  participantName: string;
+  participantEmail: string;
+  projectName: string;
+  subject: string | null;
+  text: string;
+  summary: string | null;
+  suggestedActions: string[];
+  attachmentNames: string[];
+  dashboardUrl: string;
+}
+
+/** The participant can be reached by replying (the forward has their address as Reply-To) */
+function replyContext(r: ForwardedReply): ProjectEmailContext {
+  return { organisationName: r.participantName, replyTo: r.participantEmail };
+}
+
+export function participantReplySubject(r: ForwardedReply): string {
+  const subject = (r.subject || '').replace(/^\s*((re|aw|sv|antw|odp|vs|fw|fwd)\s*:\s*)+/i, '').trim();
+  return `${r.participantName} replied: ${subject || r.projectName}`;
+}
+
+export function participantReplyText(r: ForwardedReply): string {
+  const steps = r.suggestedActions.length
+    ? `Suggested next steps:\n${r.suggestedActions.map((a, i) => `${i + 1}. ${a}`).join('\n')}\n`
+    : '';
+  const files = r.attachmentNames.length
+    ? `\nAttached files: ${r.attachmentNames.join(', ')}. Add them to the documents from ${r.participantName}'s page.\n`
+    : '';
+  return `${r.participantName} replied about their reimbursement for "${r.projectName}".
+
+${r.summary ? `Summary (AI): ${r.summary}\n` : ''}${steps}
+Open ${r.participantName}'s reimbursement:
+${r.dashboardUrl}
+${files}
+--- Original message from ${r.participantName} <${r.participantEmail}> ---
+${r.text}
+
+---
+Reply to this email to answer ${r.participantName} directly. The summary and steps are written by AI; check them against the original message.
+${textFooter(replyContext(r))}`;
+}
+
+export function participantReplyHtml(r: ForwardedReply): string {
+  const steps = r.suggestedActions.length
+    ? `<p style="margin: 12px 0 4px 0; font-weight: 600; color: #4c1d95;">Suggested next steps</p>
+      <ol style="margin: 0; padding-left: 20px; color: #374151;">${r.suggestedActions.map((a) => `<li style="margin: 2px 0;">${escapeHtml(a)}</li>`).join('')}</ol>`
+    : '';
+  return wrapInLayout(`
+    <p><strong>${escapeHtml(r.participantName)}</strong> replied about their reimbursement for "${escapeHtml(r.projectName)}".</p>
+    ${r.summary || steps ? `<div style="background: #f5f3ff; border-left: 4px solid #8b5cf6; padding: 15px; margin: 20px 0; border-radius: 0 8px 8px 0;">
+      ${r.summary ? `<p style="margin: 0;"><strong>Summary (AI):</strong> ${escapeHtml(r.summary)}</p>` : ''}
+      ${steps}
+    </div>` : ''}
+    ${button(r.dashboardUrl, `Open ${escapeHtml(r.participantName.split(' ')[0])}'s reimbursement`)}
+    ${r.attachmentNames.length ? infoBox(`<strong>Attached files:</strong> ${r.attachmentNames.map(escapeHtml).join(', ')}<br>Add them to the documents from the participant's page.`) : ''}
+    <p style="font-size: 13px; color: #6b7280; margin: 24px 0 6px 0;">Original message from ${escapeHtml(r.participantName)} &lt;${escapeHtml(r.participantEmail)}&gt;</p>
+    <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; white-space: pre-wrap; color: #374151;">${escapeHtml(r.text)}</div>
+    <p style="font-size: 12px; color: #9ca3af; margin-top: 12px;">Reply to this email to answer ${escapeHtml(r.participantName)} directly. The summary and steps are written by AI; check them against the original message.</p>
+  `, replyContext(r));
+}
+
+// =============================================================================
+// BANK DETAILS CHANGED BY THE ORGANISATION (sent to the participant, for safety)
+// =============================================================================
+
+export function bankDetailsChangedSubject(projectName: string): string {
+  return `Your bank details were updated – ${projectName}`;
+}
+
+export function bankDetailsChangedText(
+  participantName: string,
+  projectName: string,
+  details: { holderName: string | null; maskedAccount: string; bic: string | null },
+  ctx?: ProjectEmailContext
+): string {
+  const who = ctx?.organisationName || 'The project team';
+  return `Hello ${participantName},
+
+${who} updated the bank details for your reimbursement for "${projectName}":
+
+- Account holder: ${details.holderName || '-'}
+- Account: ${details.maskedAccount}${details.bic ? `\n- BIC: ${details.bic}` : ''}
+
+If this is not right, please reply to this email.
+
+Best regards,
+${who}
+
+---
+${textFooter(ctx)}`;
+}
+
+export function bankDetailsChangedHtml(
+  participantName: string,
+  projectName: string,
+  details: { holderName: string | null; maskedAccount: string; bic: string | null },
+  ctx?: ProjectEmailContext
+): string {
+  const who = escapeHtml(ctx?.organisationName || 'The project team');
+  return wrapInLayout(`
+    <p>Hello <strong>${escapeHtml(participantName)}</strong>,</p>
+    ${infoBox(`${who} updated the bank details for your reimbursement for "${escapeHtml(projectName)}".`)}
+    <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
+      <tr><td style="padding: 6px 0; color: #6b7280;">Account holder</td><td style="padding: 6px 0; text-align: right; font-weight: 600;">${escapeHtml(details.holderName || '-')}</td></tr>
+      <tr><td style="padding: 6px 0; color: #6b7280;">Account</td><td style="padding: 6px 0; text-align: right; font-weight: 600; font-family: monospace;">${escapeHtml(details.maskedAccount)}</td></tr>
+      ${details.bic ? `<tr><td style="padding: 6px 0; color: #6b7280;">BIC</td><td style="padding: 6px 0; text-align: right; font-weight: 600; font-family: monospace;">${escapeHtml(details.bic)}</td></tr>` : ''}
+    </table>
+    <p>If this is not right, please reply to this email.</p>
   `, ctx);
 }

@@ -13,6 +13,8 @@ import adminRoutes from './routes/admin/index.js';
 import participantRoutes from './routes/participant/index.js';
 import superAdminRoutes from './routes/superadmin/index.js';
 import stripeWebhookRoutes from './routes/stripe/webhook.js';
+import inboundRoutes from './routes/inbound/index.js';
+import supportRoutes from './routes/support/index.js';
 import { getStorageService } from './services/storage/index.js';
 
 // Load environment variables
@@ -43,6 +45,9 @@ app.use('/api', limiter);
 
 // Stripe webhook — must be registered BEFORE express.json() (needs raw body)
 app.use('/api/stripe', stripeWebhookRoutes);
+
+// Participants' email replies (Postmark inbound) — parses its own, larger JSON body
+app.use('/api/inbound', inboundRoutes);
 
 // Body parsing
 app.use(express.json());
@@ -108,6 +113,7 @@ app.use('/api/organisation', organisationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/participant', participantRoutes);
 app.use('/api/super-admin', superAdminRoutes);
+app.use('/api/support', supportRoutes);
 
 // Error handling
 app.use(errorHandler);
@@ -130,7 +136,7 @@ async function notifyEndedProjects() {
       include: {
         participants: {
           where: { status: 'DRAFT', magicLinkActive: true },
-          select: { email: true, firstName: true, magicLinkToken: true },
+          select: { id: true, email: true, firstName: true, magicLinkToken: true },
         },
       },
     });
@@ -147,9 +153,9 @@ async function notifyEndedProjects() {
         where: { id: project.id },
         data: { endEmailSentAt: now },
       });
-      const emailCtx = await projectEmailContext(project);
       for (const p of project.participants) {
         const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
+        const emailCtx = await projectEmailContext(project, p.id);
         emailService
           .sendProjectEnded(p.email, p.firstName, project.name, magicLink, emailCtx)
           .catch((err) => console.error(`[Project End] Failed to email ${p.email}:`, err));

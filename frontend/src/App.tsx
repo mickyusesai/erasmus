@@ -19,6 +19,8 @@ import OrgBilling from './pages/organisation/Billing';
 import OrgSettings from './pages/organisation/Settings';
 import OrgAffiliate from './pages/organisation/AffiliatePage';
 import OrgParticipantDetail from './pages/organisation/ParticipantDetail';
+import OrgSupportSession from './pages/organisation/SupportSession';
+import { SupportSessionBanner } from './components/support/SupportSessionBanner';
 import OrgForgotPassword from './pages/organisation/ForgotPassword';
 import OrgResetPassword from './pages/organisation/ResetPassword';
 
@@ -44,6 +46,8 @@ function ProtectedAdminRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
+    <>
+    <SupportSessionBanner />
     <Routes>
       {/* Admin routes */}
       <Route path="/admin/login" element={<AdminLogin />} />
@@ -71,6 +75,7 @@ function App() {
       <Route path="/org/projects/new" element={<OrgProjectCreate />} />
       <Route path="/org/projects/:id" element={<OrgProjectDetail />} />
       <Route path="/org/participants/:id" element={<OrgParticipantDetail />} />
+      <Route path="/org/support-session" element={<OrgSupportSession />} />
       <Route path="/org/billing" element={<OrgBilling />} />
       <Route path="/org/settings" element={<OrgSettings />} />
       <Route path="/org/affiliate" element={<OrgAffiliate />} />
@@ -90,6 +95,7 @@ function App() {
       <Route path="/" element={<Navigate to="/org/login" replace />} />
       <Route path="*" element={<Navigate to="/org/login" replace />} />
     </Routes>
+    </>
   );
 }
 
