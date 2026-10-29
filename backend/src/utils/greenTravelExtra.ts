@@ -1,10 +1,11 @@
 /**
- * The project's rule for the green travel extra: food and accommodation on the
- * extra travel days of a green traveller, outside the project dates.
+ * The project's rule for the green travel extra: food and accommodation for the
+ * journey of a green traveller.
  *
  * MANUAL   – the organiser types the amounts per participant (no calculation)
- * RECEIPTS – the participant's receipts, food capped per extra day and
- *            accommodation capped at (extra nights × nightly limit)
+ * RECEIPTS – the participant's receipts: food capped per travel day (the extra days
+ *            outside the project, and project days with a trip, e.g. snacks for the
+ *            way home on the last day), accommodation capped at (extra nights × nightly limit)
  * FIXED    – a fixed amount per extra day (food) and per extra night (accommodation)
  *
  * This only suggests the amounts. The organiser still checks and saves them.
@@ -40,6 +41,8 @@ export interface ExtraTravelDates {
    * last one (that evening the participant is home).
    */
   nights: string[];
+  /** Project days with a trip (e.g. the first and last day), when food for the journey counts too */
+  projectTravelDays: string[];
 }
 
 /** Same day span as summarizeTravelDays (utils/travelDays.ts), as lists of dates */
@@ -53,12 +56,13 @@ export function extraTravelDates(
     .flatMap((t) => [t.departureDate, t.arrivalDate])
     .filter((d): d is Date => !!d)
     .map(dayUtc);
-  if (dates.length === 0) return { days: [], nights: [] };
+  if (dates.length === 0) return { days: [], nights: [], projectTravelDays: [] };
 
   const first = Math.min(...dates);
   const last = Math.max(...dates);
   const start = dayUtc(projectStart);
   const end = Math.max(dayUtc(projectEnd), start);
+  const projectTravelDays = [...new Set(dates.filter((d) => d >= start && d <= end))].sort((a, b) => a - b).map(isoDay);
 
   const days: string[] = [];
   const nights: string[] = [];
@@ -70,7 +74,7 @@ export function extraTravelDates(
     days.push(isoDay(d));
     if (d < last) nights.push(isoDay(d));
   }
-  return { days, nights };
+  return { days, nights, projectTravelDays };
 }
 
 export interface ExtraReceipt {
@@ -98,10 +102,12 @@ export interface GreenTravelCalculation {
   accommodationPerNightEur: number;
   extraDays: string[];
   extraNights: string[];
+  /** RECEIPTS: project days with a trip, when food receipts count too */
+  projectTravelDays: string[];
   /** Suggested amounts */
   foodEur: number;
   accommodationEur: number;
-  /** RECEIPTS: food spent per extra day and what counts after the daily limit */
+  /** RECEIPTS: food spent per travel day and what counts after the daily limit */
   foodDays: { date: string; spentEur: number; countedEur: number }[];
   /** RECEIPTS: accommodation receipts on the extra nights, and the cap (nights × limit) */
   accommodationSpentEur: number;
@@ -141,6 +147,7 @@ export function calculateGreenTravelExtra(input: {
     accommodationPerNightEur: perNight,
     extraDays: days,
     extraNights: nights,
+    projectTravelDays: input.extra.projectTravelDays ?? [],
   };
 
   if (input.mode === 'FIXED') {
@@ -156,7 +163,9 @@ export function calculateGreenTravelExtra(input: {
     };
   }
 
-  const daySet = new Set(days);
+  // Food counts on every travel day: the extra days, and project days with a trip
+  const foodDays = [...new Set([...days, ...(input.extra.projectTravelDays ?? [])])].sort();
+  const foodDaySet = new Set(foodDays);
   const nightSet = new Set(nights);
   const startDay = isoDay(dayUtc(input.projectStart));
   const endDay = isoDay(dayUtc(input.projectEnd));
@@ -168,7 +177,7 @@ export function calculateGreenTravelExtra(input: {
   const correctedDates: GreenTravelCalculation['correctedDates'] = [];
 
   const counts = (kind: ExtraReceipt['kind'], date: string) =>
-    kind === 'FOOD' ? daySet.has(date) : nightSet.has(date) || nightSet.has(dayBefore(date)); // hotel bills are often dated at check-out
+    kind === 'FOOD' ? foodDaySet.has(date) : nightSet.has(date) || nightSet.has(dayBefore(date)); // hotel bills are often dated at check-out
   const shiftYear = (date: string, years: number) => `${Number(date.slice(0, 4)) + years}${date.slice(4)}`;
   const window = input.travelWindow;
   const duringTrip = (date: string) => !!window && date >= window.first && date <= window.last;
@@ -213,7 +222,7 @@ export function calculateGreenTravelExtra(input: {
     leaveOut(date >= startDay && date <= endDay ? 'DURING_PROJECT' : 'NOT_AN_EXTRA_DAY', date);
   }
 
-  const foodDays = days
+  const spentDays = foodDays
     .filter((d) => spentPerDay.has(d))
     .map((date) => {
       const spentEur = round2(spentPerDay.get(date)!);
@@ -224,9 +233,9 @@ export function calculateGreenTravelExtra(input: {
 
   return {
     ...base,
-    foodEur: round2(foodDays.reduce((sum, d) => sum + d.countedEur, 0)),
+    foodEur: round2(spentDays.reduce((sum, d) => sum + d.countedEur, 0)),
     accommodationEur: round2(Math.min(accommodationSpentEur, accommodationCapEur)),
-    foodDays,
+    foodDays: spentDays,
     accommodationSpentEur,
     accommodationCapEur,
     notCounted,

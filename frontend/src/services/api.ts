@@ -1410,6 +1410,8 @@ export interface GreenTravelCalculation {
   accommodationPerNightEur: number;
   extraDays: string[];
   extraNights: string[];
+  /** RECEIPTS: project days with a trip (e.g. the last day), when food receipts count too */
+  projectTravelDays?: string[];
   foodEur: number;
   accommodationEur: number;
   foodDays: { date: string; spentEur: number; countedEur: number }[];

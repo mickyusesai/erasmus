@@ -16,6 +16,7 @@ describe('extra travel dates', () => {
     expect(extraTravelDates([trip('2026-08-24'), trip('2026-09-03')], projectStart, projectEnd)).toEqual({
       days: ['2026-08-24', '2026-09-03'],
       nights: ['2026-08-24'],
+      projectTravelDays: [],
     });
   });
 
@@ -24,12 +25,17 @@ describe('extra travel dates', () => {
     expect(extraTravelDates(items, projectStart, projectEnd)).toEqual({
       days: ['2026-08-23', '2026-08-24', '2026-09-03', '2026-09-04'],
       nights: ['2026-08-23', '2026-08-24', '2026-09-03'],
+      projectTravelDays: [],
     });
   });
 
-  it('ignores trips that are not reimbursed and travel inside the project', () => {
+  it('ignores trips that are not reimbursed; travel on project days is kept for food', () => {
     const items = [trip('2026-08-20', null, true), trip('2026-08-25'), trip('2026-09-02')];
-    expect(extraTravelDates(items, projectStart, projectEnd)).toEqual({ days: [], nights: [] });
+    expect(extraTravelDates(items, projectStart, projectEnd)).toEqual({
+      days: [],
+      nights: [],
+      projectTravelDays: ['2026-08-25', '2026-09-02'],
+    });
   });
 });
 
@@ -112,6 +118,40 @@ describe('receipt dates read a year off', () => {
     });
     expect(result.correctedDates).toEqual([]);
     expect(result.notCounted).toEqual([{ id: 'cafe', filename: 'cafe.jpg', kind: 'FOOD', date: '2026-08-27', amountEur: 12, reason: 'DURING_PROJECT' }]);
+  });
+});
+
+describe('food on project days with a trip', () => {
+  it('counts snacks for the way home on the last project day, not food on other project days', () => {
+    // Arrives the day before the start; leaves on the last day and gets home the next day
+    const items = [trip('2026-08-24'), trip('2026-09-02', '2026-09-03')];
+    const result = calculateGreenTravelExtra({
+      mode: 'RECEIPTS', foodPerDayEur: 20, accommodationPerNightEur: 25,
+      extra: extraTravelDates(items, projectStart, projectEnd), projectStart, projectEnd,
+      travelWindow: { first: '2026-08-24', last: '2026-09-03' },
+      receipts: [
+        { id: 'station-snacks', kind: 'FOOD', filename: 'snacks.jpg', date: '2026-09-02', amountEur: 8.5 },
+        { id: 'bistro', kind: 'FOOD', filename: 'bistro.jpg', date: '2025-09-02', amountEur: 24.4 }, // year misread
+        { id: 'project-cafe', kind: 'FOOD', filename: 'cafe.jpg', date: '2026-08-28', amountEur: 6 },
+        { id: 'venue-room', kind: 'ACCOMMODATION', filename: 'room.pdf', date: '2026-08-28', amountEur: 30 },
+      ],
+    });
+    expect(result.projectTravelDays).toEqual(['2026-09-02']);
+    expect(result.foodDays).toEqual([{ date: '2026-09-02', spentEur: 32.9, countedEur: 20 }]);
+    expect(result.correctedDates.map((c) => c.to)).toEqual(['2026-09-02']);
+    expect(result.notCounted.map((n) => [n.id, n.reason])).toEqual([
+      ['project-cafe', 'DURING_PROJECT'],
+      ['venue-room', 'DURING_PROJECT'],
+    ]);
+  });
+
+  it('keeps the fixed amount to the extra days', () => {
+    const items = [trip('2026-08-25'), trip('2026-09-02', '2026-09-03')];
+    const result = calculateGreenTravelExtra({
+      mode: 'FIXED', foodPerDayEur: 40, accommodationPerNightEur: 35,
+      extra: extraTravelDates(items, projectStart, projectEnd), projectStart, projectEnd, receipts: [],
+    });
+    expect(result.foodEur).toBe(40); // only 3 Sept, outside the project
   });
 });
 

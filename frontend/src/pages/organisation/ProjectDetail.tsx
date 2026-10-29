@@ -1712,7 +1712,7 @@ const GREEN_TRAVEL_RULES: { value: GreenTravelExtraMode; label: string; help: st
   {
     value: 'RECEIPTS',
     label: 'Receipts, up to a limit',
-    help: 'Receipts from the extra travel days count, up to your limit per day for food and per night for accommodation.',
+    help: 'Food receipts from every travel day count, also the first or last project day if they travel then, up to your limit per day. Hotel receipts count for the nights outside the project, up to your limit per night.',
   },
   {
     value: 'FIXED',
@@ -1751,8 +1751,8 @@ function GreenTravelRuleSetting({
     <div className="p-3 bg-gray-50 rounded-xl">
       <p className="font-medium text-gray-900">Green travel extra</p>
       <p className="text-sm text-gray-500 mt-0.5">
-        Food and accommodation for green travellers on their extra travel days outside the project dates. Whichever you
-        choose, you still check and save the amounts on each participant's page.
+        Food and accommodation for green travellers' longer journeys to and from the project. Whichever you choose, you
+        still check and save the amounts on each participant's page.
       </p>
       <div className="mt-3 space-y-2">
         {GREEN_TRAVEL_RULES.map((rule) => (
@@ -1775,7 +1775,7 @@ function GreenTravelRuleSetting({
       {mode !== 'MANUAL' && (
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
-            label={mode === 'RECEIPTS' ? 'Food: up to € per extra travel day' : 'Food: € per extra travel day'}
+            label={mode === 'RECEIPTS' ? 'Food: up to € per travel day' : 'Food: € per extra travel day'}
             type="number"
             min="0"
             step="0.01"

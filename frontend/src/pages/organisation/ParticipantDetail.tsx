@@ -2624,9 +2624,16 @@ const NOT_COUNTED_LABELS: Record<GreenTravelNotCountedReason, string> = {
   NO_RATE: 'no exchange rate found',
   NO_DATE: 'no date could be read',
   DURING_PROJECT: 'during the project',
-  NOT_AN_EXTRA_DAY: 'not on an extra travel day',
+  NOT_AN_EXTRA_DAY: 'not on an extra night',
   DUPLICATE: 'uploaded twice',
 };
+
+/** Food counts on every travel day; accommodation on the extra nights */
+function notCountedLabel(n: GreenTravelCalculation['notCounted'][number]): string {
+  if (n.kind === 'FOOD' && n.reason === 'DURING_PROJECT') return 'a project day without travel';
+  if (n.kind === 'FOOD' && n.reason === 'NOT_AN_EXTRA_DAY') return 'not on a travel day';
+  return NOT_COUNTED_LABELS[n.reason];
+}
 
 /**
  * What the project's green travel rule suggests, step by step. The organiser can pay a day or the
@@ -2676,7 +2683,11 @@ function GreenTravelCalculationBox({
           : `Project rule: ${formatCurrency(calc.foodPerDayEur)} food per extra day and ${formatCurrency(calc.accommodationPerNightEur)} accommodation per extra night`}
       </p>
       <p className="text-xs text-gray-500 mt-1">
-        Extra travel days: {listDays(calc.extraDays)} · Extra nights: {listDays(calc.extraNights)}
+        Extra travel days: {listDays(calc.extraDays)}
+        {calc.mode === 'RECEIPTS' && (calc.projectTravelDays?.length ?? 0) > 0 && (
+          <> · Project days with travel (food only): {listDays(calc.projectTravelDays!)}</>
+        )}
+        {' '}· Extra nights: {listDays(calc.extraNights)}
       </p>
 
       {calc.mode === 'FIXED' ? (
@@ -2693,7 +2704,7 @@ function GreenTravelCalculationBox({
       ) : (
         <div className="mt-2 space-y-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-700/80">Food</p>
-          {calc.foodDays.length === 0 && <p className="text-gray-500">No meal receipts on the extra travel days.</p>}
+          {calc.foodDays.length === 0 && <p className="text-gray-500">No meal receipts on the travel days.</p>}
           {calc.foodDays.map((d) => {
             const overLimit = d.countedEur < d.spentEur;
             const full = payFullDays.has(d.date);
@@ -2756,7 +2767,7 @@ function GreenTravelCalculationBox({
                     <span>
                       {n.filename}
                       {n.date ? ` (${formatIsoDay(n.date)})` : ''}
-                      {n.amountEur != null ? ` · ${formatCurrency(n.amountEur)}` : ''}: {NOT_COUNTED_LABELS[n.reason]}
+                      {n.amountEur != null ? ` · ${formatCurrency(n.amountEur)}` : ''}: {notCountedLabel(n)}
                       {n.duplicateOf ? ` (same receipt as ${n.duplicateOf})` : ''}
                     </span>
                   </li>
@@ -2796,7 +2807,7 @@ function GreenTravelGuide() {
         <ul className="mt-2 p-3 rounded-xl bg-emerald-50/60 text-xs text-gray-700 space-y-1.5 list-disc pl-6">
           <li><strong>Who is a green traveller:</strong> participants whose country row is marked green (or named like "Poland GREEN"), or set to "Yes" under Individual limit → Green travel.</li>
           <li><strong>Max Allowed</strong> is the amount of their country row; their travel costs are paid up to that maximum.</li>
-          <li><strong>Green travel extra</strong> is paid on top of the maximum: food and accommodation on the travel days outside the project dates. What you save here is paid in full.</li>
+          <li><strong>Green travel extra</strong> is paid on top of the maximum: food and accommodation for the longer journey. That's the extra travel days and nights outside the project dates. With receipts, food bought on the first or last project day also counts when they travel that day. What you save here is paid in full.</li>
           <li><strong>How it's worked out</strong> is set per project (Settings → Green travel extra): you decide per participant, receipts up to a limit per day/night, or a fixed amount per day/night. With a rule, this card shows the calculation; you can pay a day in full or count a left-out receipt before filling in.</li>
           <li><strong>Receipts:</strong> participants add them on their own page until they are paid. If the AI read an amount, currency or date wrongly, click the pencil on the receipt.</li>
           <li><strong>Saving</strong> updates "To Reimburse" straight away. Untick "Email the participant" to save without sending an email.</li>
