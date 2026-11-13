@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EasyReimburse promo B: Numbers</title>
+<script type="importmap">{"imports":{"gsap":"/node_modules/gsap/index.js","gsap/":"/node_modules/gsap/","d3-geo":"/node_modules/d3-geo/src/index.js","d3-array":"/node_modules/d3-array/src/index.js","internmap":"/node_modules/internmap/src/index.js","topojson-client":"/node_modules/topojson-client/src/index.js"}}</script>
+<link rel="stylesheet" href="/shared/base.css">
+<link rel="stylesheet" href="/node_modules/@fontsource-variable/unbounded/wght.css">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div id="stage">
+  <!-- Background: glows that pulse on the beat, a faint dot grid, a vignette -->
+  <div id="bg">
+    <div class="glow" id="g1"></div>
+    <div class="glow" id="g2"></div>
+    <div class="glow" id="g3"></div>
+    <div class="glow" id="g4"></div>
+    <div id="dots"></div>
+    <div id="vignette"></div>
+  </div>
+
+  <!-- Everything that shakes on a hit lives in here; scenes are built in scene.js -->
+  <div id="shaker"><div id="world"></div></div>
+
+  <div id="curtain"></div>
+  <div id="flash"></div>
+  <div id="blackout"></div>
+</div>
+<script type="module" src="./scene.js"></script>
+</body>
+</html>

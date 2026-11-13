@@ -1,0 +1,124 @@
+/* Shared base for all promo versions: fonts, brand tokens, the 1920x1080 stage */
+@import url('/node_modules/@fontsource-variable/inter/opsz.css');
+@import url('/node_modules/@fontsource-variable/jetbrains-mono/wght.css');
+
+:root {
+  /* Brand (same values as the app's Tailwind theme and the logo) */
+  --purple-50: #faf5ff;
+  --purple-100: #f3e8ff;
+  --purple-200: #e9d5ff;
+  --purple-300: #d8b4fe;
+  --purple-400: #c084fc;
+  --purple: #a855f7;
+  --purple-600: #9333ea;
+  --purple-700: #7e22ce;
+  --purple-900: #581c87;
+  --violet: #8b5cf6;
+  --fuchsia: #d946ef;
+  --pink-100: #fce7f3;
+  --pink-300: #f9a8d4;
+  --pink-400: #f472b6;
+  --pink: #ec4899;
+  --pink-600: #db2777;
+  --brand: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+  --brand-3: linear-gradient(135deg, #8b5cf6 0%, #d946ef 50%, #f472b6 100%);
+
+  --emerald-50: #ecfdf5;
+  --emerald-100: #d1fae5;
+  --emerald-400: #34d399;
+  --emerald: #10b981;
+  --emerald-700: #047857;
+  --amber-100: #fef3c7;
+  --amber-400: #fbbf24;
+  --amber: #f59e0b;
+  --rose: #f43f5e;
+  --sky: #0ea5e9;
+
+  --ink: #150b2e;
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-600: #4b5563;
+  --gray-700: #374151;
+  --gray-900: #111827;
+
+  --sans: 'Inter Variable', Inter, system-ui, sans-serif;
+  --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: #000;
+}
+
+body {
+  font-family: var(--sans);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  font-feature-settings: 'cv11', 'ss03';
+  color: var(--ink);
+}
+
+#stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+}
+
+/* A scene fills the stage; the timeline switches it on and off */
+.scene {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  overflow: hidden;
+}
+
+.abs { position: absolute; }
+.fill { position: absolute; inset: 0; }
+.center { display: flex; align-items: center; justify-content: center; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.tnum { font-variant-numeric: tabular-nums; }
+.nowrap { white-space: nowrap; }
+
+/* Split text helpers (see kit.js) */
+/* No will-change anywhere: layers keep their first rasterisation and frames would depend on history */
+.w, .c { display: inline-block; white-space: pre; }
+.line { display: block; }
+.clip { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.12em; margin-bottom: -0.12em; }
+
+svg.i { display: inline-block; vertical-align: middle; flex: none; }
+
+/* Fine film grain over everything: hides gradient banding in the encoded video */
+#grain {
+  position: absolute;
+  inset: -200px;
+  pointer-events: none;
+  z-index: 9000;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+}
+
+/* Time read-out for stills and contact sheets (?hud=1) */
+#hud {
+  position: absolute;
+  left: 24px;
+  bottom: 20px;
+  z-index: 9999;
+  padding: 8px 18px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font: 600 40px/1 var(--mono);
+}

@@ -1,0 +1,673 @@
+{
+ "version": "b-numbers",
+ "bpm": 124,
+ "beat": 0.484,
+ "bar": 1.935,
+ "bars": 14,
+ "duration": 27.1,
+ "barStarts": [
+  0,
+  1.935,
+  3.871,
+  5.806,
+  7.742,
+  9.677,
+  11.613,
+  13.548,
+  15.484,
+  17.419,
+  19.355,
+  21.29,
+  23.226,
+  25.161,
+  27.097
+ ],
+ "sections": [
+  {
+   "bars": "1-3",
+   "mood": "dim and tight: a kick-less pulse or muted bass, room for the three slams"
+  },
+  {
+   "bars": "4",
+   "mood": "tension: heartbeat, riser, high-pass sweep; two frames of silence at the end"
+  },
+  {
+   "bars": "5-6",
+   "mood": "the drop: full beat and bass come in; bar 6 is the logo"
+  },
+  {
+   "bars": "7-10",
+   "mood": "driving groove, one feature per bar"
+  },
+  {
+   "bars": "11-12",
+   "mood": "peak: \"Approve. Pay. Done.\" and the 90% stat"
+  },
+  {
+   "bars": "13-14",
+   "mood": "end card: resolve; last hit on the downbeat of bar 14, then ring out"
+  }
+ ],
+ "cues": [
+  {
+   "t": 0,
+   "type": "hit",
+   "note": "\"42\" slams in (first frame of the film)",
+   "level": 1
+  },
+  {
+   "t": 0.05,
+   "type": "tick",
+   "note": "42 avatars pop in one by one while the number counts up",
+   "to": 0.87,
+   "count": 42,
+   "level": 0.35
+  },
+  {
+   "t": 0.424,
+   "type": "pop",
+   "note": "word \"participants\" rises",
+   "level": 0.5
+  },
+  {
+   "t": 0.968,
+   "type": "hit",
+   "note": "count lands on 42: outline echo, wave through the crowd",
+   "level": 0.6
+  },
+  {
+   "t": 1.452,
+   "type": "pop",
+   "note": "second wave through the crowd",
+   "level": 0.35
+  },
+  {
+   "t": 1.825,
+   "type": "whoosh",
+   "note": "bar 1 darts out to the left",
+   "to": 1.935,
+   "level": 0.5
+  },
+  {
+   "t": 1.935,
+   "type": "cut",
+   "note": "bar 2"
+  },
+  {
+   "t": 1.935,
+   "type": "hit",
+   "note": "\"317\" slams in from the right",
+   "level": 1
+  },
+  {
+   "t": 2.255,
+   "type": "tick",
+   "note": "14 tickets fall onto a pile, one every 0.1s (paper slaps)",
+   "to": 3.555,
+   "count": 14,
+   "level": 0.5
+  },
+  {
+   "t": 2.359,
+   "type": "pop",
+   "note": "word \"tickets\" rises",
+   "level": 0.5
+  },
+  {
+   "t": 3.387,
+   "type": "hit",
+   "note": "count lands on 317: outline echo",
+   "level": 0.6
+  },
+  {
+   "t": 3.671,
+   "type": "whoosh",
+   "note": "pile is swept off to the left",
+   "to": 3.871,
+   "level": 0.6
+  },
+  {
+   "t": 3.871,
+   "type": "cut",
+   "note": "bar 3"
+  },
+  {
+   "t": 3.871,
+   "type": "hit",
+   "note": "number slams in showing \"1\", first currency tile lights",
+   "level": 0.9
+  },
+  {
+   "t": 4.113,
+   "type": "pop",
+   "note": "currency tile 2 lights, number counts to 2 (rising pitch works well)",
+   "level": 0.56
+  },
+  {
+   "t": 4.355,
+   "type": "pop",
+   "note": "currency tile 3 lights, number counts to 3 (rising pitch works well)",
+   "level": 0.62
+  },
+  {
+   "t": 4.597,
+   "type": "pop",
+   "note": "currency tile 4 lights, number counts to 4 (rising pitch works well)",
+   "level": 0.68
+  },
+  {
+   "t": 4.839,
+   "type": "pop",
+   "note": "currency tile 5 lights, number counts to 5 (rising pitch works well)",
+   "level": 0.74
+  },
+  {
+   "t": 5.081,
+   "type": "pop",
+   "note": "currency tile 6 lights, number counts to 6 (rising pitch works well)",
+   "level": 0.8
+  },
+  {
+   "t": 5.323,
+   "type": "hit",
+   "note": "all six tiles flash together, \"6\" echoes",
+   "level": 0.8
+  },
+  {
+   "t": 5.666,
+   "type": "whoosh",
+   "note": "bar 3 splits up and down",
+   "to": 5.806,
+   "level": 0.5
+  },
+  {
+   "t": 5.806,
+   "type": "cut",
+   "note": "bar 4: the room goes dark and red"
+  },
+  {
+   "t": 5.806,
+   "type": "hit",
+   "note": "\"1\" slams in inside a countdown ring",
+   "level": 0.9
+  },
+  {
+   "t": 5.806,
+   "type": "rise",
+   "note": "tension: the ring runs out, a spreadsheet creeps in, slow zoom",
+   "to": 7.676,
+   "level": 1
+  },
+  {
+   "t": 5.956,
+   "type": "tick",
+   "note": "days-left counter runs down from 30 to 1, speeding up",
+   "to": 7.592,
+   "count": 29,
+   "level": 0.25
+  },
+  {
+   "t": 6.29,
+   "type": "hit",
+   "note": "heartbeat thump, faster and harder",
+   "level": 0.4
+  },
+  {
+   "t": 6.774,
+   "type": "hit",
+   "note": "heartbeat thump, faster and harder",
+   "level": 0.5
+  },
+  {
+   "t": 7.016,
+   "type": "hit",
+   "note": "heartbeat thump, faster and harder",
+   "level": 0.5
+  },
+  {
+   "t": 7.258,
+   "type": "hit",
+   "note": "heartbeat thump, faster and harder",
+   "level": 0.65
+  },
+  {
+   "t": 7.379,
+   "type": "hit",
+   "note": "heartbeat thump, faster and harder",
+   "level": 0.6
+  },
+  {
+   "t": 7.5,
+   "type": "hit",
+   "note": "heartbeat thump, faster and harder",
+   "level": 0.8
+  },
+  {
+   "t": 7.621,
+   "type": "hit",
+   "note": "heartbeat thump, faster and harder",
+   "level": 0.9
+  },
+  {
+   "t": 7.676,
+   "type": "cut",
+   "note": "two frames of black: silence before the drop"
+  },
+  {
+   "t": 7.742,
+   "type": "drop",
+   "note": "THE DROP: white flash, the zero lands, the spreadsheet is blown apart",
+   "level": 1
+  },
+  {
+   "t": 8.226,
+   "type": "hit",
+   "note": "word \"spreadsheets.\" slams in",
+   "level": 0.9
+  },
+  {
+   "t": 8.71,
+   "type": "pop",
+   "note": "the zero pulses, a ring ripples out",
+   "level": 0.5
+  },
+  {
+   "t": 9.315,
+   "type": "whoosh",
+   "note": "word drops away, the ring closes up into the logo shape",
+   "to": 9.677,
+   "level": 0.7
+  },
+  {
+   "t": 9.677,
+   "type": "logo",
+   "note": "logo lands on the downbeat with a flash, the bird unfolds",
+   "level": 1
+  },
+  {
+   "t": 9.777,
+   "type": "whoosh",
+   "note": "wordmark \"EasyReimburse\" rises",
+   "to": 10.277,
+   "level": 0.35
+  },
+  {
+   "t": 10.353,
+   "type": "pop",
+   "note": "line \"Erasmus+ travel reimbursements.\" rises",
+   "level": 0.4
+  },
+  {
+   "t": 10.716,
+   "type": "hit",
+   "note": "line \"From weeks to minutes.\" rises, logo pulses",
+   "level": 0.6
+  },
+  {
+   "t": 11.413,
+   "type": "whoosh",
+   "note": "gradient curtain sweeps left to right; fully covers at the bar line",
+   "to": 11.893,
+   "level": 0.9
+  },
+  {
+   "t": 11.613,
+   "type": "cut",
+   "note": "bar 7: 01 Invite, \"Magic link in.\""
+  },
+  {
+   "t": 11.673,
+   "type": "pop",
+   "note": "headline line 1 and the email card arrive",
+   "level": 0.5
+  },
+  {
+   "t": 12.047,
+   "type": "pop",
+   "note": "headline line 2 \"No accounts.\"",
+   "level": 0.5
+  },
+  {
+   "t": 12.339,
+   "type": "tick",
+   "note": "mouse click on the link button",
+   "level": 0.8
+  },
+  {
+   "t": 12.581,
+   "type": "hit",
+   "note": "participant card pops up",
+   "level": 0.6
+  },
+  {
+   "t": 12.823,
+   "type": "tick",
+   "note": "strike-through Password",
+   "level": 0.5
+  },
+  {
+   "t": 12.944,
+   "type": "tick",
+   "note": "strike-through App",
+   "level": 0.5
+  },
+  {
+   "t": 13.065,
+   "type": "tick",
+   "note": "strike-through Sign-up",
+   "level": 0.5
+  },
+  {
+   "t": 13.185,
+   "type": "success",
+   "note": "green sticker \"You're in\" (small success)",
+   "level": 0.5
+  },
+  {
+   "t": 13.448,
+   "type": "whoosh",
+   "note": "push to the next bar",
+   "to": 13.668,
+   "level": 0.5
+  },
+  {
+   "t": 13.548,
+   "type": "cut",
+   "note": "bar 8: 02 Extract, \"AI reads every ticket.\""
+  },
+  {
+   "t": 13.688,
+   "type": "rise",
+   "note": "scan line runs down the boarding pass (short scanner sweep)",
+   "to": 14.248,
+   "level": 0.5
+  },
+  {
+   "t": 13.982,
+   "type": "pop",
+   "note": "headline line 2 \"every ticket.\"",
+   "level": 0.4
+  },
+  {
+   "t": 14.032,
+   "type": "pop",
+   "note": "extracted field route pops out with a sparkle (rising pitch)",
+   "level": 0.6
+  },
+  {
+   "t": 14.274,
+   "type": "pop",
+   "note": "extracted field date pops out with a sparkle (rising pitch)",
+   "level": 0.6
+  },
+  {
+   "t": 14.516,
+   "type": "pop",
+   "note": "extracted field amount pops out with a sparkle (rising pitch)",
+   "level": 0.6
+  },
+  {
+   "t": 15,
+   "type": "hit",
+   "note": "all three fields pulse",
+   "level": 0.4
+  },
+  {
+   "t": 15.384,
+   "type": "whoosh",
+   "note": "push to the next bar",
+   "to": 15.604,
+   "level": 0.5
+  },
+  {
+   "t": 15.484,
+   "type": "cut",
+   "note": "bar 9: 03 Convert, \"Official EU exchange rates.\""
+  },
+  {
+   "t": 15.564,
+   "type": "hit",
+   "note": "\"1,240 Kč\" lands",
+   "level": 0.5
+  },
+  {
+   "t": 15.968,
+   "type": "pop",
+   "note": "rate chip \"1 € = 25.243 Kč\" pops",
+   "level": 0.5
+  },
+  {
+   "t": 16.092,
+   "type": "tick",
+   "note": "euro amount spins up (fast counter roll)",
+   "to": 16.452,
+   "count": 10,
+   "level": 0.4
+  },
+  {
+   "t": 16.452,
+   "type": "hit",
+   "note": "\"€49.12\" lands",
+   "level": 0.8
+  },
+  {
+   "t": 16.694,
+   "type": "pop",
+   "note": "second conversion pops (zł)",
+   "level": 0.4
+  },
+  {
+   "t": 16.935,
+   "type": "pop",
+   "note": "third conversion pops (lei)",
+   "level": 0.4
+  },
+  {
+   "t": 17.319,
+   "type": "whoosh",
+   "note": "push to the next bar",
+   "to": 17.539,
+   "level": 0.5
+  },
+  {
+   "t": 17.419,
+   "type": "cut",
+   "note": "bar 10: 04 Review, \"AI review flags what needs you.\""
+  },
+  {
+   "t": 17.559,
+   "type": "tick",
+   "note": "check 1 passes (green tick)",
+   "level": 0.5
+  },
+  {
+   "t": 17.679,
+   "type": "tick",
+   "note": "check 2 passes (green tick)",
+   "level": 0.5
+  },
+  {
+   "t": 17.799,
+   "type": "tick",
+   "note": "check 3 passes (green tick)",
+   "level": 0.5
+  },
+  {
+   "t": 17.903,
+   "type": "hit",
+   "note": "fourth row is flagged amber \"Needs you\" (a warning tone, not harsh)",
+   "level": 0.7
+  },
+  {
+   "t": 18.629,
+   "type": "pop",
+   "note": "flag resolved: turns into a green tick",
+   "level": 0.5
+  },
+  {
+   "t": 18.871,
+   "type": "success",
+   "note": "big green sticker \"All clear\"",
+   "level": 0.8
+  },
+  {
+   "t": 19.255,
+   "type": "whoosh",
+   "note": "push out",
+   "to": 19.355,
+   "level": 0.5
+  },
+  {
+   "t": 19.355,
+   "type": "cut",
+   "note": "bar 11"
+  },
+  {
+   "t": 19.355,
+   "type": "hit",
+   "note": "\"Approve.\" slams in",
+   "level": 0.9
+  },
+  {
+   "t": 19.515,
+   "type": "tick",
+   "note": "5 status pills flip to \"Approved\", top to bottom",
+   "to": 19.715,
+   "count": 5,
+   "level": 0.45
+  },
+  {
+   "t": 19.839,
+   "type": "hit",
+   "note": "\"Pay.\" slams in",
+   "level": 0.9
+  },
+  {
+   "t": 19.939,
+   "type": "tick",
+   "note": "5 status pills flip to green \"Paid\"",
+   "to": 20.139,
+   "count": 5,
+   "level": 0.5
+  },
+  {
+   "t": 20.323,
+   "type": "hit",
+   "note": "\"Done.\" slams in with confetti",
+   "level": 1
+  },
+  {
+   "t": 20.323,
+   "type": "success",
+   "note": "everyone is paid: the main success sound of the film",
+   "level": 1
+  },
+  {
+   "t": 20.343,
+   "type": "tick",
+   "note": "total counts up to €12,480.50",
+   "to": 20.783,
+   "count": 12,
+   "level": 0.35
+  },
+  {
+   "t": 20.806,
+   "type": "pop",
+   "note": "total and \"Done.\" pulse",
+   "level": 0.5
+  },
+  {
+   "t": 21.19,
+   "type": "whoosh",
+   "note": "bar 11 splits left and right",
+   "to": 21.29,
+   "level": 0.5
+  },
+  {
+   "t": 21.29,
+   "type": "cut",
+   "note": "bar 12"
+  },
+  {
+   "t": 21.29,
+   "type": "hit",
+   "note": "\"90%\" slams in, counting up from 0",
+   "level": 1
+  },
+  {
+   "t": 21.714,
+   "type": "pop",
+   "note": "words \"less time spent\" rise, outline echo on the number",
+   "level": 0.6
+  },
+  {
+   "t": 22.058,
+   "type": "whoosh",
+   "note": "the time bar collapses from \"weeks\" to a tenth (falling pitch)",
+   "to": 22.478,
+   "level": 0.7
+  },
+  {
+   "t": 22.5,
+   "type": "pop",
+   "note": "label \"MINUTES\" pops",
+   "level": 0.5
+  },
+  {
+   "t": 23.026,
+   "type": "whoosh",
+   "note": "gradient curtain sweeps right to left; fully covers at the bar line",
+   "to": 23.506,
+   "level": 0.9
+  },
+  {
+   "t": 23.226,
+   "type": "cut",
+   "note": "bar 13: end card"
+  },
+  {
+   "t": 23.266,
+   "type": "logo",
+   "note": "logo spins in",
+   "level": 0.8
+  },
+  {
+   "t": 23.386,
+   "type": "whoosh",
+   "note": "name \"EasyReimburse\" rises",
+   "to": 23.886,
+   "level": 0.3
+  },
+  {
+   "t": 23.71,
+   "type": "pop",
+   "note": "line \"Travel reimbursements, from weeks to minutes.\"",
+   "level": 0.4
+  },
+  {
+   "t": 24.194,
+   "type": "pop",
+   "note": "\"Try for free\" button pops",
+   "level": 0.7
+  },
+  {
+   "t": 24.334,
+   "type": "pop",
+   "note": "easyreimburse.ai slides in",
+   "level": 0.3
+  },
+  {
+   "t": 24.677,
+   "type": "pop",
+   "note": "two footnotes rise",
+   "level": 0.3
+  },
+  {
+   "t": 25.161,
+   "type": "hit",
+   "note": "final accent: glint across the button, logo pulse. Let it ring out to the end",
+   "to": 27.097,
+   "level": 0.7
+  }
+ ]
+}
