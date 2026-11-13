@@ -34,6 +34,25 @@ at 4K before scaling down: sharper, about 7x slower), `--size 3840x2160` (a 4K f
 To watch a version in a browser, serve this folder (`npx serve .`) and open
 `/a-paper-bird/?play=1`, or `?t=12.5` for one moment.
 
+## Website version
+
+The website (easyreimburse.ai, a separate Next.js project) plays `/video/how-it-works.webm` and
+`.mp4` with the poster `/video/how-it-works-poster.webp`: 1280x720, 30 fps, about 4 MB each.
+To make those files from a version, render its frames at 30 fps and keep them, then encode:
+
+```bash
+node render.mjs video a-paper-bird --fps 30 --keep --audio out/a-paper-bird.wav --out out/tmp.mp4
+F=.work/a-paper-bird-frames
+VF="scale=1280:720:flags=lanczos:out_color_matrix=bt709:out_range=tv,format=yuv420p"
+ffmpeg -framerate 30 -i $F/%06d.png -i out/a-paper-bird.wav -vf "$VF" -c:v libx264 -preset slow -crf 24 \
+  -profile:v high -movflags +faststart -c:a aac -b:a 128k -shortest how-it-works.mp4
+ffmpeg -framerate 30 -i $F/%06d.png -i out/a-paper-bird.wav -vf "$VF" -c:v libvpx-vp9 -crf 33 -b:v 0 \
+  -row-mt 1 -cpu-used 2 -c:a libopus -b:a 96k -shortest how-it-works.webm
+convert $F/000192.png -resize 1280x720 -quality 86 how-it-works-poster.webp   # frame at 6.4s
+```
+
+The three files go in the website project's `public/video/` folder.
+
 ## How a version is built
 
 - `index.html` loads the fonts and `scene.js`, which builds the scenes and puts every animation
