@@ -344,6 +344,9 @@ async function buildStructuredPdf(participantId: string): Promise<StructuredPdf>
       // Amount
       if (item.amountIncludedInRoundTrip) {
         kvRows.push(['Amount', '— (price included in round-trip booking)']);
+      } else if ((!item.currencyOriginal || item.currencyOriginal === 'EUR') && !item.amountOriginal && item.amountEur) {
+        // A price typed in as a euro amount only: show what is paid, not "0.00 EUR"
+        kvRows.push(['Amount', formatEur(item.amountEur)]);
       } else if (item.amountOriginal != null) {
         const eurStr = item.amountEur != null ? `  (${formatEur(item.amountEur)})` : '';
         kvRows.push(['Amount', `${item.amountOriginal.toFixed(2)} ${item.currencyOriginal}${eurStr}`]);

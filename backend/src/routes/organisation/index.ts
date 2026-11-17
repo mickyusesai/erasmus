@@ -2726,17 +2726,19 @@ router.patch('/participants/:id/travel-items/:itemId', asyncHandler(async (req: 
     data: updateData,
   });
 
-  // Create changelog entries for changed fields
+  // Create changelog entries for changed fields (dates are compared and logged by their day)
+  const logValue = (value: unknown) => (value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? ''));
   for (const [field, newValue] of Object.entries(result.data)) {
     const previousValue = (current as Record<string, unknown>)[field];
-    if (previousValue !== newValue) {
+    const same = previousValue instanceof Date && newValue instanceof Date ? previousValue.getTime() === newValue.getTime() : previousValue === newValue;
+    if (!same) {
       await prisma.changeLogEntry.create({
         data: {
           participantId,
           userType: changeLogActor(req),
           fieldName: `travelItem.${field}`,
-          previousValue: String(previousValue ?? ''),
-          newValue: String(newValue ?? ''),
+          previousValue: logValue(previousValue),
+          newValue: logValue(newValue),
         },
       });
     }
