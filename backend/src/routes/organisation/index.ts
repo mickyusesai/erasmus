@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { parseParticipantCsv, alignCountry, CsvReadError, FIELD_LABELS, type CsvParticipant, type ParticipantCsvResult } from '../../utils/participantCsv.js';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '../../middleware/errorHandler.js';
-import { organisationAuth, ensureOwnProject, changeLogActor } from '../../middleware/auth.js';
+import { organisationAuth, ensureOwnProject, changeLogActor, generateOrganisationToken } from '../../middleware/auth.js';
 import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { bankAccountProblem, maskAccountNumber, normaliseAccountNumber } from '../../utils/bankAccount.js';
@@ -22,6 +22,7 @@ import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
 import { findSameFile, fileHash } from '../../services/checks/sameFile.js';
 import { findOtherProjectOverlaps } from '../../services/checks/otherProjects.js';
 import { reviewOutdated } from '../../services/checks/reviewOutdated.js';
+import { startTestAccount } from '../../services/organisation/testAccount.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -108,6 +109,7 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       email: org.email,
       isAffiliate: org.isAffiliate,
       affiliateActive: org.affiliateActive,
+      isTestAccount: org.isTestAccount,
     },
     credits: {
       available: creditStatus.availableCredits,
@@ -138,6 +140,27 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       creditsGranted: p.creditsGranted,
       completedAt: p.completedAt,
     })),
+  });
+}));
+
+/**
+ * POST /api/organisation/test-account/restart
+ * Only for the onboarding test account (opened from super-admin): throw everything away and
+ * start again as an organisation that signed up this moment. Answers with the new login.
+ */
+router.post('/test-account/restart', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  if (!org.isTestAccount) {
+    throw new ForbiddenError('Only the onboarding test account can start over');
+  }
+
+  const credits = req.body?.credits === undefined ? 0 : Number(req.body.credits);
+  const fresh = await startTestAccount({ email: org.email, credits });
+  console.log(`[Test account] Started over from inside the app (${credits} credit${credits === 1 ? '' : 's'})`);
+
+  res.status(201).json({
+    token: generateOrganisationToken(fresh),
+    organisation: { id: fresh.id, name: fresh.name, projectCredits: fresh.projectCredits },
   });
 }));
 

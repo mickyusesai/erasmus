@@ -739,6 +739,16 @@ export const organisationApi = {
     return handleResponse<OrgDashboardData>(res);
   },
 
+  /** Onboarding test account only: throw everything away and start again as a new organisation */
+  restartTestAccount: async (credits = 0) => {
+    const res = await fetch(`${API_BASE}/organisation/test-account/restart`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ credits }),
+    });
+    return handleResponse<TestAccountLogin>(res);
+  },
+
   // Projects
   getProjects: async () => {
     const res = await fetch(`${API_BASE}/organisation/projects`, {
@@ -1450,7 +1460,7 @@ export interface GreenTravelSuggestion {
 }
 
 export interface OrgDashboardData {
-  organisation: { id: string; name: string; email: string; isAffiliate?: boolean; affiliateActive?: boolean };
+  organisation: { id: string; name: string; email: string; isAffiliate?: boolean; affiliateActive?: boolean; isTestAccount?: boolean };
   credits: OrgCreditStatus;
   stats: { projectCount: number; totalParticipants: number };
   projects: OrgProject[];
@@ -2324,7 +2334,51 @@ export interface SupportKeyInfo {
   active: boolean;
 }
 
+export interface TestAccountInfo {
+  /** Where the test organisation's emails go, prefilled with a sensible address */
+  suggestedEmail: string;
+  maxCredits: number;
+  account: {
+    id: string;
+    name: string;
+    email: string;
+    createdAt: string;
+    projectCredits: number;
+    projects: number;
+    participants: number;
+  } | null;
+}
+
+export interface TestAccountLogin {
+  token: string;
+  organisation: { id: string; name: string; email?: string; projectCredits: number };
+}
+
 export const superAdminApi = {
+  /** The onboarding test account: an organisation that starts from scratch on every start */
+  getTestAccount: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/test-account`, { headers: getSuperAdminHeaders() });
+    return handleResponse<TestAccountInfo>(res);
+  },
+
+  startTestAccount: async (options: { email?: string; credits?: number; sendWelcomeEmail?: boolean }) => {
+    const res = await fetch(`${API_BASE}/super-admin/test-account/start`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify(options),
+    });
+    return handleResponse<TestAccountLogin>(res);
+  },
+
+  /** Sign in to the test account as it is now, without starting over */
+  openTestAccount: async () => {
+    const res = await fetch(`${API_BASE}/super-admin/test-account/open`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<TestAccountLogin>(res);
+  },
+
   /** Open an organisation's own dashboard as support (2 hours) */
   startSupportSession: async (organisationId: string) => {
     const res = await fetch(`${API_BASE}/super-admin/organisations/${organisationId}/support-session`, {

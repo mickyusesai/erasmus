@@ -11,14 +11,9 @@ import {
   organisationAuth,
 } from '../../middleware/auth.js';
 import { getEmailService } from '../../services/email/index.js';
+import { createOrganisationWithTestProject } from '../../services/organisation/signup.js';
 
 const router = Router();
-
-// =============================================================================
-// CONSTANTS
-// =============================================================================
-
-const TEST_PROJECT_MAX_PARTICIPANTS = 10;
 
 // =============================================================================
 // ORGANISATION AUTH ROUTES
@@ -61,40 +56,10 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   // Hash password
   const passwordHash = await bcrypt.hash(password, 12);
 
-  // Create organisation with test project in a transaction
-  const organisation = await prisma.$transaction(async (tx) => {
-    // Create organisation
-    const org = await tx.organisation.create({
-      data: {
-        name,
-        email: email.toLowerCase(),
-        passwordHash,
-        oid: oid || null,
-      },
-    });
-
-    // Create free test project
-    const startDate = new Date();
-    const endDate = new Date();
-    endDate.setFullYear(endDate.getFullYear() + 1); // 1 year from now
-
-    await tx.project.create({
-      data: {
-        organisationId: org.id,
-        name: 'Test Project',
-        description: 'A free test project to try out the platform. Limited to 10 participants.',
-        country: 'Test',
-        startDate,
-        endDate,
-        isTestProject: true,
-        requireGreenTravelDeclaration: true,
-        maxParticipants: TEST_PROJECT_MAX_PARTICIPANTS,
-        creditSource: null, // No credit consumed for test projects
-      },
-    });
-
-    return org;
-  });
+  // Create organisation with its free test project in a transaction
+  const organisation = await prisma.$transaction((tx) =>
+    createOrganisationWithTestProject(tx, { name, email, passwordHash, oid })
+  );
 
   // Generate token
   const token = generateOrganisationToken(organisation);

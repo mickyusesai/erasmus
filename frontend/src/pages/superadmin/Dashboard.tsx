@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { LogOut, Building2, CreditCard, Users, Plus, RefreshCw, ExternalLink, TrendingUp, CheckCircle, ToggleLeft, ToggleRight, Sparkles, KeyRound } from 'lucide-react';
+import { LogOut, Building2, CreditCard, Users, Plus, RefreshCw, ExternalLink, TrendingUp, CheckCircle, ToggleLeft, ToggleRight, Sparkles, KeyRound, FlaskConical } from 'lucide-react';
 import { AiUsagePanel } from '../../components/superadmin/AiUsagePanel';
 import { SupportKeysPanel } from '../../components/superadmin/SupportKeysPanel';
+import { TestAccountPanel } from '../../components/superadmin/TestAccountPanel';
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
@@ -32,6 +33,7 @@ interface Organisation {
   foundingCreditClaimed: boolean;
   foundingCreditUsed: boolean;
   isActive: boolean;
+  isTestAccount?: boolean;
   createdAt: string;
   _count: {
     projects: number;
@@ -63,7 +65,7 @@ export default function SuperAdminDashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<'organisations' | 'affiliates' | 'ai-usage' | 'support'>('organisations');
+  const [activeTab, setActiveTab] = useState<'organisations' | 'affiliates' | 'ai-usage' | 'support' | 'test-account'>('organisations');
 
   // Organisations state
   const [showGrantModal, setShowGrantModal] = useState(false);
@@ -354,6 +356,13 @@ export default function SuperAdminDashboard() {
             <KeyRound className="w-4 h-4" />
             Support
           </button>
+          <button
+            onClick={() => setActiveTab('test-account')}
+            className={`px-5 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'test-account' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
+          >
+            <FlaskConical className="w-4 h-4" />
+            Test account
+          </button>
         </div>
 
         {/* AI Usage Tab */}
@@ -361,6 +370,9 @@ export default function SuperAdminDashboard() {
 
         {/* Support keys */}
         {activeTab === 'support' && <SupportKeysPanel />}
+
+        {/* Onboarding test account */}
+        {activeTab === 'test-account' && <TestAccountPanel />}
 
         {/* Organisations Tab */}
         {activeTab === 'organisations' && (
@@ -393,8 +405,13 @@ export default function SuperAdminDashboard() {
                       <tr key={org.id} className="hover:bg-gray-750">
                         <td className="px-6 py-4">
                           <p className="text-white font-medium">{org.name}</p>
-                          <p className="text-sm text-gray-400">
+                          <p className="text-sm text-gray-400 flex items-center gap-2 flex-wrap">
                             {new Date(org.createdAt).toLocaleDateString()}
+                            {org.isTestAccount && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 whitespace-nowrap">
+                                <FlaskConical className="w-3 h-3" /> Onboarding test account
+                              </span>
+                            )}
                           </p>
                         </td>
                         <td className="px-6 py-4 text-gray-300">{org.email}</td>

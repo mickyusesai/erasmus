@@ -20,7 +20,9 @@ import OrgSettings from './pages/organisation/Settings';
 import OrgAffiliate from './pages/organisation/AffiliatePage';
 import OrgParticipantDetail from './pages/organisation/ParticipantDetail';
 import OrgSupportSession from './pages/organisation/SupportSession';
+import OrgTestAccountSession from './pages/organisation/TestAccountSession';
 import { SupportSessionBanner } from './components/support/SupportSessionBanner';
+import { TestAccountBar } from './components/support/TestAccountBar';
 import OrgForgotPassword from './pages/organisation/ForgotPassword';
 import OrgResetPassword from './pages/organisation/ResetPassword';
 
@@ -48,6 +50,7 @@ function App() {
   return (
     <>
     <SupportSessionBanner />
+    <TestAccountBar />
     <Routes>
       {/* Admin routes */}
       <Route path="/admin/login" element={<AdminLogin />} />
@@ -76,6 +79,7 @@ function App() {
       <Route path="/org/projects/:id" element={<OrgProjectDetail />} />
       <Route path="/org/participants/:id" element={<OrgParticipantDetail />} />
       <Route path="/org/support-session" element={<OrgSupportSession />} />
+      <Route path="/org/test-account" element={<OrgTestAccountSession />} />
       <Route path="/org/billing" element={<OrgBilling />} />
       <Route path="/org/settings" element={<OrgSettings />} />
       <Route path="/org/affiliate" element={<OrgAffiliate />} />

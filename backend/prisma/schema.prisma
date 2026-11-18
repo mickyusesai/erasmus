@@ -34,6 +34,10 @@ model Organisation {
   // Account status
   isActive                Boolean   @default(true)
 
+  // Onboarding test account: opened from super-admin and recreated from scratch on every
+  // start, to try the first-run experience again and again. Never a real customer.
+  isTestAccount           Boolean   @default(false)
+
   // Accountant / invoicing details (optional; shown on audit PDFs and on Stripe invoices)
   legalName               String?   // Official registered name, if different from display name
   vatNumber               String?   // VAT identification number

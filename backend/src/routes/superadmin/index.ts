@@ -4,8 +4,9 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { ValidationError, NotFoundError } from '../../middleware/errorHandler.js';
-import { superAdminAuth, generateSupportSessionToken } from '../../middleware/auth.js';
+import { superAdminAuth, generateSupportSessionToken, generateOrganisationToken } from '../../middleware/auth.js';
 import { createSupportKey } from '../../services/support/supportKeys.js';
+import { findTestAccount, startTestAccount, suggestedTestAccountEmail, TEST_ACCOUNT_MAX_CREDITS } from '../../services/organisation/testAccount.js';
 import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { AI_JOB_LABELS, estimateCostUsd, type AiJob } from '../../services/ai/usageLog.js';
@@ -120,10 +121,11 @@ router.get('/organisations', asyncHandler(async (req: Request, res: Response) =>
     },
   });
 
-  // Calculate stats
-  const totalOrganisations = organisations.length;
-  const totalProjects = organisations.reduce((sum: number, org: any) => sum + org._count.projects, 0);
-  const totalCreditsOutstanding = organisations.reduce((sum: number, org: any) => sum + org.projectCredits, 0);
+  // Calculate stats (the onboarding test account is listed, but not counted)
+  const real = organisations.filter((org) => !org.isTestAccount);
+  const totalOrganisations = real.length;
+  const totalProjects = real.reduce((sum: number, org: any) => sum + org._count.projects, 0);
+  const totalCreditsOutstanding = real.reduce((sum: number, org: any) => sum + org.projectCredits, 0);
 
   res.json({
     organisations,
@@ -150,6 +152,83 @@ router.post('/organisations/:id/support-session', asyncHandler(async (req: Reque
   const token = generateSupportSessionToken(organisation, req.superAdmin!);
   console.log(`[Support] ${req.superAdmin!.email} opened the dashboard of "${organisation.name}"`);
   res.json({ token, organisation: { id: organisation.id, name: organisation.name }, expiresInMinutes: 120 });
+}));
+
+/**
+ * The onboarding test account: an organisation that starts from scratch on every start, to go
+ * through the first-run experience without signing up again. It is created by the same code
+ * as a real sign-up and opened with a normal organisation login.
+ */
+router.get('/test-account', asyncHandler(async (req: Request, res: Response) => {
+  const account = await findTestAccount();
+  res.json({
+    suggestedEmail: account?.email ?? suggestedTestAccountEmail(req.superAdmin!.email),
+    maxCredits: TEST_ACCOUNT_MAX_CREDITS,
+    account: account && {
+      id: account.id,
+      name: account.name,
+      email: account.email,
+      createdAt: account.createdAt,
+      projectCredits: account.projectCredits,
+      projects: account.projects.length,
+      participants: account.projects.reduce((sum, p) => sum + p._count.participants, 0),
+    },
+  });
+}));
+
+const startTestAccountSchema = z.object({
+  email: z.string().email('Please enter a valid email address').optional(),
+  credits: z.number().int().min(0).max(TEST_ACCOUNT_MAX_CREDITS).optional(),
+  sendWelcomeEmail: z.boolean().optional(),
+});
+
+/**
+ * POST /api/super-admin/test-account/start
+ * Deletes the previous test account (projects, participants, files) and opens a fresh one
+ */
+router.post('/test-account/start', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = startTestAccountSchema.safeParse(req.body ?? {});
+  if (!parsed.success) throw new ValidationError(parsed.error.errors[0].message);
+
+  const { credits = 0, sendWelcomeEmail = false } = parsed.data;
+  const email = parsed.data.email ?? (await findTestAccount())?.email ?? suggestedTestAccountEmail(req.superAdmin!.email);
+  const organisation = await startTestAccount({ email, credits });
+  console.log(`[Test account] ${req.superAdmin!.email} started a fresh onboarding test account`);
+
+  if (sendWelcomeEmail) {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    getEmailService()
+      .sendWelcome(organisation.email, organisation.name, `${frontendUrl}/org/login`)
+      .catch((err) => console.error('[Email] Failed to send the test account welcome email:', err));
+  }
+
+  res.status(201).json({
+    token: generateOrganisationToken(organisation),
+    organisation: {
+      id: organisation.id,
+      name: organisation.name,
+      email: organisation.email,
+      projectCredits: organisation.projectCredits,
+    },
+  });
+}));
+
+/**
+ * POST /api/super-admin/test-account/open
+ * Sign in to the test account as it is now, without starting over (another browser, a later day)
+ */
+router.post('/test-account/open', asyncHandler(async (_req: Request, res: Response) => {
+  const organisation = await findTestAccount();
+  if (!organisation) throw new NotFoundError('There is no test account yet. Start one first.');
+  res.json({
+    token: generateOrganisationToken(organisation),
+    organisation: {
+      id: organisation.id,
+      name: organisation.name,
+      email: organisation.email,
+      projectCredits: organisation.projectCredits,
+    },
+  });
 }));
 
 /**
