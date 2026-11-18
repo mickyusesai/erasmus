@@ -44,6 +44,8 @@ import { MissingBoardingPassModal } from '../../components/participant/MissingBo
 import { SignaturePad } from '../../components/participant/SignaturePad';
 import { ReceiptsCard } from '../../components/participant/ReceiptsCard';
 import { isReceiptDocument } from '../../utils/documentKinds';
+import { acceptWithIphonePhotos, dropzoneAcceptWithIphonePhotos, isIphonePhoto, toUploadableFile } from '../../utils/iphonePhotos';
+import { rejectionMessage, uploadErrorMessage } from '../../utils/uploadErrors';
 import { isFlightProof, flightHasProof } from '../../utils/flightProof';
 import { computePayable } from '../../utils/reimbursementMath';
 import { tripHasNoPrice } from '../../utils/tripPrice';
@@ -730,8 +732,8 @@ function Step1Upload({
       // (invalidateQueries only marks stale, doesn't wait for refetch)
       await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
     },
-    onError: () => {
-      toast.error('Failed to upload document');
+    onError: (err) => {
+      toast.error(uploadErrorMessage(err, 'Failed to upload document'), { duration: 8000 });
     },
   });
 
@@ -838,14 +840,16 @@ function Step1Upload({
   const [analysisFailure, setAnalysisFailure] = useState<{ message: string; unreadable: { docId: string; filename: string }[] } | null>(null);
   const { getRootProps, getInputProps, open } = useDropzone({
     onDrop,
+    // A refused file used to be ignored without a word
+    onDropRejected: (rejections) => toast.error(rejectionMessage(rejections), { duration: 8000 }),
     disabled: atDocumentLimit || uploading,
     noClick: true,
-    accept: {
+    accept: dropzoneAcceptWithIphonePhotos({
       'application/pdf': ['.pdf'],
       'image/jpeg': ['.jpg', '.jpeg'],
       'image/png': ['.png'],
       'image/webp': ['.webp'],
-    },
+    }),
     maxSize: 10 * 1024 * 1024,
   });
 
@@ -1010,7 +1014,7 @@ function Step1Upload({
             </p>
           )}
           {!atDocumentLimit && (
-            <p className="text-white/70 text-xs mt-2 text-center">PDF, JPG, PNG up to 10MB · or drag &amp; drop here</p>
+            <p className="text-white/70 text-xs mt-2 text-center">PDF, JPG, PNG or iPhone photo, up to 10MB · or drag &amp; drop here</p>
           )}
         </div>
 
@@ -2416,14 +2420,16 @@ function InlineDocumentUpload({
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    accept: {
+    accept: dropzoneAcceptWithIphonePhotos({
       'application/pdf': ['.pdf'],
       'image/jpeg': ['.jpg', '.jpeg'],
       'image/png': ['.png'],
       'image/webp': ['.webp'],
-    },
+    }),
     maxFiles: 1,
+    maxSize: 10 * 1024 * 1024,
     disabled: uploading,
+    onDropRejected: (rejections) => toast.error(rejectionMessage(rejections), { duration: 8000 }),
     onDrop: async (files) => {
       if (files.length === 0) return;
       setUploading(true);
@@ -2433,8 +2439,8 @@ function InlineDocumentUpload({
         onUpdate({ documentId: result.document.id });
         await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
         toast.success(result.duplicate ? 'You already uploaded this file. It is now linked to this trip' : 'Document uploaded and linked');
-      } catch {
-        toast.error('Failed to upload document');
+      } catch (err) {
+        toast.error(uploadErrorMessage(err, 'Failed to upload document'), { duration: 8000 });
       } finally {
         setUploading(false);
       }
@@ -2589,7 +2595,7 @@ function TravelItemCard({
       setReplacingDoc(false);
       toast.success('Document replaced');
     },
-    onError: () => { setReplacingDoc(false); toast.error('Failed to replace document'); },
+    onError: (err) => { setReplacingDoc(false); toast.error(uploadErrorMessage(err, 'Failed to replace document'), { duration: 8000 }); },
   });
 
   // Mutation: move a declaration to a different travel item
@@ -3006,7 +3012,7 @@ function TravelItemCard({
       <input
         ref={replaceFileInputRef}
         type="file"
-        accept=".pdf,.jpg,.jpeg,.png,.webp"
+        accept={acceptWithIphonePhotos('.pdf,.jpg,.jpeg,.png,.webp')}
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -3495,8 +3501,8 @@ function AddTravelModal({
       setIsCarpooling(false);
       setCarpoolRole('driver');
     },
-    onError: () => {
-      toast.error('Failed to add travel item');
+    onError: (err) => {
+      toast.error(uploadErrorMessage(err, 'Failed to add travel item'), { duration: 8000 });
     },
   });
 
@@ -3826,8 +3832,21 @@ function AddTravelModal({
                   <input
                     type="file"
                     className="hidden"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                    accept={acceptWithIphonePhotos('.pdf,.jpg,.jpeg,.png,.webp')}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0] || null;
+                      e.target.value = '';
+                      if (!file) return;
+                      // An iPhone photo (HEIC) becomes a JPEG here already, so the preview below works
+                      const converting = (await isIphonePhoto(file)) ? toast.loading('Converting the iPhone photo…') : null;
+                      try {
+                        setSelectedFile(await toUploadableFile(file));
+                      } catch (err) {
+                        toast.error(uploadErrorMessage(err, 'This file could not be used'), { duration: 8000 });
+                      } finally {
+                        if (converting) toast.dismiss(converting);
+                      }
+                    }}
                   />
                 </label>
               )}
@@ -4060,11 +4079,11 @@ function BoardingPassUploadModal({
             <label className="cursor-pointer flex flex-col items-center">
               <Ticket className="w-12 h-12 text-gray-400 mb-3" />
               <span className="text-gray-700 font-medium">Click to upload boarding pass</span>
-              <span className="text-sm text-gray-500 mt-1">PDF, JPG, PNG up to 10MB</span>
+              <span className="text-sm text-gray-500 mt-1">PDF, JPG, PNG or iPhone photo, up to 10MB</span>
               <input
                 type="file"
                 className="hidden"
-                accept=".pdf,.jpg,.jpeg,.png,.webp"
+                accept={acceptWithIphonePhotos('.pdf,.jpg,.jpeg,.png,.webp')}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) handleUpload(file);

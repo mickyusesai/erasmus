@@ -1,3 +1,5 @@
+import { toUploadableFile } from '../utils/iphonePhotos';
+
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
@@ -336,7 +338,7 @@ export const participantApi = {
     travelItemId?: string
   ) => {
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', await toUploadableFile(file)); // an iPhone photo (HEIC) goes up as JPEG
     // Receipts for the green-travel extra are stored as such and never treated as tickets;
     // a boarding pass or airline declaration keeps the type the participant gave it
     if (documentType) formData.append('documentType', documentType);
@@ -603,7 +605,7 @@ export const participantApi = {
 
   uploadDisseminationPhotos: async (token: string, activityId: string, files: File[]) => {
     const formData = new FormData();
-    files.forEach(file => formData.append('photos', file));
+    for (const file of files) formData.append('photos', await toUploadableFile(file));
 
     const res = await fetch(`${API_BASE}/participant/dissemination/activities/${activityId}/photos?token=${token}`, {
       method: 'POST',
@@ -627,7 +629,7 @@ export const participantApi = {
 
   uploadSocialMediaPost: async (token: string, file: File) => {
     const formData = new FormData();
-    formData.append('screenshot', file);
+    formData.append('screenshot', await toUploadableFile(file));
 
     const res = await fetch(`${API_BASE}/participant/dissemination/social-media?token=${token}`, {
       method: 'POST',
@@ -1177,7 +1179,7 @@ export const organisationApi = {
   // Document management
   uploadDocument: async (participantId: string, file: File, documentType: string) => {
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', await toUploadableFile(file)); // an iPhone photo (HEIC) goes up as JPEG
     formData.append('documentType', documentType);
     const token = localStorage.getItem('org-token');
     const res = await fetch(`${API_BASE}/organisation/participants/${participantId}/documents/upload`, {
@@ -1444,6 +1446,8 @@ export interface GreenTravelSuggestion {
     documentType: DocumentType;
     mimeType?: string;
     uploadDate?: string;
+    /** false while the AI has not read the receipt yet (a few seconds after the upload) */
+    read?: boolean;
     amount: number | null;
     currency: string | null;
     documentDate: string | null;

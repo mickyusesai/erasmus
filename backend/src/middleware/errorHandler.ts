@@ -52,6 +52,19 @@ export const asyncHandler = (
   };
 };
 
+/** What to tell someone whose file hit an upload limit */
+export function uploadLimitMessage(code: string | undefined): string {
+  switch (code) {
+    case 'LIMIT_FILE_SIZE':
+      return 'This file is larger than 10 MB. Try a smaller photo, a screenshot or a compressed PDF.';
+    case 'LIMIT_FILE_COUNT':
+    case 'LIMIT_UNEXPECTED_FILE':
+      return 'Too many files at once. Please add fewer files.';
+    default:
+      return 'This file could not be uploaded. Please try again with a PDF, a photo or a screenshot.';
+  }
+}
+
 export function errorHandler(
   err: Error,
   _req: Request,
@@ -65,6 +78,17 @@ export function errorHandler(
       error: {
         message: err.message,
         statusCode: err.statusCode,
+      },
+    });
+    return;
+  }
+
+  // A file refused by the upload limits (multer): say why, so the person can fix it
+  if (err.name === 'MulterError') {
+    res.status(400).json({
+      error: {
+        message: uploadLimitMessage((err as { code?: string }).code),
+        statusCode: 400,
       },
     });
     return;

@@ -18,6 +18,8 @@ import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { dropzoneAcceptWithIphonePhotos } from '../../utils/iphonePhotos';
+import { rejectionMessage, uploadErrorMessage } from '../../utils/uploadErrors';
 import {
   participantApi,
   DisseminationActivity,
@@ -232,8 +234,8 @@ function ActivityCard({
         await participantApi.uploadDisseminationPhotos(token, activity.id, acceptedFiles);
         toast.success(`Uploaded ${acceptedFiles.length} photos`);
         queryClient.invalidateQueries({ queryKey: ['dissemination-activities'] });
-      } catch {
-        toast.error('Failed to upload photos');
+      } catch (err) {
+        toast.error(uploadErrorMessage(err, 'Failed to upload photos'), { duration: 8000 });
       } finally {
         setUploading(false);
       }
@@ -243,7 +245,8 @@ function ActivityCard({
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp'] },
+    onDropRejected: (rejections) => toast.error(rejectionMessage(rejections, { allowed: 'a photo (JPG, PNG, WebP or an iPhone photo)' }), { duration: 8000 }),
+    accept: dropzoneAcceptWithIphonePhotos({ 'image/*': ['.jpg', '.jpeg', '.png', '.webp'] }),
     maxSize: 10 * 1024 * 1024,
     disabled: !activity.isOwner || uploading,
   });
@@ -534,8 +537,8 @@ function SocialMediaSection({
         }
         toast.success(`Uploaded ${acceptedFiles.length} screenshot(s)`);
         queryClient.invalidateQueries({ queryKey: ['social-media-posts'] });
-      } catch {
-        toast.error('Failed to upload screenshot');
+      } catch (err) {
+        toast.error(uploadErrorMessage(err, 'Failed to upload screenshot'), { duration: 8000 });
       } finally {
         setUploading(false);
       }
@@ -545,7 +548,8 @@ function SocialMediaSection({
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp'] },
+    onDropRejected: (rejections) => toast.error(rejectionMessage(rejections, { allowed: 'a screenshot or photo (JPG, PNG, WebP or an iPhone photo)' }), { duration: 8000 }),
+    accept: dropzoneAcceptWithIphonePhotos({ 'image/*': ['.jpg', '.jpeg', '.png', '.webp'] }),
     maxSize: 10 * 1024 * 1024,
     disabled: uploading,
   });
@@ -586,7 +590,7 @@ function SocialMediaSection({
             ? 'Drop screenshot here'
             : 'Drop social media screenshots here, or click to select'}
         </p>
-        <p className="text-xs text-gray-400 mt-1">JPG, PNG or WebP, max 10MB</p>
+        <p className="text-xs text-gray-400 mt-1">JPG, PNG, WebP or iPhone photo, max 10MB</p>
       </div>
 
       {/* Posts Grid */}

@@ -122,6 +122,8 @@ export async function buildGreenTravelSuggestion(participant: SuggestionInput, i
       documentType: d.documentType,
       mimeType: d.mimeType,
       uploadDate: d.uploadDate,
+      // false while the AI has not read the receipt yet (a few seconds after the upload)
+      read: !!d.extraction,
       amount: d.extraction?.amount ?? null,
       currency: d.extraction?.currency ?? null,
       documentDate: d.extraction?.documentDate ?? null,

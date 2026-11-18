@@ -5,6 +5,7 @@ import { BedDouble, Utensils, FileText, ExternalLink, Trash2, Loader2, Image as 
 import { clsx } from 'clsx';
 import { participantApi, type ParticipantAuthResponse, type Document } from '../../services/api';
 import { isReceiptDocument } from '../../utils/documentKinds';
+import { acceptWithIphonePhotos } from '../../utils/iphonePhotos';
 
 type ReceiptType = 'HOTEL_INVOICE' | 'MEAL_RECEIPT';
 
@@ -95,7 +96,7 @@ export function ReceiptsCard({
 
   const meals = receipts.filter((r) => r.documentType === 'MEAL_RECEIPT').length;
   const hotels = receipts.filter((r) => r.documentType === 'HOTEL_INVOICE').length;
-  const accept = 'application/pdf,image/jpeg,image/png,image/webp';
+  const accept = acceptWithIphonePhotos('application/pdf,image/jpeg,image/png,image/webp');
   const busy = uploadingType !== null;
 
   const uploadButton = (type: ReceiptType) => {
@@ -192,7 +193,7 @@ export function ReceiptsCard({
         )}
         {open && (
           <p className="text-[11px] text-gray-400 mt-2">
-            PDF, JPG, PNG up to 10MB · several files at once is fine · receipts don't count towards your document limit
+            PDF, JPG, PNG or iPhone photo, up to 10MB · several files at once is fine · receipts don't count towards your document limit
           </p>
         )}
       </div>

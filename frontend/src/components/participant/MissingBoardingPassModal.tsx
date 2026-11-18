@@ -7,6 +7,7 @@ import { Modal } from '../ui/Modal';
 import { DeclarationOfTravelForm } from './DeclarationOfTravelForm';
 import { participantApi, TravelItem, Document } from '../../services/api';
 import { isReceiptDocument } from '../../utils/documentKinds';
+import { acceptWithIphonePhotos } from '../../utils/iphonePhotos';
 import { clsx } from 'clsx';
 
 type ProofType = 'FLIGHT_BOARDING_PASS' | 'AIRLINE_DECLARATION';
@@ -206,7 +207,7 @@ export function MissingBoardingPassModal({
           <input
             ref={fileInput}
             type="file"
-            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            accept={acceptWithIphonePhotos('.pdf,.jpg,.jpeg,.png,.webp')}
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];

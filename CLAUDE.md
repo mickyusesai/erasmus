@@ -98,6 +98,9 @@ cd frontend && npm install && npm run dev  # Vite dev server
 - UI components are in `frontend/src/components/ui/` (Card, Button, Input, Select, Modal)
 - Toast notifications via `react-hot-toast`
 - File uploads via `react-dropzone`
+- iPhone photos (HEIC/HEIF) are converted to JPEG in the browser before upload: every upload function in `api.ts` passes the file through `toUploadableFile()` (`frontend/src/utils/iphonePhotos.ts`, converter loaded on demand). File pickers offer them with `acceptWithIphonePhotos()` / `dropzoneAcceptWithIphonePhotos()`, except on iOS, where the photo picker converts by itself as long as we don't ask for HEIC. The server never accepts HEIC
+- A refused upload must say why: `rejectionMessage()` for files the picker/drop area refuses and `uploadErrorMessage()` for failed uploads (`frontend/src/utils/uploadErrors.ts`); upload limits answer 400 with a reason (`errorHandler.ts`)
+- Organisers add several files at once with `uploadForParticipantInTurn()` (`frontend/src/utils/uploadInTurn.ts`); receipts via `AddReceipts` in the green travel card
 - Exchange rates from InforEuro service, cached and looked up by currency + date
 - AI review rules defined in `reviewRules.ts` with severity levels: `critical`, `important`, `info`
 - PDF generation uses Liberation Sans fonts (bundled in `backend/src/services/pdf/fonts/`) for Unicode support

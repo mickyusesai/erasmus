@@ -56,6 +56,9 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, CreateTravelItemData, type OrgParticipantDetail as OrgParticipantDetailData, type GreenTravelCalculation, type GreenTravelNotCountedReason, type OtherProjectOverlap } from '../../services/api';
 import { clsx } from 'clsx';
 import { tripHasNoPrice, tripPriceTypedIn } from '../../utils/tripPrice';
+import { AddReceipts } from '../../components/organisation/AddReceipts';
+import { acceptWithIphonePhotos } from '../../utils/iphonePhotos';
+import { reportUploadRun, uploadForParticipantInTurn } from '../../utils/uploadInTurn';
 import { isFlightProof } from '../../utils/flightProof';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -184,7 +187,8 @@ export default function OrgParticipantDetail() {
   const [newItemData, setNewItemData] = useState<CreateTravelItemData>(emptyItem);
 
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [uploadDocType, setUploadDocType] = useState('OTHER');
   const [downloadingAuditPdf, setDownloadingAuditPdf] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -199,6 +203,9 @@ export default function OrgParticipantDetail() {
     queryFn: () => organisationApi.getParticipant(id!),
     enabled: !!id,
     retry: false,
+    // Receipts that were just added are read by the AI in the background: look again until the amounts are there
+    refetchInterval: (query) =>
+      query.state.data?.participant?.greenTravelSuggestion?.receipts.some(receiptBeingRead) ? 4000 : false,
   });
 
   useEffect(() => {
@@ -432,19 +439,23 @@ export default function OrgParticipantDetail() {
     onError: (error: Error) => toast.error(error.message || 'Failed to delete travel item'),
   });
 
-  const uploadDocumentMutation = useMutation({
-    mutationFn: async ({ file, docType }: { file: File; docType: string }) =>
-      organisationApi.uploadDocument(id!, file, docType),
-    onSuccess: (doc) => {
-      if (doc.duplicate) toast(`"${doc.renamedFilename}" is already in this participant's documents, so it was not added twice`, { icon: 'ℹ️' });
-      else toast.success('Document uploaded');
-      queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+  // One or several files of the same type, one after another
+  const uploadSelectedDocuments = async () => {
+    if (uploadFiles.length === 0 || uploadProgress) return;
+    setUploadProgress({ current: 0, total: uploadFiles.length });
+    const run = await uploadForParticipantInTurn(id!, uploadFiles, uploadDocType, (current, total) => setUploadProgress({ current, total }));
+    setUploadProgress(null);
+    reportUploadRun(run, 'document', 'documents');
+    queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+    if (run.failed.length === 0) {
       setShowUploadModal(false);
-      setUploadFile(null);
+      setUploadFiles([]);
       setUploadDocType('OTHER');
-    },
-    onError: (error: Error) => toast.error(error.message || 'Failed to upload document'),
-  });
+    } else {
+      // Keep the refused files selected, so the organiser sees which ones they were
+      setUploadFiles(uploadFiles.filter((f) => run.failed.some((x) => x.name === f.name)));
+    }
+  };
 
   const deleteDocumentMutation = useMutation({
     mutationFn: (docId: string) => organisationApi.deleteDocument(id!, docId),
@@ -1300,7 +1311,7 @@ export default function OrgParticipantDetail() {
         </Modal>
 
         {/* ── Upload Document Modal ── */}
-        <Modal isOpen={showUploadModal} onClose={() => { setShowUploadModal(false); setUploadFile(null); }} title="Upload Document">
+        <Modal isOpen={showUploadModal} onClose={() => { if (!uploadProgress) { setShowUploadModal(false); setUploadFiles([]); } }} title="Upload Documents">
           <div className="space-y-4">
             <div>
               <label className="label">Document type</label>
@@ -1315,29 +1326,38 @@ export default function OrgParticipantDetail() {
               </select>
             </div>
             <div>
-              <label className="label">File</label>
+              <label className="label">Files</label>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.jpg,.jpeg,.png,.gif,.webp"
-                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                multiple
+                accept={acceptWithIphonePhotos('.pdf,.jpg,.jpeg,.png,.gif,.webp')}
+                onChange={(e) => setUploadFiles(Array.from(e.target.files ?? []))}
+                disabled={!!uploadProgress}
                 className="input text-sm file:mr-4 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
               />
+              <p className="text-xs text-gray-400 mt-1">
+                Several files at once is fine: they all get the document type above. PDF, JPG, PNG or iPhone photo.
+              </p>
             </div>
-            {uploadFile && (
+            {uploadFiles.length > 0 && (
               <p className="text-sm text-gray-500">
-                Selected: {uploadFile.name} ({(uploadFile.size / 1024).toFixed(0)} KB)
+                {uploadFiles.length === 1
+                  ? <>Selected: {uploadFiles[0].name} ({(uploadFiles[0].size / 1024).toFixed(0)} KB)</>
+                  : <>Selected: {uploadFiles.length} files ({(uploadFiles.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024).toFixed(1)} MB)</>}
               </p>
             )}
             <div className="flex justify-end gap-3 pt-2">
-              <Button variant="secondary" onClick={() => { setShowUploadModal(false); setUploadFile(null); }}>Cancel</Button>
+              <Button variant="secondary" disabled={!!uploadProgress} onClick={() => { setShowUploadModal(false); setUploadFiles([]); }}>Cancel</Button>
               <Button
-                onClick={() => uploadFile && uploadDocumentMutation.mutate({ file: uploadFile, docType: uploadDocType })}
-                loading={uploadDocumentMutation.isPending}
-                disabled={!uploadFile}
+                onClick={uploadSelectedDocuments}
+                loading={!!uploadProgress}
+                disabled={uploadFiles.length === 0}
               >
                 <Upload className="w-4 h-4 mr-2" />
-                Upload
+                {uploadProgress
+                  ? `Uploading ${uploadProgress.current} of ${uploadProgress.total}…`
+                  : uploadFiles.length > 1 ? `Upload ${uploadFiles.length} files` : 'Upload'}
               </Button>
             </div>
           </div>
@@ -2351,13 +2371,19 @@ type SuggestionReceipt = NonNullable<OrgParticipantDetailData['greenTravelSugges
 function sumByCurrency(list: SuggestionReceipt[]): string {
   const sums = new Map<string, number>();
   let unclear = 0;
+  let reading = 0;
   for (const r of list) {
-    if (r.amount == null) { unclear++; continue; }
+    if (r.amount == null) {
+      if (receiptBeingRead(r)) reading++;
+      else unclear++;
+      continue;
+    }
     const cur = r.currency || 'EUR';
     sums.set(cur, (sums.get(cur) || 0) + r.amount);
   }
   const parts = [...sums.entries()].map(([cur, v]) => (cur === 'EUR' ? formatCurrency(v) : `${v.toFixed(2)} ${cur}`));
   if (unclear > 0) parts.push(`${unclear} unclear`);
+  if (reading > 0) parts.push(`${reading} being read`);
   return parts.length > 0 ? parts.join(' + ') : '—';
 }
 
@@ -2367,6 +2393,14 @@ function eurTotal(list: SuggestionReceipt[]): number | null {
   if (withAmount.length === 0 || withAmount.some((r) => r.amountEur == null)) return null;
   if (withAmount.every((r) => (r.currency || 'EUR') === 'EUR')) return null; // already shown in EUR
   return withAmount.reduce((sum, r) => sum + (r.amountEur ?? 0), 0);
+}
+
+/**
+ * Just added and not read by the AI yet. After a few minutes without a reading we stop waiting
+ * and show it as unclear ("Read receipts again" then gives it another go).
+ */
+function receiptBeingRead(r: { read?: boolean; uploadDate?: string }): boolean {
+  return r.read === false && !!r.uploadDate && Date.now() - new Date(r.uploadDate).getTime() < 3 * 60 * 1000;
 }
 
 /** One receipt tile: image thumbnail (signed URL fetched lazily) or a PDF icon; click opens the file, the pencil corrects it */
@@ -2393,9 +2427,10 @@ function ReceiptThumb({ participantId, receipt, onEdit }: { participantId: strin
     }
   };
 
+  const beingRead = receiptBeingRead(receipt);
   const amount = receipt.amount != null
     ? (receipt.currency && receipt.currency !== 'EUR' ? `${receipt.amount.toFixed(2)} ${receipt.currency}` : formatCurrency(receipt.amount))
-    : 'amount unclear';
+    : beingRead ? 'reading…' : 'amount unclear';
 
   return (
     <div className="w-24 flex-shrink-0 relative group">
@@ -2438,7 +2473,7 @@ function ReceiptThumb({ participantId, receipt, onEdit }: { participantId: strin
 /** Receipts grouped by the date on them, with meal and hotel totals, for deciding the green travel extra */
 function ReceiptGallery({ participantId, receipts, onEdit }: { participantId: string; receipts: SuggestionReceipt[]; onEdit?: (r: SuggestionReceipt) => void }) {
   if (receipts.length === 0) {
-    return <p className="mt-1">Receipts uploaded: none yet — the participant can still add them.</p>;
+    return <p className="mt-1">Receipts uploaded: none yet. The participant can still add them, and so can you (below).</p>;
   }
   // A receipt uploaded twice is shown twice but added up once
   const counted = receipts.filter((r) => !r.duplicateOf);
@@ -2446,13 +2481,16 @@ function ReceiptGallery({ participantId, receipts, onEdit }: { participantId: st
   const hotels = counted.filter((r) => r.documentType === 'HOTEL_INVOICE');
   const twice = receipts.length - counted.length;
   // Grouped by the date on the receipt; the upload date says nothing about when the money was spent
-  const dayKey = (r: SuggestionReceipt) => (r.documentDate ? new Date(r.documentDate).toISOString().slice(0, 10) : 'unknown');
+  const dayKey = (r: SuggestionReceipt) =>
+    r.documentDate ? new Date(r.documentDate).toISOString().slice(0, 10) : receiptBeingRead(r) ? 'reading' : 'unknown';
   const groups = new Map<string, SuggestionReceipt[]>();
   for (const r of receipts) {
     const k = dayKey(r);
     groups.set(k, [...(groups.get(k) || []), r]);
   }
-  const ordered = [...groups.entries()].sort(([a], [b]) => (a === 'unknown' ? 1 : b === 'unknown' ? -1 : a.localeCompare(b)));
+  // Dated receipts first (oldest day first), then the unclear ones, then the ones still being read
+  const rank = (k: string) => (k === 'reading' ? 2 : k === 'unknown' ? 1 : 0);
+  const ordered = [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   const mealsEur = eurTotal(meals);
   const hotelsEur = eurTotal(hotels);
 
@@ -2473,7 +2511,7 @@ function ReceiptGallery({ participantId, receipts, onEdit }: { participantId: st
         {ordered.map(([day, list]) => (
           <div key={day}>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700/80 mb-1">
-              {day === 'unknown' ? 'Date unclear' : formatDate(day)} · {list.length}
+              {day === 'reading' ? 'Being read by the AI…' : day === 'unknown' ? 'Date unclear' : formatDate(day)} · {list.length}
             </p>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {list.map((r) => <ReceiptThumb key={r.id} participantId={participantId} receipt={r} onEdit={onEdit ? () => onEdit(r) : undefined} />)}
@@ -2928,6 +2966,7 @@ function GreenTravelExtraCard({ participant }: { participant: OrgParticipantDeta
               )}
             </div>
             <ReceiptGallery participantId={participant.id} receipts={s.receipts} onEdit={isPaid ? undefined : setEditingReceipt} />
+            {!isPaid && <AddReceipts participantId={participant.id} firstName={participant.firstName} />}
             {calc ? (
               <GreenTravelCalculationBox
                 calc={calc}

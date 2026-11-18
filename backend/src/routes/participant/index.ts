@@ -8,6 +8,7 @@ import { participantAuth, ensureOwnParticipant } from '../../middleware/auth.js'
 import { isReceiptDocument, isReceiptDocumentType } from '../../utils/documentKinds.js';
 import { isFlightProofType, flightDeclarationsAccepted } from '../../utils/flightProof.js';
 import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware/errorHandler.js';
+import { unsupportedFileMessage } from '../../utils/uploadFiles.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
@@ -45,7 +46,7 @@ const upload = multer({
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only PDF, JPG, PNG, and WebP are allowed.'));
+      cb(new ValidationError(unsupportedFileMessage(file, 'a PDF, JPG, PNG or WebP file')));
     }
   },
 });

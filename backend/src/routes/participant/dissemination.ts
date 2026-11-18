@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { participantAuth } from '../../middleware/auth.js';
 import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware/errorHandler.js';
+import { unsupportedFileMessage } from '../../utils/uploadFiles.js';
 import { getStorageService } from '../../services/storage/index.js';
 
 const router = Router();
@@ -22,7 +23,7 @@ const upload = multer({
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only JPG, PNG, and WebP are allowed for photos.'));
+      cb(new ValidationError(unsupportedFileMessage(file, 'a JPG, PNG or WebP image')));
     }
   },
 });

@@ -1,0 +1,11 @@
+EasyReimburse uses this open-source component in the browser:
+
+heic-to (https://github.com/hoppergee/heic-to), which contains libheif
+(https://github.com/strukturag/libheif) and libde265 (https://github.com/strukturag/libde265).
+
+Licence: GNU Lesser General Public License v3.0 (LGPL-3.0)
+https://www.gnu.org/licenses/lgpl-3.0.html
+
+It turns iPhone photos (HEIC/HEIF) into JPEG before they are uploaded. It is used unmodified and
+is loaded as a file of its own (assets/heic-to-*.js), only when such a photo is picked. Its source
+code is available at the links above.
