@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useDropzone } from 'react-dropzone';
@@ -10,7 +10,6 @@ import {
   Trash2,
   Settings,
   FileText,
-  AlertTriangle,
   UserPlus,
   ChevronUp,
   ChevronDown,
@@ -24,8 +23,11 @@ import {
   Plus,
   RefreshCw,
   Info,
+  Gift,
+  Sparkles,
 } from 'lucide-react';
 import { CountryLimitRow } from '../../components/organisation/CountryLimitRow';
+import { SetAmountsModal, type CountryWithoutAmount } from '../../components/organisation/SetAmountsModal';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -51,7 +53,8 @@ export default function OrgProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<TabType>(searchParams.get('tab') === 'settings' ? 'settings' : 'overview');
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
 
   // Check if logged in
@@ -95,7 +98,7 @@ export default function OrgProjectDetail() {
   const upgradeProjectMutation = useMutation({
     mutationFn: () => organisationApi.upgradeTestProject(id!),
     onSuccess: () => {
-      toast.success('Project upgraded! Participant limit removed.');
+      toast.success('Project upgraded: it now has room for 60 participants.');
       queryClient.invalidateQueries({ queryKey: ['org-project', id] });
       queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
     },
@@ -171,8 +174,8 @@ export default function OrgProjectDetail() {
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
                 {project.isTestProject && (
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                    Test Project
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                    Free project
                   </span>
                 )}
               </div>
@@ -219,29 +222,29 @@ export default function OrgProjectDetail() {
             </div>
           </div>
 
-          {/* Test Project Banner */}
+          {/* Free project: what it includes and how to get room for more */}
           {project.isTestProject && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
-                  <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <Gift className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
                   <div>
-                    <h3 className="font-medium text-amber-800">Test Project</h3>
-                    <p className="text-sm text-amber-700 mt-1">
-                      This is a free test project limited to {project.maxParticipants || 10} participants.
-                      Upgrade to a full project using 1 credit to get 60 participant slots, or{' '}
-                      <Link to="/org/billing" className="underline font-medium">purchase credits</Link> first.
+                    <h3 className="font-medium text-emerald-900">Free project</h3>
+                    <p className="text-sm text-emerald-800 mt-1">
+                      This project is free for up to {project.maxParticipants || 10} participants. Need room for more? Upgrade it to a
+                      full project with 60 places for 1 credit. No credit yet?{' '}
+                      <Link to="/org/billing" className="underline font-medium">Buy one on the Billing page</Link>.
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => {
-                    if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and give you 60 participant slots.')) {
+                    if (window.confirm('Upgrade this free project to a full project? This uses 1 credit and gives you room for 60 participants.')) {
                       upgradeProjectMutation.mutate();
                     }
                   }}
                   disabled={upgradeProjectMutation.isPending}
-                  className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-60"
+                  className="flex-shrink-0 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-60"
                 >
                   {upgradeProjectMutation.isPending ? 'Upgrading…' : 'Upgrade (1 credit)'}
                 </button>
@@ -380,6 +383,11 @@ function OverviewTab({
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isDownloadingAuditZip, setIsDownloadingAuditZip] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  /** Maximum amounts that are still missing, asked for before the action that needs them */
+  const [amountsNeeded, setAmountsNeeded] = useState<{ countries: CountryWithoutAmount[]; saveLabel: string; then: (() => void) | null } | null>(null);
+  const aiNoticeKey = `ai-notice-dismissed-${projectId}`;
+  const [showAiNotice, setShowAiNotice] = useState(() => !localStorage.getItem(aiNoticeKey));
   const auditNudgeKey = `audit-nudge-dismissed-${projectId}`;
   const [showAuditNudge, setShowAuditNudge] = useState(
     () => !localStorage.getItem(auditNudgeKey)
@@ -549,7 +557,18 @@ function OverviewTab({
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
-  const [showReimbursementWarning, setShowReimbursementWarning] = useState(false);
+
+  // Trips are built by the AI once the project has ended, unless the organiser opens it earlier
+  const projectEnded = !!project.endDate && new Date() >= new Date(project.endDate);
+  const aiOpen = projectEnded || !!project.aiAnalysisUnlocked;
+  const openAiMutation = useMutation({
+    mutationFn: () => organisationApi.updateProject(projectId, { aiAnalysisUnlocked: true }),
+    onSuccess: () => {
+      toast.success('Participants can let the AI build their trips from now on');
+      queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
+    },
+    onError: (err: Error) => toast.error(err.message || 'Could not change this'),
+  });
 
   const deleteParticipantMutation = useMutation({
     mutationFn: (participantId: string) => organisationApi.deleteParticipant(participantId),
@@ -580,18 +599,47 @@ function OverviewTab({
     },
   });
 
-  const checkReimbursementWarning = (ids: string[], _type: 'magic' | 'reminder') => {
-    const targetParticipants = participants.filter((p) => ids.includes(p.id));
-    const countriesWithNoLimit = (countryLimits || [])
-      .filter((limit: any) => limit.maxReimbursementAmount === 0)
-      .map((limit: any) => limit.country);
-    const hasUnconfigured = targetParticipants.some((p) => countriesWithNoLimit.includes(p.country));
-    if (hasUnconfigured) {
-      setShowReimbursementWarning(true);
-      return true;
+  /** Sending countries of these participants that have no maximum amount yet */
+  const countriesWithoutAmount = (ids: string[]): CountryWithoutAmount[] => {
+    const withAmount = new Set((countryLimits || []).filter((limit: any) => limit.maxReimbursementAmount > 0).map((limit: any) => limit.country));
+    const counts = new Map<string, number>();
+    for (const p of participants) {
+      if (ids.includes(p.id) && !withAmount.has(p.country)) counts.set(p.country, (counts.get(p.country) || 0) + 1);
     }
-    return false;
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([country, count]) => ({ country, participants: count }));
   };
+
+  /**
+   * Runs an action that emails participants. When their maximum amounts are still missing,
+   * they are asked for first, on the spot, and the action runs after saving: participants
+   * should see what they can get back when they open their link.
+   */
+  const withAmounts = (ids: string[], action: () => void) => {
+    const missing = countriesWithoutAmount(ids);
+    if (missing.length === 0) action();
+    else setAmountsNeeded({ countries: missing, saveLabel: 'Save and send', then: action });
+  };
+
+  // A link from the dashboard's next step opens that step here (?do=add, amounts or invite), once
+  const requested = searchParams.get('do');
+  useEffect(() => {
+    if (!requested) return;
+    if (requested === 'add') {
+      setShowAddModal(true);
+    } else if (requested === 'amounts') {
+      if (participants.length === 0 || !countryLimits) return; // still loading
+      const missing = countriesWithoutAmount(participants.map((p) => p.id));
+      if (missing.length > 0) setAmountsNeeded({ countries: missing, saveLabel: 'Save', then: null });
+    } else if (requested === 'invite') {
+      if (participants.length === 0) return; // still loading
+      // The ones who have no link yet are ticked, so "Send Magic Links" is right there
+      setSelectedIds(participants.filter((p) => !p.lastMagicLinkSentAt).map((p) => p.id));
+    }
+    const rest = new URLSearchParams(searchParams);
+    rest.delete('do');
+    setSearchParams(rest, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requested, participants.length, countryLimits]);
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
@@ -736,6 +784,41 @@ function OverviewTab({
         </div>
       )}
 
+      {/* When the AI builds the trips: said here, with the switch, instead of somewhere in Settings */}
+      {!aiOpen && showAiNotice && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <Sparkles className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-medium text-blue-900">The AI builds the trips after the project ends</h3>
+                <p className="text-sm text-blue-800 mt-1">
+                  Participants can upload their tickets now. From {formatDate(project.endDate)} on, when the return tickets are in too, the AI
+                  turns them into trips. Trying things out, or is everybody home already? You can open it now.
+                </p>
+                <button
+                  onClick={() => openAiMutation.mutate()}
+                  disabled={openAiMutation.isPending}
+                  className="mt-2 text-sm font-medium text-blue-800 hover:text-blue-900 underline disabled:opacity-60"
+                >
+                  {openAiMutation.isPending ? 'Opening…' : 'Let the AI build trips now'}
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                localStorage.setItem(aiNoticeKey, 'dismissed');
+                setShowAiNotice(false);
+              }}
+              className="p-1 text-blue-500 hover:text-blue-700 rounded transition-colors flex-shrink-0"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Actions & Search */}
       <div className="flex flex-wrap items-center gap-3">
         <Button onClick={() => setShowAddModal(true)}>
@@ -784,9 +867,7 @@ function OverviewTab({
                   variant="secondary"
                   onClick={() => {
                     const ids = needsMagicLink.map((p) => p.id);
-                    if (!checkReimbursementWarning(ids, 'magic')) {
-                      sendMagicLinksMutation.mutate(ids);
-                    }
+                    withAmounts(ids, () => sendMagicLinksMutation.mutate(ids));
                   }}
                   loading={sendMagicLinksMutation.isPending}
                 >
@@ -799,9 +880,7 @@ function OverviewTab({
                   variant="secondary"
                   onClick={() => {
                     const ids = needsReminder.map((p) => p.id);
-                    if (!checkReimbursementWarning(ids, 'reminder')) {
-                      sendRemindersMutation.mutate(ids);
-                    }
+                    withAmounts(ids, () => sendRemindersMutation.mutate(ids));
                   }}
                   loading={sendRemindersMutation.isPending}
                 >
@@ -968,11 +1047,12 @@ function OverviewTab({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (checkReimbursementWarning([participant.id], 'reminder')) return;
-                              organisationApi.sendReminder(participant.id).then(() => {
-                                toast.success(`Reminder sent to ${participant.firstName}`);
-                              }).catch(() => {
-                                toast.error('Failed to send reminder');
+                              withAmounts([participant.id], () => {
+                                organisationApi.sendReminder(participant.id).then(() => {
+                                  toast.success(`Reminder sent to ${participant.firstName}`);
+                                }).catch(() => {
+                                  toast.error('Failed to send reminder');
+                                });
                               });
                             }}
                             className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-full transition-colors"
@@ -985,12 +1065,14 @@ function OverviewTab({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (checkReimbursementWarning([participant.id], 'magic')) return;
-                              organisationApi.sendMagicLink(participant.id).then(() => {
-                                toast.success(`Magic link sent to ${participant.firstName}`);
-                                queryClient.invalidateQueries({ queryKey: ['org-participants'] });
-                              }).catch(() => {
-                                toast.error('Failed to send magic link');
+                              withAmounts([participant.id], () => {
+                                organisationApi.sendMagicLink(participant.id).then(() => {
+                                  toast.success(`Magic link sent to ${participant.firstName}`);
+                                  queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+                                  queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+                                }).catch(() => {
+                                  toast.error('Failed to send magic link');
+                                });
                               });
                             }}
                             className="inline-flex items-center gap-1 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 px-2.5 py-1 rounded-full transition-colors"
@@ -1006,12 +1088,13 @@ function OverviewTab({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (checkReimbursementWarning([participant.id], 'magic')) return;
-                                organisationApi.sendMagicLink(participant.id).then(() => {
-                                  toast.success(`Magic link resent to ${participant.firstName}`);
-                                  queryClient.invalidateQueries({ queryKey: ['org-participants'] });
-                                }).catch(() => {
-                                  toast.error('Failed to resend magic link');
+                                withAmounts([participant.id], () => {
+                                  organisationApi.sendMagicLink(participant.id).then(() => {
+                                    toast.success(`Magic link resent to ${participant.firstName}`);
+                                    queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+                                  }).catch(() => {
+                                    toast.error('Failed to resend magic link');
+                                  });
                                 });
                               }}
                               className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-primary-700 hover:bg-primary-50 px-1.5 py-0.5 rounded transition-colors"
@@ -1129,29 +1212,21 @@ function OverviewTab({
         </div>
       </Modal>
 
-      {/* Reimbursement Warning Modal */}
-      <Modal
-        isOpen={showReimbursementWarning}
-        onClose={() => setShowReimbursementWarning(false)}
-        title="Reimbursement Not Configured"
-      >
-        <div className="space-y-4">
-          <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-            <p className="text-sm text-amber-800">
-              Some countries don't have a maximum reimbursement amount configured yet. Please go to the Settings tab to configure the reimbursement limits before sending emails, otherwise participants will not see their reimbursement amount.
-            </p>
-          </div>
-          <div className="flex justify-end gap-3 pt-4">
-            <Button
-              variant="secondary"
-              onClick={() => setShowReimbursementWarning(false)}
-            >
-              Close
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      {/* Missing maximum amounts are filled in right here; what was asked for happens afterwards */}
+      {amountsNeeded && (
+        <SetAmountsModal
+          projectId={projectId}
+          countries={amountsNeeded.countries}
+          saveLabel={amountsNeeded.saveLabel}
+          onClose={() => setAmountsNeeded(null)}
+          onSaved={() => {
+            const then = amountsNeeded.then;
+            setAmountsNeeded(null);
+            if (then) then();
+            else toast.success('Maximum amounts saved');
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1289,7 +1364,7 @@ function ImportModal({ isOpen, onClose, projectId }: { isOpen: boolean; onClose:
           {overCapacity && (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
               {preview.isTestProject
-                ? `Your test project has room for ${remaining} more participant${remaining === 1 ? '' : 's'}. Remove some rows, or upgrade the project with a credit to add more.`
+                ? `Your free project has room for ${remaining} more participant${remaining === 1 ? '' : 's'}. Remove some rows, or upgrade the project with a credit to add more.`
                 : `This project has room for ${remaining} more participant${remaining === 1 ? '' : 's'}. Expand the capacity with a credit, or remove some rows.`}
             </div>
           )}
@@ -1409,7 +1484,7 @@ function SettingsTab({
   const upgradeFromTestMutation = useMutation({
     mutationFn: () => organisationApi.upgradeTestProject(projectId),
     onSuccess: () => {
-      toast.success('Project upgraded! You now have 60 participant slots.');
+      toast.success('Project upgraded: it now has room for 60 participants.');
       queryClient.invalidateQueries({ queryKey: ['org-project', projectId] });
       queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
     },
@@ -1565,16 +1640,16 @@ function SettingsTab({
       {/* Exchange Rate Settings */}
       <ExchangeRateSettingsCard project={project} projectId={projectId} />
 
-      {/* Upgrade Test Project */}
+      {/* Upgrade the free project */}
       {project.isTestProject && (
-        <Card className="lg:col-span-2 border-amber-200">
+        <Card className="lg:col-span-2 border-emerald-200">
           <CardHeader>
-            <h3 className="font-semibold text-amber-800">Upgrade to Full Project</h3>
+            <h3 className="font-semibold text-emerald-800">Upgrade to Full Project</h3>
           </CardHeader>
           <CardContent>
             <p className="text-gray-600 mb-4">
-              This is a free test project limited to {project.maxParticipants || 10} participants.
-              Use 1 credit to convert it into a full project with 60 participant slots.
+              This project is free for up to {project.maxParticipants || 10} participants.
+              Use 1 credit to turn it into a full project with room for 60 participants.
               You can purchase credits on the{' '}
               <Link to="/org/billing" className="text-primary-600 hover:text-primary-700 underline font-medium">
                 Billing page
@@ -1583,7 +1658,7 @@ function SettingsTab({
             </p>
             <Button
               onClick={() => {
-                if (window.confirm('Upgrade this test project to a full project? This will use 1 credit and give you 60 participant slots.')) {
+                if (window.confirm('Upgrade this free project to a full project? This uses 1 credit and gives you room for 60 participants.')) {
                   upgradeFromTestMutation.mutate();
                 }
               }}

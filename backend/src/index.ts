@@ -16,6 +16,7 @@ import stripeWebhookRoutes from './routes/stripe/webhook.js';
 import inboundRoutes from './routes/inbound/index.js';
 import supportRoutes from './routes/support/index.js';
 import { getStorageService } from './services/storage/index.js';
+import { PLACEHOLDER_PROJECT } from './services/organisation/onboarding.js';
 
 // Load environment variables
 dotenv.config();
@@ -186,6 +187,22 @@ async function expireAbandonedPurchases() {
 // Run on startup and then every hour
 expireAbandonedPurchases();
 setInterval(expireAbandonedPurchases, 60 * 60 * 1000);
+
+// The automatic "Test Project" older sign-ups got ends a year after sign-up, so its participants
+// could never let the AI build their trips. As long as it is untouched (placeholder name and
+// country), the AI is open in it.
+async function openAiInPlaceholderTestProjects() {
+  try {
+    const { count } = await prisma.project.updateMany({
+      where: { isTestProject: true, name: PLACEHOLDER_PROJECT.name, country: PLACEHOLDER_PROJECT.country, aiAnalysisUnlocked: false },
+      data: { aiAnalysisUnlocked: true },
+    });
+    if (count > 0) console.log(`[Onboarding] Opened the AI in ${count} placeholder test project(s)`);
+  } catch (err) {
+    console.error('[Onboarding] Error opening the AI in placeholder test projects:', err);
+  }
+}
+openAiInPlaceholderTestProjects();
 
 // Participants who don't need reimbursement are paid nothing; amounts stored before that rule
 // are set to 0 once (not for reimbursements that are already approved or paid)

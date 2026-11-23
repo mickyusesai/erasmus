@@ -12,7 +12,7 @@ import type { Organisation } from '@prisma/client';
 import prisma from '../../utils/prisma.js';
 import { getStorageService } from '../storage/index.js';
 import { ConflictError, ValidationError } from '../../middleware/errorHandler.js';
-import { createOrganisationWithTestProject } from './signup.js';
+import { createNewOrganisation } from './signup.js';
 
 export const TEST_ACCOUNT_NAME = 'Onboarding Test Organisation';
 export const TEST_ACCOUNT_MAX_CREDITS = 5;
@@ -112,7 +112,7 @@ export async function startTestAccount({ email, credits = 0 }: StartTestAccount)
   // Opened from super-admin only: nobody can sign in to it with a password
   const passwordHash = await bcrypt.hash(uuidv4(), 12);
   return prisma.$transaction((tx) =>
-    createOrganisationWithTestProject(tx, {
+    createNewOrganisation(tx, {
       name: TEST_ACCOUNT_NAME,
       email: address,
       passwordHash,

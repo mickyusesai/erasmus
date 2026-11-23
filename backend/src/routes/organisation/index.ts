@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { parseParticipantCsv, alignCountry, CsvReadError, FIELD_LABELS, type CsvParticipant, type ParticipantCsvResult } from '../../utils/participantCsv.js';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler, ValidationError, NotFoundError, ForbiddenError } from '../../middleware/errorHandler.js';
-import { organisationAuth, ensureOwnProject, changeLogActor, generateOrganisationToken } from '../../middleware/auth.js';
+import { organisationAuth, ensureOwnProject, changeLogActor, generateOrganisationToken, isSupportSession } from '../../middleware/auth.js';
 import { Organisation, PurchaseType, ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { bankAccountProblem, maskAccountNumber, normaliseAccountNumber } from '../../utils/bankAccount.js';
@@ -23,6 +23,7 @@ import { findSameFile, fileHash } from '../../services/checks/sameFile.js';
 import { findOtherProjectOverlaps } from '../../services/checks/otherProjects.js';
 import { reviewOutdated } from '../../services/checks/reviewOutdated.js';
 import { startTestAccount } from '../../services/organisation/testAccount.js';
+import { FREE_PROJECT_MAX_PARTICIPANTS, FULL_PROJECT_MAX_PARTICIPANTS, freeProjectAvailable, gettingStarted, readOnboarding } from '../../services/organisation/onboarding.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -74,13 +75,15 @@ async function consumeCredit(org: Organisation): Promise<PurchaseType> {
 router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
   const org = req.organisation!;
 
-  // Get projects with participant counts
+  // Get projects with participant counts (and what the next-step card needs to know)
   const projects = await prisma.project.findMany({
     where: { organisationId: org.id },
     include: {
       _count: {
         select: { participants: true },
       },
+      participants: { select: { country: true, lastMagicLinkSentAt: true } },
+      countryLimits: { select: { country: true, maxReimbursementAmount: true } },
     },
     orderBy: { createdAt: 'desc' },
   });
@@ -91,6 +94,18 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       project: { organisationId: org.id },
     },
   });
+
+  const progress = gettingStarted(
+    projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      country: p.country,
+      isTestProject: p.isTestProject,
+      createdAt: p.createdAt,
+      participants: p.participants.map((x) => ({ country: x.country, invited: x.lastMagicLinkSentAt !== null })),
+      limits: p.countryLimits.map((l) => ({ country: l.country, max: l.maxReimbursementAmount })),
+    }))
+  );
 
   // Get credit status
   const creditStatus = getCreditStatus(org);
@@ -110,12 +125,23 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       isAffiliate: org.isAffiliate,
       affiliateActive: org.affiliateActive,
       isTestAccount: org.isTestAccount,
+      createdAt: org.createdAt,
     },
     credits: {
       available: creditStatus.availableCredits,
       canCreateProject: creditStatus.canCreateProject,
       reason: creditStatus.reason,
     },
+    // The first project is free for up to 10 participants
+    freeProject: {
+      available: freeProjectAvailable(org, projects.some((p) => p.isTestProject)),
+      maxParticipants: FREE_PROJECT_MAX_PARTICIPANTS,
+    },
+    // First-run guidance: what has been seen, and the one next step until the first invitations are out
+    onboarding: readOnboarding(org.onboarding),
+    gettingStarted: progress,
+    // EasyReimburse support looking along: no welcome, and nothing is remembered as "seen"
+    supportSession: isSupportSession(req),
     stats: {
       projectCount: projects.length,
       totalParticipants,
@@ -141,6 +167,24 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       completedAt: p.completedAt,
     })),
   });
+}));
+
+/**
+ * PATCH /api/organisation/onboarding
+ * Remember that the organisation has seen the welcome (on the server, so it is the same on every
+ * device). A support session never counts as the organisation having seen it.
+ */
+router.patch('/onboarding', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const result = z.object({ welcomeSeen: z.literal(true) }).safeParse(req.body);
+  if (!result.success) throw new ValidationError('Nothing to remember');
+
+  const state = readOnboarding(org.onboarding);
+  if (!state.welcomeSeenAt && !isSupportSession(req)) {
+    state.welcomeSeenAt = new Date().toISOString();
+    await prisma.organisation.update({ where: { id: org.id }, data: { onboarding: { ...state } } });
+  }
+  res.json({ onboarding: state });
 }));
 
 /**
@@ -222,20 +266,18 @@ const createProjectSchema = z.object({
   venueAddress: z.string().optional(),
   exchangeRateMode: exchangeRateModeEnum.optional(),
   exchangeRateManualDate: z.string().transform((s) => new Date(s)).nullish(),
+  // true = the free first project (up to 10 participants), false = use a credit.
+  // Left out: a credit when there is one, otherwise the free project when it is still there.
+  free: z.boolean().optional(),
 });
 
 /**
  * POST /api/organisation/projects
- * Create a new project (consumes a credit)
+ * Create a new project: the organisation's free first project (up to 10 participants, no
+ * credit), or a full project for one credit (up to 60 participants)
  */
 router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
   const org = req.organisation!;
-
-  // Check credit status
-  const creditStatus = getCreditStatus(org);
-  if (!creditStatus.canCreateProject) {
-    throw new ForbiddenError(creditStatus.reason || 'Cannot create project');
-  }
 
   // Validate input
   const result = createProjectSchema.safeParse(req.body);
@@ -243,7 +285,6 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
     throw new ValidationError(result.error.errors[0].message);
   }
 
-  // Consume credit and create project in a transaction
   const { name, description, country, startDate, endDate, carRatePerKm, venueAddress, exchangeRateMode, exchangeRateManualDate } = result.data;
 
   // Refresh org data to get latest credit count
@@ -255,33 +296,58 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
     throw new NotFoundError('Organisation not found');
   }
 
-  // Consume the credit
-  const creditSource = await consumeCredit(freshOrg);
+  const hasFreeProject = (await prisma.project.count({ where: { organisationId: org.id, isTestProject: true } })) > 0;
+  const freeAvailable = freeProjectAvailable(freshOrg, hasFreeProject);
+  const useFree = result.data.free ?? (freshOrg.projectCredits < 1 && freeAvailable);
 
-  // Create the project — 1 credit covers up to 60 participants
-  const project = await prisma.project.create({
-    data: {
-      organisationId: org.id,
-      name,
-      description,
-      country,
-      startDate,
-      endDate,
-      carRatePerKm,
-      venueAddress,
-      ...(exchangeRateMode && { exchangeRateMode }),
-      ...(exchangeRateManualDate !== undefined && { exchangeRateManualDate: exchangeRateManualDate || null }),
-      creditSource,
-      maxParticipants: 60,
-      // New projects ask green-travel participants to sign a declaration at submission
-      requireGreenTravelDeclaration: true,
-    },
-    include: {
-      _count: {
-        select: { participants: true },
-      },
-    },
-  });
+  if (useFree && !freeAvailable) {
+    throw new ForbiddenError('Your free project has been used already. A new project needs a project credit.');
+  }
+  if (!useFree && freshOrg.projectCredits < 1) {
+    throw new ForbiddenError(getCreditStatus(freshOrg).reason || 'Cannot create project');
+  }
+
+  const details = {
+    organisationId: org.id,
+    name,
+    description,
+    country,
+    startDate,
+    endDate,
+    carRatePerKm,
+    venueAddress,
+    ...(exchangeRateMode && { exchangeRateMode }),
+    ...(exchangeRateManualDate !== undefined && { exchangeRateManualDate: exchangeRateManualDate || null }),
+    // New projects ask green-travel participants to sign a declaration at submission
+    requireGreenTravelDeclaration: true,
+  };
+  const withCount = { _count: { select: { participants: true } } } as const;
+
+  let creditSource: PurchaseType | null = null;
+  let project;
+  if (useFree) {
+    // Once per organisation: the mark is set in the same step, so two clicks can't make two
+    project = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.organisation.updateMany({
+        where: { id: org.id, freeProjectUsedAt: null },
+        data: { freeProjectUsedAt: new Date() },
+      });
+      if (count === 0) throw new ForbiddenError('Your free project has been used already. A new project needs a project credit.');
+      return tx.project.create({
+        data: { ...details, isTestProject: true, maxParticipants: FREE_PROJECT_MAX_PARTICIPANTS, creditSource: null },
+        include: withCount,
+      });
+    });
+  } else {
+    // Consume the credit
+    creditSource = await consumeCredit(freshOrg);
+
+    // Create the project — 1 credit covers up to 60 participants
+    project = await prisma.project.create({
+      data: { ...details, creditSource, maxParticipants: FULL_PROJECT_MAX_PARTICIPANTS },
+      include: withCount,
+    });
+  }
 
   res.status(201).json({
     message: 'Project created successfully',
@@ -295,10 +361,13 @@ router.post('/projects', asyncHandler(async (req: Request, res: Response) => {
       endDate: project.endDate,
       carRatePerKm: project.carRatePerKm,
       creditSource: project.creditSource,
+      isTestProject: project.isTestProject,
+      maxParticipants: project.maxParticipants,
       participantCount: project._count.participants,
       createdAt: project.createdAt,
     },
     creditUsed: creditSource,
+    free: useFree,
   });
 }));
 
@@ -362,6 +431,8 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       greenTravelFoodPerDayEur: project.greenTravelFoodPerDayEur,
       greenTravelAccommodationPerNightEur: project.greenTravelAccommodationPerNightEur,
       creditSource: project.creditSource,
+      isTestProject: project.isTestProject,
+      maxParticipants: project.maxParticipants,
       countryLimits: project.countryLimits,
       participants: project.participants,
       participantCount: project._count.participants,
@@ -978,7 +1049,7 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
   // Check participant limit (test projects and paid projects with capacity set)
   if (project.maxParticipants !== null && project._count.participants >= project.maxParticipants) {
     if (project.isTestProject) {
-      throw new ForbiddenError(`Test project is limited to ${project.maxParticipants} participants. Upgrade to a full project to add more.`);
+      throw new ForbiddenError(`Your free project has room for ${project.maxParticipants} participants. Upgrade it to a full project with a credit to add more.`);
     } else {
       throw new ForbiddenError(`This project has reached its capacity of ${project.maxParticipants} participants. Use 1 credit to expand by 60 more.`);
     }
@@ -1129,7 +1200,7 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
     const remainingSlots = project.maxParticipants - project._count.participants;
     if (validRecords.length > remainingSlots) {
       if (project.isTestProject) {
-        throw new ForbiddenError(`Test project can only add ${remainingSlots} more participant(s) (limit: ${project.maxParticipants}). Upgrade to a full project to add more.`);
+        throw new ForbiddenError(`Your free project has room for ${remainingSlots} more participant(s) (limit: ${project.maxParticipants}). Upgrade it to a full project with a credit to add more.`);
       } else {
         throw new ForbiddenError(`This project can only add ${remainingSlots} more participant(s) (capacity: ${project.maxParticipants}). Use 1 credit to expand by 60 more.`);
       }
@@ -3330,7 +3401,7 @@ router.post('/projects/:id/expand-capacity', ensureOwnProject, asyncHandler(asyn
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new NotFoundError('Project not found');
-  if (project.isTestProject) throw new ValidationError('Upgrade to a full project before expanding capacity.');
+  if (project.isTestProject) throw new ValidationError('Upgrade your free project to a full project before expanding capacity.');
 
   const freshOrg = await prisma.organisation.findUnique({ where: { id: org.id } });
   if (!freshOrg) throw new NotFoundError('Organisation not found');
@@ -3363,12 +3434,12 @@ router.post('/projects/:id/upgrade-from-test', ensureOwnProject, asyncHandler(as
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new NotFoundError('Project not found');
-  if (!project.isTestProject) throw new ValidationError('This project is not a test project');
+  if (!project.isTestProject) throw new ValidationError('This project is a full project already');
 
   // Refresh org for latest credit count
   const freshOrg = await prisma.organisation.findUnique({ where: { id: org.id } });
   if (!freshOrg) throw new NotFoundError('Organisation not found');
-  if (freshOrg.projectCredits < 1) throw new ForbiddenError('No credits available to upgrade this project');
+  if (freshOrg.projectCredits < 1) throw new ForbiddenError('You have no project credit yet. Buy one on the Billing page, then upgrade this project.');
 
   await prisma.$transaction([
     prisma.organisation.update({
@@ -3377,11 +3448,11 @@ router.post('/projects/:id/upgrade-from-test', ensureOwnProject, asyncHandler(as
     }),
     prisma.project.update({
       where: { id: projectId },
-      data: { isTestProject: false, maxParticipants: null, creditSource: 'SINGLE' },
+      data: { isTestProject: false, maxParticipants: FULL_PROJECT_MAX_PARTICIPANTS, creditSource: 'SINGLE' },
     }),
   ]);
 
-  res.json({ success: true, message: 'Project upgraded to full project. 1 credit used.' });
+  res.json({ success: true, message: `Project upgraded to a full project with room for ${FULL_PROJECT_MAX_PARTICIPANTS} participants. 1 credit used.` });
 }));
 
 // =============================================================================

@@ -1,7 +1,7 @@
 # EasyReimburse Onboarding Plan
 
-Status: **proposal, waiting for seven decisions** (18 November 2026). Nothing of the new onboarding is
-built yet. The onboarding test account (see the end) is built.
+Status: **being built** (23 November 2026). The seven decisions are made. Part 1 (no more dead ends) is
+built; parts 2 to 4 follow. The onboarding test account (see the end) is built.
 
 Goal: a new organisation sees a finished reimbursement within two minutes, tries both sides with
 sample tickets, and sets up its own project in four short steps.
@@ -79,36 +79,68 @@ skipped and replayed at any time.
 8. **Super-admin**: per organisation, how far they got (signed up, toured, own project, invited,
    first submission, first purchase).
 
-## Decisions (recommendation first)
+## Decisions (made on 23 November 2026)
 
-1. What a new organisation tries with: **A** a ready-made practice project, or B keep the empty test
-   project and only fix the dead ends.
-2. What is free for real use: **A** the first real project is free up to 10 participants (the
-   website's promise), or B only the practice project is free.
-3. The guide: **A** step list plus spotlight on the real buttons, or B step list only.
-4. The 35-second film inside the app: **A** yes (welcome screen and Help), or B no.
-5. One optional question at the start ("When is your next project?"): **A** yes, or B no.
-6. Personal help: **A** "Write to Micky" (replies to Micky's inbox), B that plus a link to book a
-   15-minute call, or C only the guide.
-7. Emails: **A** welcome plus one reminder after 3 days, B welcome plus reminders after 3 and 10
-   days, or C welcome only.
+1. What a new organisation tries with: **a ready-made practice project** (part 2).
+2. What is free for real use: **the first real project is free up to 10 participants**, as the website
+   promises.
+3. The guide: **step list plus spotlight** on the real buttons.
+4. The 35-second film inside the app: **yes** (welcome screen and Help).
+5. One optional question at the start ("When is your next project?"): **no**.
+6. Personal help: **"Write to Micky"**, replies to Micky's inbox. No call link.
+7. Emails: **welcome plus one reminder after 3 days**.
 
 ## Build order
 
 Each part is usable on its own and is checked in the onboarding test account before the next starts.
 
-- **Part 1, no more dead ends**: welcome screen; next-step card on the dashboard; Send Link offers
-  "Set the amounts now"; the free project lets the AI run; the test project's banner and Upgrade
-  button come back; onboarding progress stored per organisation.
-- **Part 2, the practice project**: the sample project, participants and tickets; the five-step
-  guide; "be a participant yourself"; emails shown and not sent; start the practice again.
-- **Part 3, the real project in four steps**: the setup, pasting a participant list, settings split
-  into basics and folded rules.
-- **Part 4, staying in touch**: Help button; welcome email and reminder; progress per organisation
-  in super-admin.
+### Part 1, no more dead ends (built)
+
+- **No automatic "Test Project" any more.** Sign-up creates the organisation only
+  (`services/organisation/signup.ts`). The first project an organisation creates itself is free for up
+  to 10 participants: `POST /api/organisation/projects` with `free: true`. It is the old "test project"
+  under the hood (`isTestProject`, `maxParticipants: 10`), so the limit and the Upgrade work as before.
+  Once per organisation (`Organisation.freeProjectUsedAt`), also after deleting or upgrading it.
+- **Older sign-ups** keep their "Test Project": it is their free project, so they get no second one
+  (`freeProjectAvailable`: created before `FREE_FIRST_PROJECT_SINCE`, or already has a free project).
+  While it is untouched (placeholder name and country) the AI is open in it, and the welcome and the
+  next-step card send them to its Settings.
+- **Welcome screen** (`WelcomeScreen.tsx`) instead of the five slides: set up my project, watch the
+  35-second film (`/film/how-it-works.mp4`), or look around. Seen = stored on the server
+  (`Organisation.onboarding.welcomeSeenAt`, `PATCH /api/organisation/onboarding`), never by a support
+  session. The practice project becomes its first way in with part 2.
+- **Dashboard**: until the first invitation is out it greets, shows one next-step card
+  (project → participants → amounts → invitations; `gettingStarted` in
+  `services/organisation/onboarding.ts`, words in `frontend/src/utils/gettingStarted.ts`) and the
+  projects. No credit warning and no prices; those appear on the project creation page only when a
+  credit is really needed. Afterwards the overview with the numbers is back.
+- **Project creation**: the form is open for the free project; with credits as well there is a choice
+  (free is the default); with neither, the page says a credit is needed and shows the prices.
+- **Send Link** asks for the missing maximum amounts on the spot (`SetAmountsModal.tsx`) and sends
+  afterwards. The dashboard's next step opens the same window (`?do=amounts`, also `?do=add`,
+  `?do=invite`, `?tab=settings`).
+- **When the AI builds the trips** is said on the participants tab, with the switch right there.
+- **Free project banner and Upgrade button** are back (`GET /projects/:id` did not return
+  `isTestProject` and `maxParticipants`). Upgrading gives room for 60 participants, like a credit does
+  everywhere else (it used to remove the limit altogether).
+
+### Part 2, the practice project
+
+The sample project, participants and tickets; the five-step guide with the spotlight; "be a participant
+yourself"; emails shown and not sent; start the practice again. The welcome screen gets "See how it
+works (2 minutes)" as its first way in.
+
+### Part 3, the real project in four steps
+
+The setup, pasting a participant list, settings split into basics and folded rules.
+
+### Part 4, staying in touch
+
+Help button (replay the tour, the film, "How do I…", Write to Micky); welcome email and one reminder
+after 3 days; a first name at sign-up; progress per organisation in super-admin.
 
 What stays as it is: the participant pages, the prices, the rules of real projects. Existing
-organisations keep their Test Project and get the Help button.
+organisations keep their Test Project (as their free project) and get the Help button.
 
 ---
 
@@ -119,7 +151,7 @@ an organisation that signed up this second. Inside it, the **Test account** butt
 bottom-left corner starts over without going back to super-admin.
 
 - Every start deletes the previous test account (projects, participants, stored files) and creates a
-  fresh one with `createOrganisationWithTestProject` (`backend/src/services/organisation/signup.ts`),
+  fresh one with `createNewOrganisation` (`backend/src/services/organisation/signup.ts`),
   the same code sign-up uses. Whatever sign-up creates in future, the test account gets too.
 - It can start with no credits (like a real new organisation) or with one project credit, and can
   send the welcome email. "Continue where it is" signs in without starting over.

@@ -38,6 +38,13 @@ model Organisation {
   // start, to try the first-run experience again and again. Never a real customer.
   isTestAccount           Boolean   @default(false)
 
+  // The first project of an organisation is free for up to 10 participants. Set at the moment
+  // that free project is created; it never comes back, also not when the project is deleted or
+  // upgraded. (Organisations from before this rule were given a free "Test Project" at sign-up.)
+  freeProjectUsedAt       DateTime?
+  // First-run guidance: what the organisation has seen so far (services/organisation/onboarding.ts)
+  onboarding              Json?
+
   // Accountant / invoicing details (optional; shown on audit PDFs and on Stripe invoices)
   legalName               String?   // Official registered name, if different from display name
   vatNumber               String?   // VAT identification number

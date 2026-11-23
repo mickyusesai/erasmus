@@ -1,11 +1,12 @@
 /**
- * What every new organisation starts with: the account itself and a free test project.
- * Sign-up and the onboarding test account (super-admin) both use this, so the test account
- * always begins exactly like a real new organisation.
+ * What every new organisation starts with. Sign-up and the onboarding test account
+ * (super-admin) both use this, so the test account always begins exactly like a real new
+ * organisation.
+ *
+ * There is no automatic "Test Project" any more: the first project an organisation creates
+ * itself is free for up to 10 participants (services/organisation/onboarding.ts).
  */
 import type { Organisation, Prisma } from '@prisma/client';
-
-export const TEST_PROJECT_MAX_PARTICIPANTS = 10;
 
 export interface NewOrganisation {
   name: string;
@@ -16,9 +17,9 @@ export interface NewOrganisation {
   projectCredits?: number;
 }
 
-/** Run inside a transaction: the organisation and its test project are created together */
-export async function createOrganisationWithTestProject(tx: Prisma.TransactionClient, data: NewOrganisation): Promise<Organisation> {
-  const org = await tx.organisation.create({
+/** Run inside a transaction, so whatever a new organisation starts with is created together */
+export async function createNewOrganisation(tx: Prisma.TransactionClient, data: NewOrganisation): Promise<Organisation> {
+  return tx.organisation.create({
     data: {
       name: data.name,
       email: data.email.toLowerCase(),
@@ -28,25 +29,4 @@ export async function createOrganisationWithTestProject(tx: Prisma.TransactionCl
       ...(data.projectCredits && { projectCredits: data.projectCredits }),
     },
   });
-
-  const startDate = new Date();
-  const endDate = new Date();
-  endDate.setFullYear(endDate.getFullYear() + 1); // 1 year from now
-
-  await tx.project.create({
-    data: {
-      organisationId: org.id,
-      name: 'Test Project',
-      description: 'A free test project to try out the platform. Limited to 10 participants.',
-      country: 'Test',
-      startDate,
-      endDate,
-      isTestProject: true,
-      requireGreenTravelDeclaration: true,
-      maxParticipants: TEST_PROJECT_MAX_PARTICIPANTS,
-      creditSource: null, // No credit consumed for test projects
-    },
-  });
-
-  return org;
 }

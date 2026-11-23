@@ -177,17 +177,17 @@ export function welcomeSubject(): string {
 export function welcomeText(organisationName: string, loginUrl: string): string {
   return `Welcome to EasyReimburse, ${organisationName}!
 
-Your organisation account has been created successfully. A free test project (up to 10 participants) has been set up for you to explore the platform.
+Your organisation account is ready. Your first project is free for up to 10 participants.
 
 Here's how to get started:
 
 1. LOG IN to your dashboard: ${loginUrl}
-2. Go to your Test Project and add participants (manually or via CSV import)
-3. Send magic links to your participants so they can upload their travel documents
-4. Once participants submit, review their reimbursements with AI-assisted checks
-5. Configure country reimbursement limits in the project Settings whenever you're ready
+2. Create your first project: its name, place and dates are enough to start
+3. Add your participants (by hand or from a list) and set the maximum amount per sending country
+4. Send them their personal link, so they can upload their tickets
+5. Check and approve what they submit, with the AI review next to it
 
-When you're ready for a real project, purchase a project credit from the Billing page. Each credit covers one project with up to 60 participants.
+More than 10 participants? One project credit covers a project with up to 60 participants. You find the credits on the Billing page.
 
 Best regards,
 The EasyReimburse Team
@@ -199,16 +199,16 @@ This email was sent automatically by EasyReimburse. Please do not reply directly
 export function welcomeHtml(organisationName: string, loginUrl: string): string {
   return wrapInLayout(`
     <p>Welcome to EasyReimburse, <strong>${organisationName}</strong>!</p>
-    <p>Your organisation account has been created successfully. A free test project (up to 10 participants) has been set up for you to explore the platform.</p>
+    <p>Your organisation account is ready. Your first project is <strong>free for up to 10 participants</strong>.</p>
     ${button(loginUrl, 'Go to Your Dashboard')}
     <h3 style="color: #6b21a8; margin-top: 25px;">How to get started:</h3>
     <ol style="padding-left: 20px;">
-      <li>Go to your <strong>Test Project</strong> and add participants (manually or via CSV import)</li>
-      <li>Send <strong>magic links</strong> to your participants so they can upload their travel documents</li>
-      <li>Once participants submit, review their reimbursements with AI-assisted checks</li>
-      <li>Configure country reimbursement limits in the project <strong>Settings</strong> whenever you're ready</li>
+      <li><strong>Create your first project</strong>: its name, place and dates are enough to start</li>
+      <li>Add your participants (by hand or from a list) and set the <strong>maximum amount</strong> per sending country</li>
+      <li>Send them their <strong>personal link</strong>, so they can upload their tickets</li>
+      <li>Check and approve what they submit, with the AI review next to it</li>
     </ol>
-    ${infoBox('Ready for a real project? Purchase a project credit from the <strong>Billing</strong> page. Each credit covers one project with up to 60 participants.')}
+    ${infoBox('More than 10 participants? One project credit covers a project with up to 60 participants. You find the credits on the <strong>Billing</strong> page.')}
   `);
 }
 

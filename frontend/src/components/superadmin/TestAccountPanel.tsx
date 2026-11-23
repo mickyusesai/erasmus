@@ -54,7 +54,7 @@ export function TestAccountPanel() {
           <FlaskConical className="w-5 h-5 text-amber-300" /> Onboarding test account
         </h2>
         <p className="text-sm text-gray-400 mt-1 leading-relaxed">
-          Opens the app as an organisation that signed up this second: the same welcome, the same free test project and nothing
+          Opens the app as an organisation that signed up this second: the same welcome, the same free first project and nothing
           else. Every start throws the previous test account away with its projects, participants and files, so you can go through
           the first steps as often as you like. Real organisations are never touched.
         </p>

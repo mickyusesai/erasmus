@@ -11,7 +11,7 @@ import {
   organisationAuth,
 } from '../../middleware/auth.js';
 import { getEmailService } from '../../services/email/index.js';
-import { createOrganisationWithTestProject } from '../../services/organisation/signup.js';
+import { createNewOrganisation } from '../../services/organisation/signup.js';
 
 const router = Router();
 
@@ -32,8 +32,8 @@ const registerSchema = z.object({
 
 /**
  * POST /api/auth/register
- * Register a new organisation account
- * Automatically creates a free test project with max 10 participants
+ * Register a new organisation account.
+ * Its first project will be free for up to 10 participants (created by the organisation itself).
  */
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   const result = registerSchema.safeParse(req.body);
@@ -56,9 +56,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   // Hash password
   const passwordHash = await bcrypt.hash(password, 12);
 
-  // Create organisation with its free test project in a transaction
+  // Everything a new organisation starts with, in one transaction
   const organisation = await prisma.$transaction((tx) =>
-    createOrganisationWithTestProject(tx, { name, email, passwordHash, oid })
+    createNewOrganisation(tx, { name, email, passwordHash, oid })
   );
 
   // Generate token
@@ -74,7 +74,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   ).catch((err) => console.error('[Email] Failed to send welcome email:', err));
 
   res.status(201).json({
-    message: 'Registration successful! A free test project has been created for you with up to 10 participants.',
+    message: 'Registration successful! Your first project is free for up to 10 participants.',
     token,
     organisation: {
       id: organisation.id,

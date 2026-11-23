@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { OnboardingWizard } from '../../components/organisation/OnboardingWizard';
+import { WelcomeScreen } from '../../components/organisation/WelcomeScreen';
+import { NextStepCard } from '../../components/organisation/NextStepCard';
+import { FilmModal } from '../../components/organisation/FilmModal';
 import { organisationApi, OrgDashboardData } from '../../services/api';
-import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, AlertTriangle, ArrowRight } from 'lucide-react';
+import { nextStep, shouldWelcome } from '../../utils/gettingStarted';
+import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, ArrowRight } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 
@@ -27,7 +30,8 @@ export default function OrgDashboard() {
     }
   }, [navigate]);
 
-  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [welcomeClosed, setWelcomeClosed] = useState(false);
+  const [showFilm, setShowFilm] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['org-dashboard'],
@@ -36,16 +40,23 @@ export default function OrgDashboard() {
   });
 
   const dashboard = data as OrgDashboardData | undefined;
-
-  // Show onboarding wizard for first-time users
-  useEffect(() => {
-    if (!dashboard) return;
-    const orgId = dashboard.organisation.id;
-    const seen = localStorage.getItem(`org-onboarding-${orgId}`);
-    if (!seen) setShowOnboarding(true);
-  }, [dashboard]);
-
   const queryClient = useQueryClient();
+
+  // The welcome is remembered on the server, so it is the same on every device.
+  // Whoever closed the old intro in this browser is not welcomed again.
+  const seenOldIntro = !!dashboard && localStorage.getItem(`org-onboarding-${dashboard.organisation.id}`) === 'done';
+  const rememberWelcomeSeen = () => {
+    setWelcomeClosed(true);
+    queryClient.setQueryData<OrgDashboardData>(['org-dashboard'], (current) =>
+      current ? { ...current, onboarding: { ...current.onboarding, welcomeSeenAt: new Date().toISOString() } } : current
+    );
+    organisationApi.markWelcomeSeen().catch(() => { /* it is asked again next time, nothing is lost */ });
+  };
+  useEffect(() => {
+    if (dashboard && seenOldIntro && dashboard.onboarding && !dashboard.onboarding.welcomeSeenAt && !dashboard.supportSession) {
+      organisationApi.markWelcomeSeen().catch(() => {});
+    }
+  }, [dashboard, seenOldIntro]);
 
   const handleLogout = () => {
     queryClient.clear();
@@ -83,6 +94,13 @@ export default function OrgDashboard() {
     );
   }
 
+  // Until the first invitations are out, the dashboard points at one next step
+  const step = nextStep(dashboard);
+  const gettingStarted = !!step;
+  const showWelcome = !!step && !welcomeClosed && shouldWelcome(dashboard, seenOldIntro);
+  const freeProject = dashboard.freeProject;
+  const stepsLeft = dashboard.gettingStarted ? dashboard.gettingStarted.steps.filter((s) => !s.done).length : 0;
+
   const statCards = [
     {
       label: 'Available Credits',
@@ -90,6 +108,7 @@ export default function OrgDashboard() {
       icon: CreditCard,
       color: 'text-purple-600',
       bgColor: 'bg-purple-100',
+      to: '/org/billing',
     },
     {
       label: 'Total Projects',
@@ -151,106 +170,62 @@ export default function OrgDashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8 space-y-8 animate-fadeIn">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-500 mt-1">Welcome back! Here's your organisation overview.</p>
+        {/* Greeting */}
+        <div className="flex items-center justify-between gap-4">
+          {gettingStarted ? (
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Good to have you here</h1>
+              <p className="text-gray-500 mt-1">
+                {stepsLeft === 1 ? 'One step' : `${stepsLeft} steps`} to go until your participants can send in their tickets.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+              <p className="text-gray-500 mt-1">Welcome back! Here's your organisation overview.</p>
+            </div>
+          )}
+          {(!gettingStarted || dashboard.projects.length > 0) && (
+            <Link to="/org/projects/new" className="flex-shrink-0">
+              <Button variant={gettingStarted ? 'secondary' : 'primary'}>
+                <Plus className="w-4 h-4 mr-2" />
+                New Project
+              </Button>
+            </Link>
+          )}
+        </div>
+
+        {/* The one next step, until the first invitations are out */}
+        {step && dashboard.gettingStarted && (
+          <NextStepCard step={step} progress={dashboard.gettingStarted} onWatchFilm={() => setShowFilm(true)} />
+        )}
+
+        {/* Stats Grid (says little before there is anything to count) */}
+        {!gettingStarted && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {statCards.map((stat) => {
+              const card = (
+                <Card key={stat.label}>
+                  <CardContent>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-500">{stat.label}</p>
+                        <p className="text-3xl font-bold text-gray-900 mt-1">{stat.value}</p>
+                        {stat.to && <p className="text-xs text-primary-600 mt-1">Billing and credits</p>}
+                      </div>
+                      <div className={`w-12 h-12 rounded-xl ${stat.bgColor} flex items-center justify-center`}>
+                        <stat.icon className={`w-6 h-6 ${stat.color}`} />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+              return stat.to ? (
+                <Link key={stat.label} to={stat.to} className="block hover:opacity-90 transition-opacity">{card}</Link>
+              ) : card;
+            })}
           </div>
-          <Link to="/org/projects/new">
-            <Button disabled={!dashboard.credits.canCreateProject}>
-              <Plus className="w-4 h-4 mr-2" />
-              New Project
-            </Button>
-          </Link>
-        </div>
-
-        {/* Credit Status Alert */}
-        <CreditStatusCard credits={dashboard.credits} />
-
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {statCards.map((stat) => (
-            <Card key={stat.label}>
-              <CardContent>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">{stat.label}</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-1">{stat.value}</p>
-                  </div>
-                  <div className={`w-12 h-12 rounded-xl ${stat.bgColor} flex items-center justify-center`}>
-                    <stat.icon className={`w-6 h-6 ${stat.color}`} />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        {/* Quick Actions */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Credit Summary */}
-          <Card>
-            <CardHeader>
-              <h2 className="text-lg font-semibold text-gray-900">Credit Summary</h2>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
-                      <CreditCard className="w-5 h-5 text-purple-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">Project Credits</p>
-                      <p className="font-semibold text-gray-900">
-                        {dashboard.credits.available} available
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <Link to="/org/billing" className="p-4 bg-primary-50 rounded-xl hover:bg-primary-100 transition-colors">
-                    <p className="text-sm text-primary-600">Single Credit</p>
-                    <p className="text-lg font-bold text-primary-700">€129</p>
-                  </Link>
-                  <Link to="/org/billing" className="p-4 bg-emerald-50 rounded-xl hover:bg-emerald-100 transition-colors">
-                    <p className="text-sm text-emerald-600">Pack of 5</p>
-                    <p className="text-lg font-bold text-emerald-700">€499</p>
-                  </Link>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Recent Activity */}
-          <Card>
-            <CardHeader>
-              <h2 className="text-lg font-semibold text-gray-900">Account Status</h2>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <span className="text-gray-700">Organisation</span>
-                  <span className="font-semibold text-gray-900">{dashboard.organisation.name}</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <span className="text-gray-700">Email</span>
-                  <span className="font-semibold text-gray-900">{dashboard.organisation.email}</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <span className="text-gray-700">Projects Created</span>
-                  <span className="font-semibold text-gray-900">{dashboard.stats.projectCount}</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <span className="text-gray-700">Total Participants</span>
-                  <span className="font-semibold text-gray-900">{dashboard.stats.totalParticipants}</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        )}
 
         {/* Projects List */}
         <Card>
@@ -269,16 +244,28 @@ export default function OrgDashboard() {
           </CardHeader>
           <CardContent>
             {dashboard.projects.length === 0 ? (
-              <div className="text-center py-8">
-                <FolderKanban className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p className="text-gray-500">No projects yet</p>
-                <Link
-                  to="/org/projects/new"
-                  className="text-primary-600 hover:text-primary-700 font-medium text-sm mt-2 inline-block"
-                >
-                  Create your first project
-                </Link>
-              </div>
+              freeProject?.available ? (
+                <div className="flex items-center justify-between gap-4 p-4 rounded-xl border border-dashed border-primary-200 bg-primary-50/40">
+                  <div>
+                    <p className="font-medium text-gray-900">Your first project</p>
+                    <p className="text-sm text-gray-600">Free for up to {freeProject.maxParticipants} participants · not set up yet</p>
+                  </div>
+                  <Link to="/org/projects/new" className="flex-shrink-0">
+                    <Button variant="secondary">Set up</Button>
+                  </Link>
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <FolderKanban className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No projects yet</p>
+                  <Link
+                    to="/org/projects/new"
+                    className="text-primary-600 hover:text-primary-700 font-medium text-sm mt-2 inline-block"
+                  >
+                    Create your first project
+                  </Link>
+                </div>
+              )
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -302,8 +289,8 @@ export default function OrgDashboard() {
                               {project.name}
                             </Link>
                             {project.isTestProject && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                                Test
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                                Free
                               </span>
                             )}
                           </div>
@@ -328,44 +315,19 @@ export default function OrgDashboard() {
         </Card>
       </main>
 
-      {showOnboarding && (
-        <OnboardingWizard
-          onComplete={() => {
-            localStorage.setItem(`org-onboarding-${dashboard.organisation.id}`, 'done');
-            setShowOnboarding(false);
+      {showWelcome && step && (
+        <WelcomeScreen
+          organisationName={dashboard.organisation.name}
+          step={step}
+          onStart={() => {
+            rememberWelcomeSeen();
+            navigate(step.to);
           }}
+          onWatchFilm={() => setShowFilm(true)}
+          onLookAround={rememberWelcomeSeen}
         />
       )}
+      {showFilm && <FilmModal onClose={() => setShowFilm(false)} />}
     </div>
   );
-}
-
-function CreditStatusCard({ credits }: { credits: OrgDashboardData['credits'] }) {
-  // No credits
-  if (!credits.canCreateProject) {
-    return (
-      <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
-            <AlertTriangle className="w-5 h-5 text-amber-600" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-amber-800">No Credits Available</h3>
-            <p className="text-amber-700 text-sm mt-1">
-              {credits.reason || 'Purchase credits to create new projects.'}
-            </p>
-            <Link
-              to="/org/billing"
-              className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-amber-800 hover:text-amber-900"
-            >
-              Buy credits <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Has regular credits - don't show anything special
-  return null;
 }

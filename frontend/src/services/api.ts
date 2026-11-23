@@ -741,6 +741,16 @@ export const organisationApi = {
     return handleResponse<OrgDashboardData>(res);
   },
 
+  /** Remember (on the server) that the welcome has been seen */
+  markWelcomeSeen: async () => {
+    const res = await fetch(`${API_BASE}/organisation/onboarding`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ welcomeSeen: true }),
+    });
+    return handleResponse<{ onboarding: { welcomeSeenAt?: string } }>(res);
+  },
+
   /** Onboarding test account only: throw everything away and start again as a new organisation */
   restartTestAccount: async (credits = 0) => {
     const res = await fetch(`${API_BASE}/organisation/test-account/restart`, {
@@ -772,7 +782,7 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ message: string; project: OrgProject; creditUsed: string }>(res);
+    return handleResponse<{ message: string; project: OrgProject; creditUsed: string | null; free?: boolean }>(res);
   },
 
   updateProject: async (id: string, data: Partial<CreateOrgProjectData>) => {
@@ -1463,9 +1473,30 @@ export interface GreenTravelSuggestion {
   calculation?: GreenTravelCalculation | null;
 }
 
+export type GettingStartedStep = 'PROJECT' | 'PARTICIPANTS' | 'AMOUNTS' | 'INVITATIONS';
+
+/** The one next step for an organisation that has not sent its first invitations yet */
+export interface GettingStarted {
+  complete: boolean;
+  steps: { id: GettingStartedStep; done: boolean }[];
+  next: GettingStartedStep | null;
+  /** The project the next step is about; null when it still has to be created */
+  projectId: string | null;
+  /** That project is the automatic "Test Project" of an older sign-up, still as it was created */
+  projectIsPlaceholder: boolean;
+  countriesWithoutAmount: string[];
+}
+
 export interface OrgDashboardData {
-  organisation: { id: string; name: string; email: string; isAffiliate?: boolean; affiliateActive?: boolean; isTestAccount?: boolean };
+  organisation: { id: string; name: string; email: string; isAffiliate?: boolean; affiliateActive?: boolean; isTestAccount?: boolean; createdAt?: string };
   credits: OrgCreditStatus;
+  /** The first project is free for up to maxParticipants participants */
+  freeProject?: { available: boolean; maxParticipants: number };
+  /** What the organisation has seen of the first-run guidance (remembered on the server) */
+  onboarding?: { welcomeSeenAt?: string };
+  gettingStarted?: GettingStarted;
+  /** EasyReimburse support is looking along: no welcome, nothing is remembered as seen */
+  supportSession?: boolean;
   stats: { projectCount: number; totalParticipants: number };
   projects: OrgProject[];
   recentPurchases: OrgPurchase[];
@@ -1571,6 +1602,8 @@ export type ExchangeRateMode = 'PURCHASE_DATE' | 'PROJECT_END_DATE' | 'MANUAL_DA
 export interface CreateOrgProjectData {
   name: string;
   description?: string;
+  /** true = the free first project (up to 10 participants), false = use a credit */
+  free?: boolean;
   country: string;
   venueAddress?: string;
   startDate: string;

@@ -66,8 +66,13 @@ export function generateSupportSessionToken(organisation: Organisation, admin: S
 
 /** Who to write in the change log for organisation actions: the organisation, or support acting for it */
 export function changeLogActor(req: Request): 'ORGANISATION' | 'SUPPORT' {
+  return isSupportSession(req) ? 'SUPPORT' : 'ORGANISATION';
+}
+
+/** True when EasyReimburse support is looking along in an organisation's dashboard */
+export function isSupportSession(req: Request): boolean {
   const payload = req.tokenPayload;
-  return payload?.type === 'organisation' && payload.support ? 'SUPPORT' : 'ORGANISATION';
+  return payload?.type === 'organisation' && !!payload.support;
 }
 
 export function generateSuperAdminToken(admin: SuperAdmin): string {

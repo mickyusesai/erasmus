@@ -1,12 +1,23 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { organisationApi, ExchangeRateMode } from '../../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft, AlertTriangle, HelpCircle } from 'lucide-react';
+import { ArrowLeft, CreditCard, Gift, HelpCircle } from 'lucide-react';
+import { clsx } from 'clsx';
+
+/** What one project credit costs, as on the Billing page */
+const CREDIT_PRICES = [
+  { label: 'Single credit', price: '€129' },
+  { label: 'Pack of 5', price: '€499' },
+  { label: 'Pack of 10', price: '€899' },
+];
 
 export default function ProjectCreate() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  /** Which kind of project, when there is a choice (the free first project or a credit) */
+  const [kind, setKind] = useState<'free' | 'credit' | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [country, setCountry] = useState('');
@@ -33,6 +44,7 @@ export default function ProjectCreate() {
 
   const createMutation = useMutation({
     mutationFn: () => organisationApi.createProject({
+      free: chosen === 'free',
       name,
       description,
       country,
@@ -43,7 +55,8 @@ export default function ProjectCreate() {
       exchangeRateManualDate: exchangeRateMode === 'MANUAL_DATE' ? (exchangeRateManualDate || null) : null,
     }),
     onSuccess: (data) => {
-      toast.success(`Project created! Used ${data.creditUsed === 'FOUNDING' ? 'founding credit' : data.creditUsed === 'ANNUAL' ? 'annual license' : '1 credit'}.`);
+      toast.success(data.free ? `Project created. It's free for up to ${freeMax} participants.` : 'Project created! Used 1 credit.');
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
       navigate(`/org/projects/${data.project.id}`);
     },
     onError: (error: Error) => {
@@ -75,7 +88,53 @@ export default function ProjectCreate() {
     );
   }
 
-  const canCreate = dashboard?.credits.canCreateProject;
+  // The first project is free (up to 10 participants); every other one uses a credit.
+  // With both at hand the free one is the default: it can be upgraded later, a credit can't be taken back.
+  const credits = dashboard?.credits.available ?? 0;
+  const freeAvailable = !!dashboard?.freeProject?.available;
+  const freeMax = dashboard?.freeProject?.maxParticipants ?? 10;
+  const chosen: 'free' | 'credit' | null =
+    kind === 'free' && freeAvailable ? 'free' : kind === 'credit' && credits > 0 ? 'credit' : freeAvailable ? 'free' : credits > 0 ? 'credit' : null;
+  const canCreate = chosen !== null;
+
+  // Neither a free project nor a credit: this is the moment a credit is needed, so say what it costs
+  if (!canCreate) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="max-w-2xl mx-auto px-4 py-8">
+          <Link to="/org/dashboard" className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-6">
+            <ArrowLeft className="w-4 h-4" />
+            Back to Dashboard
+          </Link>
+          <div className="bg-white rounded-xl shadow-sm p-8">
+            <div className="w-12 h-12 rounded-xl bg-primary-100 flex items-center justify-center mb-4">
+              <CreditCard className="w-6 h-6 text-primary-600" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900">A new project needs a project credit</h1>
+            <p className="text-gray-600 mt-2">
+              One credit is one project with up to 60 participants. Your free project has been used already.
+            </p>
+            <div className="grid grid-cols-3 gap-3 mt-6">
+              {CREDIT_PRICES.map((option) => (
+                <div key={option.label} className="rounded-xl border border-gray-200 p-4 text-center">
+                  <p className="text-sm text-gray-500">{option.label}</p>
+                  <p className="text-xl font-bold text-gray-900 mt-1">{option.price}</p>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-4 mt-6">
+              <Link to="/org/dashboard" className="px-6 py-3 border border-gray-300 rounded-lg font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                Not now
+              </Link>
+              <Link to="/org/billing" className="flex-1 py-3 px-6 bg-primary-600 text-white rounded-lg font-semibold hover:bg-primary-700 transition-colors text-center">
+                Buy credits
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -95,32 +154,44 @@ export default function ProjectCreate() {
             Set up a new project for your Erasmus+ mobility.
           </p>
 
-          {/* Credit warning */}
-          {!canCreate && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-                <div>
-                  <h3 className="font-semibold text-amber-800">No Credits Available</h3>
-                  <p className="text-amber-700 text-sm mt-1">
-                    {dashboard?.credits.reason || 'Please purchase credits to create a project.'}
-                  </p>
-                  <Link
-                    to="/org/billing"
-                    className="inline-block mt-2 text-sm font-medium text-amber-800 hover:text-amber-900"
-                  >
-                    Purchase credits →
-                  </Link>
-                </div>
-              </div>
+          {/* What this project costs: nothing (the first one), or a credit */}
+          {freeAvailable && credits > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6" role="radiogroup" aria-label="Kind of project">
+              {([
+                { id: 'free', icon: Gift, title: 'Free project', text: `Up to ${freeMax} participants. No credit needed, and you can upgrade it later.` },
+                { id: 'credit', icon: CreditCard, title: 'Full project', text: `Up to 60 participants. Uses 1 of your ${credits} credit${credits === 1 ? '' : 's'}.` },
+              ] as const).map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={chosen === option.id}
+                  onClick={() => setKind(option.id)}
+                  className={clsx(
+                    'text-left rounded-xl border-2 p-4 transition-colors',
+                    chosen === option.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <option.icon className={clsx('w-4 h-4', chosen === option.id ? 'text-primary-600' : 'text-gray-400')} />
+                    <span className="font-semibold text-gray-900">{option.title}</span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">{option.text}</p>
+                </button>
+              ))}
             </div>
-          )}
-
-          {/* Credit info */}
-          {canCreate && (
+          ) : chosen === 'free' ? (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 mb-6 flex items-start gap-3">
+              <Gift className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+              <p className="text-emerald-900 text-sm">
+                <strong>Your first project is free</strong> for up to {freeMax} participants. Need room for more later? You can upgrade it with a
+                credit at any time.
+              </p>
+            </div>
+          ) : (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <p className="text-blue-800 text-sm">
-                {`Creating this project will use 1 credit. You have ${dashboard?.credits.available} credits available.`}
+                {`Creating this project will use 1 credit. You have ${credits} credit${credits === 1 ? '' : 's'} available.`}
               </p>
             </div>
           )}

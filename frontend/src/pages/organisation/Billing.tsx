@@ -4,7 +4,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { organisationApi } from '../../services/api';
 import { ArrowLeft, CreditCard, CheckCircle, Clock, AlertTriangle, ExternalLink, FileText } from 'lucide-react';
-import { OnboardingWizard } from '../../components/organisation/OnboardingWizard';
 
 const PRICING = {
   SINGLE:  { name: 'Single Project', price: 129, credits: 1 },
@@ -21,14 +20,6 @@ export default function Billing() {
   const [loadingPlan, setLoadingPlan] = useState<PlanType | null>(null);
   // Project number / PO reference printed on the next invoice (optional, per purchase)
   const [invoiceReference, setInvoiceReference] = useState('');
-
-  // Show onboarding wizard after a successful purchase if not yet seen
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    const orgId = localStorage.getItem('org-id');
-    const justPurchased = new URLSearchParams(window.location.search).get('success') === '1';
-    const seen = orgId ? localStorage.getItem(`org-onboarding-${orgId}`) : 'done';
-    return justPurchased && !seen;
-  });
 
   // Check if logged in
   useEffect(() => {
@@ -283,16 +274,6 @@ export default function Billing() {
           )}
         </div>
       </div>
-
-      {showOnboarding && (
-        <OnboardingWizard
-          onComplete={() => {
-            const orgId = localStorage.getItem('org-id');
-            if (orgId) localStorage.setItem(`org-onboarding-${orgId}`, 'done');
-            setShowOnboarding(false);
-          }}
-        />
-      )}
     </div>
   );
 }
