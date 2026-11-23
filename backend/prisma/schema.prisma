@@ -651,6 +651,9 @@ model AffiliateLink {
   customerId      String       @unique
   customer        Organisation @relation("CustomerOrg", fields: [customerId], references: [id], onDelete: Cascade)
   createdAt       DateTime     @default(now())
+  // Super admin (email) who linked this customer by hand; null = the customer used the affiliate's
+  // code at checkout. Either way commission only exists for purchases completed after the link.
+  addedBy         String?
   commissions     AffiliateCommission[]
 
   @@index([affiliateId])

@@ -1513,6 +1513,8 @@ export interface AffiliateCustomerPurchase {
 export interface AffiliateCustomer {
   orgName: string;
   linkedAt: string;
+  /** Linked by EasyReimburse instead of through the code: commission counts from linkedAt on */
+  addedByHand?: boolean;
   purchases: AffiliateCustomerPurchase[];
 }
 
@@ -1537,6 +1539,31 @@ export interface SuperAdminAffiliate {
   totalEarnedCents: number;
   pendingBalanceCents: number;
   createdAt: string;
+}
+
+/** Super-admin: one customer of an affiliate */
+export interface AffiliateCustomerLink {
+  linkId: string;
+  organisationId: string;
+  name: string;
+  email: string;
+  linkedAt: string;
+  /** Super admin who linked it by hand; null = the customer used the affiliate's code */
+  addedBy: string | null;
+  /** Purchases from before the link (they earn the affiliate nothing) */
+  purchasesBeforeLink: number;
+  commissionCount: number;
+  commissionCents: number;
+  /** A hand-made link without commission can be undone */
+  removable: boolean;
+}
+
+export interface AffiliateCustomersData {
+  affiliate: { id: string; name: string; affiliateCode: string | null; affiliateActive: boolean; commissionRate: number | null };
+  customers: AffiliateCustomerLink[];
+  /** Organisations that are not linked to any affiliate yet */
+  available: { id: string; name: string; email: string; createdAt: string; completedPurchases: number }[];
+  linkedToOtherAffiliates: number;
 }
 
 export type ExchangeRateMode = 'PURCHASE_DATE' | 'PROJECT_END_DATE' | 'MANUAL_DATE';
@@ -2506,6 +2533,31 @@ export const superAdminApi = {
   getAffiliates: async () => {
     const res = await fetch(`${API_BASE}/super-admin/affiliates`, { headers: getSuperAdminHeaders() });
     return handleResponse<{ affiliates: SuperAdminAffiliate[] }>(res);
+  },
+
+  /** An affiliate's customers, and the organisations that can still be added to it */
+  getAffiliateCustomers: async (affiliateOrgId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/${affiliateOrgId}/customers`, { headers: getSuperAdminHeaders() });
+    return handleResponse<AffiliateCustomersData>(res);
+  },
+
+  /** Link organisations to an affiliate by hand; commission starts with their next purchase */
+  addAffiliateCustomers: async (affiliateOrgId: string, organisationIds: string[]) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/${affiliateOrgId}/customers`, {
+      method: 'POST',
+      headers: getSuperAdminHeaders(),
+      body: JSON.stringify({ organisationIds }),
+    });
+    return handleResponse<{ message: string; added: { id: string; name: string }[] }>(res);
+  },
+
+  /** Undo a link that was made by hand and has not earned commission */
+  removeAffiliateCustomer: async (affiliateOrgId: string, linkId: string) => {
+    const res = await fetch(`${API_BASE}/super-admin/affiliates/${affiliateOrgId}/customers/${linkId}`, {
+      method: 'DELETE',
+      headers: getSuperAdminHeaders(),
+    });
+    return handleResponse<{ message: string }>(res);
   },
 
   createAffiliate: async (data: { organisationId: string; affiliateCode: string; commissionRate: number }) => {

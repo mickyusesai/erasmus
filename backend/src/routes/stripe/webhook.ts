@@ -1,11 +1,15 @@
 import { Router, Request, Response } from 'express';
 import express from 'express';
 import Stripe from 'stripe';
+import type { PurchaseStatus } from '@prisma/client';
 import prisma from '../../utils/prisma.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getEmailService } from '../../services/email/index.js';
 
 const router = Router();
+
+/** A purchase in one of these states has not been paid out as credits yet */
+export const OPEN_PURCHASE_STATUSES: PurchaseStatus[] = ['PENDING', 'EXPIRED', 'FAILED'];
 
 /**
  * POST /api/stripe/webhook
@@ -59,9 +63,15 @@ router.post(
       }
 
       try {
-        await prisma.$transaction([
-          prisma.purchase.update({
-            where: { id: purchaseId },
+        // Stripe can deliver the same event more than once (a retry, or a resend from its
+        // dashboard). Only the delivery that completes the purchase counts: it grants the
+        // credits, sends the email and earns the commission. A repeat does nothing, so credits
+        // are never granted twice and a purchase from before an affiliate link never earns
+        // commission afterwards.
+        const completedNow = await prisma.$transaction(async (tx) => {
+          const { count } = await tx.purchase.updateMany({
+            // EXPIRED and FAILED can still be paid: the notice may arrive after our own clean-up
+            where: { id: purchaseId, status: { in: OPEN_PURCHASE_STATUSES } },
             data: {
               status: 'COMPLETED',
               completedAt: new Date(),
@@ -70,12 +80,20 @@ router.post(
                 : session.payment_intent?.id ?? null,
               stripeInvoiceUrl: invoiceUrl,
             },
-          }),
-          prisma.organisation.update({
+          });
+          if (count === 0) return false;
+          await tx.organisation.update({
             where: { id: organisationId },
             data: { projectCredits: { increment: credits } },
-          }),
-        ]);
+          });
+          return true;
+        });
+
+        if (!completedNow) {
+          console.log(`[Stripe Webhook] Purchase ${purchaseId} was already handled (or does not exist); this delivery changes nothing`);
+          res.json({ received: true });
+          return;
+        }
 
         console.log(`[Stripe Webhook] Granted ${credits} credits to org ${organisationId}`);
 

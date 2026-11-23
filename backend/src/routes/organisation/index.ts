@@ -3416,6 +3416,8 @@ router.get('/affiliate', asyncHandler(async (req: Request, res: Response) => {
   const linkedCustomers = links.map((link) => ({
     orgName: link.customer.name,
     linkedAt: link.createdAt,
+    // Linked by EasyReimburse instead of through the code: commission counts from linkedAt on
+    addedByHand: link.addedBy !== null,
     purchases: link.commissions.map((c) => ({
       purchaseId: c.purchaseId,
       completedAt: c.purchase.completedAt,

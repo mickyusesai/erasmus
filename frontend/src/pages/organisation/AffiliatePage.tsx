@@ -172,6 +172,32 @@ export default function AffiliatePage() {
           </div>
         </div>
 
+        {/* Customers */}
+        {data.linkedCustomers.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-6">
+            <div className="px-6 py-4 border-b border-gray-100">
+              <h2 className="text-base font-semibold text-gray-900">Your Customers</h2>
+              <p className="text-sm text-gray-500 mt-0.5">You earn commission on what they buy from the day they were linked to you.</p>
+            </div>
+            <ul className="divide-y divide-gray-50">
+              {data.linkedCustomers.map((c) => (
+                <li key={`${c.orgName}-${c.linkedAt}`} className="px-6 py-3 flex items-center justify-between gap-4 text-sm">
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-900 truncate">{c.orgName}</p>
+                    <p className="text-xs text-gray-500">
+                      Linked since {new Date(c.linkedAt).toLocaleDateString('en-GB')}
+                      {c.addedByHand ? ' · added by EasyReimburse' : ' · used your code'}
+                    </p>
+                  </div>
+                  <p className="text-gray-600 flex-shrink-0">
+                    {c.purchases.length === 0 ? 'No purchase yet' : `${c.purchases.length} purchase${c.purchases.length === 1 ? '' : 's'}`}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Commission Table */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-6">
           <div className="px-6 py-4 border-b border-gray-100">
@@ -182,8 +208,17 @@ export default function AffiliatePage() {
           {allPurchases.length === 0 ? (
             <div className="px-6 py-12 text-center">
               <Users className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500 text-sm">No customers linked yet.</p>
-              <p className="text-gray-400 text-xs mt-1">Share your affiliate code to start earning.</p>
+              {data.linkedCustomers.length === 0 ? (
+                <>
+                  <p className="text-gray-500 text-sm">No customers linked yet.</p>
+                  <p className="text-gray-400 text-xs mt-1">Share your affiliate code to start earning.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-gray-500 text-sm">No purchases yet.</p>
+                  <p className="text-gray-400 text-xs mt-1">Your commission appears here as soon as one of your customers buys credits.</p>
+                </>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">

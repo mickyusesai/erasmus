@@ -10,6 +10,7 @@ import { findTestAccount, startTestAccount, suggestedTestAccountEmail, TEST_ACCO
 import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { AI_JOB_LABELS, estimateCostUsd, type AiJob } from '../../services/ai/usageLog.js';
+import { linkCustomersByHand, listAffiliateCustomers, MAX_CUSTOMERS_PER_REQUEST, unlinkCustomerAddedByHand } from '../../services/affiliate/customers.js';
 
 const router = Router();
 
@@ -1072,6 +1073,43 @@ router.post('/affiliates/:orgId/confirm-payout', asyncHandler(async (req: Reques
 
   console.log(`[SuperAdmin] Confirmed payout ${payout.id} for affiliate ${org.name}: €${(totalCents / 100).toFixed(2)}`);
   res.json({ payout, commissionsUpdated: pendingCommissions.length, totalCents });
+}));
+
+/**
+ * GET /api/super-admin/affiliates/:orgId/customers
+ * The affiliate's customers, and the organisations that can still be added to it
+ */
+router.get('/affiliates/:orgId/customers', asyncHandler(async (req: Request, res: Response) => {
+  res.json(await listAffiliateCustomers(req.params.orgId));
+}));
+
+/**
+ * POST /api/super-admin/affiliates/:orgId/customers
+ * Link organisations to the affiliate by hand (brought in without using the code).
+ * Commission starts with their next purchase; earlier purchases earn nothing.
+ */
+const addAffiliateCustomersSchema = z.object({
+  organisationIds: z.array(z.string().uuid()).min(1, 'Choose at least one organisation').max(MAX_CUSTOMERS_PER_REQUEST),
+});
+
+router.post('/affiliates/:orgId/customers', asyncHandler(async (req: Request, res: Response) => {
+  const result = addAffiliateCustomersSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+
+  const { affiliate, added } = await linkCustomersByHand(req.params.orgId, result.data.organisationIds, req.superAdmin!.email);
+  res.status(201).json({
+    message: `${added.length} organisation${added.length === 1 ? '' : 's'} added to ${affiliate.name}. Commission starts with their next purchase.`,
+    added,
+  });
+}));
+
+/**
+ * DELETE /api/super-admin/affiliates/:orgId/customers/:linkId
+ * Undo a link made by hand, as long as it has not earned any commission
+ */
+router.delete('/affiliates/:orgId/customers/:linkId', asyncHandler(async (req: Request, res: Response) => {
+  const { name } = await unlinkCustomerAddedByHand(req.params.orgId, req.params.linkId, req.superAdmin!.email);
+  res.json({ message: `${name} is no longer linked to this affiliate` });
 }));
 
 export default router;

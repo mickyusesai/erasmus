@@ -6,6 +6,7 @@ import { LogOut, Building2, CreditCard, Users, Plus, RefreshCw, ExternalLink, Tr
 import { AiUsagePanel } from '../../components/superadmin/AiUsagePanel';
 import { SupportKeysPanel } from '../../components/superadmin/SupportKeysPanel';
 import { TestAccountPanel } from '../../components/superadmin/TestAccountPanel';
+import { AffiliateCustomersModal } from '../../components/superadmin/AffiliateCustomersModal';
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
@@ -77,6 +78,8 @@ export default function SuperAdminDashboard() {
   const [affiliateOrgId, setAffiliateOrgId] = useState('');
   const [affiliateCode, setAffiliateCode] = useState('');
   const [affiliateCommissionRate, setAffiliateCommissionRate] = useState('20');
+  /** The affiliate whose customers are shown (and can be added to) */
+  const [customersOfAffiliateId, setCustomersOfAffiliateId] = useState<string | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('super-admin-token');
@@ -519,7 +522,17 @@ export default function SuperAdminDashboard() {
                           <td className="px-6 py-4 text-center text-gray-300">
                             {a.commissionRate != null ? `${(a.commissionRate * 100).toFixed(0)}%` : '—'}
                           </td>
-                          <td className="px-6 py-4 text-center text-gray-300">{a.linkedCustomerCount}</td>
+                          <td className="px-6 py-4 text-center">
+                            <button
+                              onClick={() => setCustomersOfAffiliateId(a.id)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-gray-200 bg-gray-700 hover:bg-gray-600 transition-colors"
+                              title="See the customers and add organisations by hand"
+                            >
+                              <Users className="w-3.5 h-3.5 text-gray-400" />
+                              {a.linkedCustomerCount}
+                              <Plus className="w-3.5 h-3.5 text-purple-400" />
+                            </button>
+                          </td>
                           <td className="px-6 py-4 text-right text-gray-300">{centsToEur(a.totalEarnedCents)}</td>
                           <td className="px-6 py-4 text-right">
                             {a.pendingBalanceCents > 0 ? (
@@ -656,6 +669,11 @@ export default function SuperAdminDashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* An affiliate's customers: see them, add organisations by hand */}
+      {customersOfAffiliateId && (
+        <AffiliateCustomersModal affiliateId={customersOfAffiliateId} onClose={() => setCustomersOfAffiliateId(null)} />
       )}
 
       {/* Make Affiliate Modal */}
