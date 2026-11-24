@@ -1,7 +1,8 @@
 # EasyReimburse Onboarding Plan
 
-Status: **being built** (23 November 2026). The seven decisions are made. Part 1 (no more dead ends) is
-built; parts 2 to 4 follow. The onboarding test account (see the end) is built.
+Status: **being built** (24 November 2026). The seven decisions are made. Part 1 (no more dead ends) and
+part 2 (the practice project) are built; parts 3 and 4 follow. The onboarding test account (see the end)
+is built.
 
 Goal: a new organisation sees a finished reimbursement within two minutes, tries both sides with
 sample tickets, and sets up its own project in four short steps.
@@ -59,9 +60,9 @@ skipped and replayed at any time.
 2. **Practice project** ("Common Ground", youth exchange in Porto, clearly marked as sample data):
    - Jonas Weber (Germany): submitted, AI review all clear, ready to approve.
    - Elena Rossi (Italy): submitted, one thing to check.
-   - Marta Kowalska (Poland): green travel by train, ready to approve.
+   - Marta Ruiz (Spain): green travel by train and bus, ready to approve.
    - Liam Byrne (Ireland): invited, not started.
-   - "You": play a participant with four sample tickets.
+   - Sam Peeters (Belgium): the one the organiser plays, with four sample tickets.
    The four participants are prepared rows and sample files (no AI cost). Emails to them are shown,
    not sent. "Start the practice again" resets it. It is not counted as a project and uses no credit.
    People, organisations and tickets are made up; no real airline or rail brands.
@@ -124,11 +125,42 @@ Each part is usable on its own and is checked in the onboarding test account bef
   `isTestProject` and `maxParticipants`). Upgrading gives room for 60 participants, like a credit does
   everywhere else (it used to remove the limit altogether).
 
-### Part 2, the practice project
+### Part 2, the practice project (built)
 
-The sample project, participants and tickets; the five-step guide with the spotlight; "be a participant
-yourself"; emails shown and not sent; start the practice again. The welcome screen gets "See how it
-works (2 minutes)" as its first way in.
+- **The practice project** is "Common Ground", a made-up youth exchange in Porto that always "ended 16
+  days ago" (`Project.isPracticeProject`). What is in it is plain data in
+  `backend/src/services/organisation/practice/content.ts`; `practiceProject.ts` puts it in the database
+  and in storage. Five made-up participants, each at a different point: Jonas Weber (ready to approve,
+  AI check all clear), Elena Rossi (one thing to check: an amount she changed by hand, with her note),
+  Marta Ruiz (green travel by train and bus), Liam Byrne (invited, not started) and Sam Peeters (the one
+  the organiser plays). Their tickets are real PDF files from made-up companies ("Example Air", "Example
+  Rail", "Example Bus"; `services/pdf/sampleTicketPdf.ts`), each saying at the bottom that it is a sample.
+- **It is made** for every new organisation at sign-up (in the background) and for the test account; an
+  organisation from before gets it the moment it asks (`POST /api/organisation/practice-project`). It
+  costs no credit, takes no participants of its own, and is counted nowhere: not on the dashboard, not
+  in `gettingStarted`, not in super-admin. It can be started again (`…/practice-project/restart`),
+  removed (`DELETE …/practice-project`) and brought back.
+- **No email ever leaves it.** Its participants have `@example.org` addresses; both email senders refuse
+  addresses that can never receive mail (`services/email/reservedAddresses.ts`), whatever part of the app
+  tries. Where an organiser's action would send an email (link, reminder, approval, paid, reopen), the
+  email is written and returned instead (`mailerFor()` in `services/email/previewEmail.ts`) and shown:
+  "This is the email they would get" (`EmailPreview.tsx`).
+- **Be a participant yourself.** On Sam's participant page "Use the sample tickets" puts four files in
+  the file (`POST /api/participant/practice/sample-tickets`), made out to Sam's name and the project's
+  dates. From there everything is real: the AI reads them, builds the trips and reviews the hand-in (it
+  is told that the files are sample tickets and to judge them like real ones: `PRACTICE_AI_NOTE`).
+  Sample bank details fill in with one click.
+- **The guide** has five steps: look around, approve Jonas, ask Elena a question, be a participant,
+  download the audit file. Whether a step is done is read from the practice project itself where it
+  leaves a trace; the two that leave none (looked around, audit file downloaded) are remembered with the
+  organisation (`Organisation.onboarding.practice`, never by a support session). Logic in
+  `services/organisation/practice/guide.ts`, words and places in `frontend/src/utils/practiceGuide.ts`.
+  It is a small panel in the corner of the practice project's pages (`PracticeGuidePanel.tsx`) that takes
+  you to the page of the step and there points at the real button (`Spotlight.tsx`, `data-tour`
+  attributes). It can be made small, put away and taken out again.
+- **Welcome screen**: "See how it works" (the practice project) is the first of three ways in, next to
+  "Set up your first project" and the film. **Dashboard**: a new organisation sees a card with the
+  practice step it is at; afterwards, and for organisations that are under way, it is one quiet line.
 
 ### Part 3, the real project in four steps
 

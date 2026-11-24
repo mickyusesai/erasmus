@@ -57,6 +57,9 @@ import { organisationApi, TravelItem, Document, TransportMode, ReviewFinding, Cr
 import { clsx } from 'clsx';
 import { tripHasNoPrice, tripPriceTypedIn } from '../../utils/tripPrice';
 import { AddReceipts } from '../../components/organisation/AddReceipts';
+import { PracticeBanner } from '../../components/organisation/PracticeBanner';
+import { PracticeGuidePanel, useMarkPracticeStep, usePractice } from '../../components/organisation/PracticeGuidePanel';
+import { showEmailInstead } from '../../components/organisation/EmailPreview';
 import { acceptWithIphonePhotos } from '../../utils/iphonePhotos';
 import { reportUploadRun, uploadForParticipantInTurn } from '../../utils/uploadInTurn';
 import { isFlightProof } from '../../utils/flightProof';
@@ -276,10 +279,15 @@ export default function OrgParticipantDetail() {
     onError: (err: Error) => toast.error(err.message || 'Rebuild failed'),
   });
 
+  // The practice project: where an email would go out it is shown instead, and its guide follows along
+  const { practice } = usePractice(!!data?.participant?.project?.isPracticeProject);
+  const markPracticeStep = useMarkPracticeStep();
+  const afterPracticeAction = () => queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
+
   const sendMagicLinkMutation = useMutation({
     mutationFn: () => organisationApi.sendMagicLink(id!),
-    onSuccess: () => {
-      toast.success('Magic link sent');
+    onSuccess: (result) => {
+      if (!showEmailInstead(result)) toast.success('Magic link sent');
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
     },
     onError: () => toast.error('Failed to send magic link'),
@@ -287,17 +295,21 @@ export default function OrgParticipantDetail() {
 
   const approveMutation = useMutation({
     mutationFn: () => organisationApi.approveParticipant(id!),
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast.success('Participant approved');
+      showEmailInstead(result);
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      afterPracticeAction();
     },
   });
 
   const markPaidMutation = useMutation({
     mutationFn: () => organisationApi.markPaid(id!),
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast.success('Marked as paid');
+      showEmailInstead(result);
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      afterPracticeAction();
     },
   });
 
@@ -345,9 +357,11 @@ export default function OrgParticipantDetail() {
 
   const resetParticipantMutation = useMutation({
     mutationFn: () => organisationApi.resetParticipant(id!),
-    onSuccess: () => {
-      toast.success('Participant reset — magic link re-sent');
+    onSuccess: (result) => {
+      toast.success(result.emailPreview ? 'Participant reset' : 'Participant reset — magic link re-sent');
+      showEmailInstead(result);
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
+      afterPracticeAction();
     },
     onError: (error: Error) => toast.error(error.message || 'Failed to reset participant'),
   });
@@ -361,8 +375,10 @@ export default function OrgParticipantDetail() {
       clearTravelItems: reopenClearItems,
       clearDocuments: reopenClearDocs,
     }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast.success('Reimbursement reopened');
+      showEmailInstead(result);
+      afterPracticeAction();
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
       queryClient.invalidateQueries({ queryKey: ['participant-review', id] });
       setShowReopenModal(false);
@@ -616,6 +632,10 @@ export default function OrgParticipantDetail() {
     }
   };
 
+  // The practice project: this participant is made up; one of them the organiser plays
+  const isPractice = !!participant.project.isPracticeProject;
+  const playedByOrganiser = isPractice && practice?.guide.you?.participantId === participant.id;
+
   const handleRefreshReview = () => {
     if (checkedCount > 0) {
       if (!confirm('This will delete all current review findings and your check progress, and generate a new AI review. Are you sure?')) {
@@ -627,18 +647,21 @@ export default function OrgParticipantDetail() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      {isPractice && <PracticeGuidePanel page={{ kind: 'participant', participantId: participant.id }} />}
+      {/* In the practice project the guide sits in the bottom corner: room to scroll clear of it */}
+      <div className={clsx('max-w-7xl mx-auto px-4 py-8', isPractice && 'pb-80')}>
         <div className="space-y-6 animate-fadeIn">
-          {/* ── Header ── */}
-          <div className="flex items-start gap-4">
+          {isPractice && <PracticeBanner participantName={participant.firstName} backTo={`/org/projects/${participant.project.id}`} />}
+          {/* ── Header (on a narrow screen the buttons go below the name instead of off the screen) ── */}
+          <div className="flex flex-wrap items-start gap-4">
             <Link
               to={`/org/projects/${participant.project.id}`}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors mt-1"
             >
               <ArrowLeft className="w-5 h-5 text-gray-600" />
             </Link>
-            <div className="flex-1">
-              <div className="flex items-center gap-3">
+            <div className="flex-1 min-w-[12rem]">
+              <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-2xl font-bold text-gray-900">
                   {participant.firstName} {participant.lastName}
                 </h1>
@@ -651,7 +674,7 @@ export default function OrgParticipantDetail() {
                 Project: {participant.project.name}
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
                 onClick={() => {
@@ -1104,8 +1127,19 @@ export default function OrgParticipantDetail() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
+                    {playedByOrganiser && (
+                      <a
+                        href={`/reimbursement?token=${participant.magicLinkToken}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-soft text-white text-sm font-medium hover:opacity-90 transition-opacity"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        Open {participant.firstName}'s page as a participant
+                      </a>
+                    )}
                     {participant.status === 'PARTICIPANT_COMPLETE' && (
-                      <Button className="w-full" onClick={() => approveMutation.mutate()} loading={approveMutation.isPending}>
+                      <Button className="w-full" data-tour="approve" onClick={() => approveMutation.mutate()} loading={approveMutation.isPending}>
                         <CheckCircle className="w-4 h-4 mr-2" />
                         Approve Reimbursement
                       </Button>
@@ -1117,7 +1151,7 @@ export default function OrgParticipantDetail() {
                       </Button>
                     )}
                     {(participant.status === 'PARTICIPANT_COMPLETE' || participant.status === 'ADMIN_APPROVED') && (
-                      <Button variant="secondary" className="w-full" onClick={() => setShowReopenModal(true)}>
+                      <Button variant="secondary" className="w-full" data-tour="reopen" onClick={() => setShowReopenModal(true)}>
                         <RotateCcw className="w-4 h-4 mr-2" />
                         Reopen Reimbursement
                       </Button>
@@ -1126,6 +1160,7 @@ export default function OrgParticipantDetail() {
                       <Button
                         variant="secondary"
                         className="w-full"
+                        data-tour="audit-pdf"
                         loading={downloadingAuditPdf}
                         onClick={async () => {
                           setDownloadingAuditPdf(true);
@@ -1134,6 +1169,7 @@ export default function OrgParticipantDetail() {
                               participant.id,
                               `${participant.firstName} ${participant.lastName}`
                             );
+                            if (isPractice) markPracticeStep('AUDIT');
                           } catch (err: unknown) {
                             toast.error(err instanceof Error ? err.message : 'Failed to generate audit PDF');
                           } finally {

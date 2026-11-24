@@ -441,6 +441,12 @@ export const participantApi = {
     return handleResponse<{ success: boolean }>(res);
   },
 
+  /** Practice project only: puts the sample tickets in the file of the participant the organiser plays */
+  addSampleTickets: async (token: string) => {
+    const res = await fetch(`${API_BASE}/participant/practice/sample-tickets?token=${token}`, { method: 'POST' });
+    return handleResponse<{ documents: Document[]; added: number }>(res);
+  },
+
   setNoReimbursement: async (token: string, noReimbursement: boolean) => {
     const res = await fetch(`${API_BASE}/participant/no-reimbursement?token=${token}`, {
       method: 'PATCH',
@@ -748,7 +754,44 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify({ welcomeSeen: true }),
     });
-    return handleResponse<{ onboarding: { welcomeSeenAt?: string } }>(res);
+    return handleResponse<{ onboarding: OnboardingState }>(res);
+  },
+
+  /** A step of the practice guide that leaves no trace in the practice project itself */
+  markPracticeStep: async (step: RememberedPracticeStep) => {
+    const res = await fetch(`${API_BASE}/organisation/onboarding`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ practiceStep: step }),
+    });
+    return handleResponse<{ onboarding: OnboardingState }>(res);
+  },
+
+  /** Put the practice guide away (true) or take it out again (false) */
+  setPracticeGuideClosed: async (closed: boolean) => {
+    const res = await fetch(`${API_BASE}/organisation/onboarding`, {
+      method: 'PATCH',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ practiceGuideClosed: closed }),
+    });
+    return handleResponse<{ onboarding: OnboardingState }>(res);
+  },
+
+  /** The organisation's practice project; it is made when there is none yet */
+  openPracticeProject: async () => {
+    const res = await fetch(`${API_BASE}/organisation/practice-project`, { method: 'POST', headers: getOrgAuthHeaders() });
+    return handleResponse<{ projectId: string; practice: PracticeOverview | null }>(res);
+  },
+
+  /** Start the practice again: a fresh practice project, and the guide at its first step */
+  restartPracticeProject: async () => {
+    const res = await fetch(`${API_BASE}/organisation/practice-project/restart`, { method: 'POST', headers: getOrgAuthHeaders() });
+    return handleResponse<{ projectId: string; practice: PracticeOverview | null }>(res);
+  },
+
+  removePracticeProject: async () => {
+    const res = await fetch(`${API_BASE}/organisation/practice-project`, { method: 'DELETE', headers: getOrgAuthHeaders() });
+    return handleResponse<{ success: boolean }>(res);
   },
 
   /** Onboarding test account only: throw everything away and start again as a new organisation */
@@ -957,7 +1000,7 @@ export const organisationApi = {
       method: 'POST',
       headers: getOrgAuthHeaders(),
     });
-    return handleResponse<{ success: boolean }>(res);
+    return handleResponse<{ success: boolean } & EmailShown>(res);
   },
 
   bulkDeleteParticipants: async (ids: string[]) => {
@@ -993,7 +1036,7 @@ export const organisationApi = {
       method: 'POST',
       headers: getOrgAuthHeaders(),
     });
-    return handleResponse<{ success: boolean }>(res);
+    return handleResponse<{ success: boolean } & EmailShown>(res);
   },
 
   sendMagicLinksBulk: async (participantIds: string[]) => {
@@ -1002,7 +1045,7 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify({ participantIds }),
     });
-    return handleResponse<{ results: { id: string; success: boolean }[] }>(res);
+    return handleResponse<{ results: { id: string; success: boolean }[] } & EmailShown>(res);
   },
 
   sendReminder: async (participantId: string) => {
@@ -1010,7 +1053,7 @@ export const organisationApi = {
       method: 'POST',
       headers: getOrgAuthHeaders(),
     });
-    return handleResponse<{ success: boolean }>(res);
+    return handleResponse<{ success: boolean } & EmailShown>(res);
   },
 
   sendRemindersBulk: async (participantIds: string[]) => {
@@ -1019,7 +1062,7 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify({ participantIds }),
     });
-    return handleResponse<{ results: { id: string; success: boolean }[] }>(res);
+    return handleResponse<{ results: { id: string; success: boolean }[] } & EmailShown>(res);
   },
 
   approveParticipant: async (id: string, data?: { amountToReimburse?: number; adminNotes?: string }) => {
@@ -1028,7 +1071,7 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data || {}),
     });
-    return handleResponse<{ success: boolean }>(res);
+    return handleResponse<{ success: boolean } & EmailShown>(res);
   },
 
   markPaid: async (id: string) => {
@@ -1036,7 +1079,7 @@ export const organisationApi = {
       method: 'POST',
       headers: getOrgAuthHeaders(),
     });
-    return handleResponse<{ success: boolean }>(res);
+    return handleResponse<{ success: boolean } & EmailShown>(res);
   },
 
   markAiCheckOk: async (id: string) => {
@@ -1242,7 +1285,7 @@ export const organisationApi = {
       headers: getOrgAuthHeaders(),
       body: JSON.stringify(data),
     });
-    return handleResponse<{ success: boolean }>(res);
+    return handleResponse<{ success: boolean } & EmailShown>(res);
   },
 
   // Country Limits
@@ -1393,6 +1436,8 @@ export interface OrgProject {
   participantCount: number;
   creditSource?: string;
   isTestProject: boolean;
+  /** The practice project: made-up participants, no emails, counted nowhere */
+  isPracticeProject?: boolean;
   maxParticipants?: number;
   createdAt: string;
   updatedAt?: string;
@@ -1493,13 +1538,65 @@ export interface OrgDashboardData {
   /** The first project is free for up to maxParticipants participants */
   freeProject?: { available: boolean; maxParticipants: number };
   /** What the organisation has seen of the first-run guidance (remembered on the server) */
-  onboarding?: { welcomeSeenAt?: string };
+  onboarding?: OnboardingState;
   gettingStarted?: GettingStarted;
+  /** The practice project with its guide; null when there is none (it can be made on request) */
+  practice?: PracticeOverview | null;
   /** EasyReimburse support is looking along: no welcome, nothing is remembered as seen */
   supportSession?: boolean;
   stats: { projectCount: number; totalParticipants: number };
   projects: OrgProject[];
   recentPurchases: OrgPurchase[];
+}
+
+export interface OnboardingState {
+  welcomeSeenAt?: string;
+  practice?: { seen?: RememberedPracticeStep[]; closedAt?: string };
+}
+
+/** The five things to try in the practice project, in order */
+export type PracticeStep = 'MEET' | 'APPROVE' | 'QUESTION' | 'PARTICIPANT' | 'AUDIT';
+/** The steps that leave no trace in the practice project and are remembered with the organisation */
+export type RememberedPracticeStep = 'MEET' | 'AUDIT';
+
+export interface PracticeGuide {
+  projectId: string;
+  steps: {
+    id: PracticeStep;
+    done: boolean;
+    /** The made-up participant the step is about (null: about the project, or they were deleted) */
+    participantId: string | null;
+    /** False when the participant the step needs was deleted */
+    possible: boolean;
+  }[];
+  next: PracticeStep | null;
+  complete: boolean;
+  /** The organisation put the guide away */
+  closed: boolean;
+  /** The participant the organiser plays, with the token of their page */
+  you: { participantId: string; firstName: string; token: string } | null;
+}
+
+export interface PracticeOverview {
+  projectId: string;
+  name: string;
+  guide: PracticeGuide;
+}
+
+/** An email as it would have been sent (practice project: shown instead of sent) */
+export interface EmailPreview {
+  to: string;
+  fromName: string | null;
+  subject: string;
+  text: string;
+  html: string | null;
+}
+
+/** What an action answers with when its email was written but not sent */
+export interface EmailShown {
+  emailPreview?: EmailPreview;
+  /** How many emails were written instead of sent (several participants at once) */
+  emailPreviewCount?: number;
 }
 
 export interface OrgPurchase {
@@ -1741,6 +1838,8 @@ export interface OrgParticipantDetail extends OrgParticipant {
     endDate: string;
     disseminationEnabled: boolean;
     carRatePerKm: number;
+    /** The practice project: this participant is made up */
+    isPracticeProject?: boolean;
   };
 }
 
@@ -2158,12 +2257,30 @@ export interface ParticipantAuthResponse {
     documentDeadline?: string | null;
     contactEmail?: string | null;
     contactPhone?: string | null;
+    isPracticeProject?: boolean;
     organisation?: {
       id: string;
       name: string;
       oid?: string;
     } | null;
   };
+  /**
+   * The practice project: an organiser is trying the participant's page with a made-up
+   * participant. The one they play gets sample tickets and sample bank details.
+   */
+  practice?: {
+    playedByOrganiser: boolean;
+    sampleBankDetails: {
+      bankAccountIban: string;
+      bankAccountHolderName: string;
+      bankAccountBic: string;
+      bankName: string;
+      personalAddress: string;
+      personalPostalCode: string;
+      personalCity: string;
+      personalCountry: string;
+    } | null;
+  } | null;
   documents: Document[];
   travelItems: TravelItem[];
   reimbursementSummary?: ReimbursementSummary;
@@ -2360,6 +2477,8 @@ export interface SuperAdminProject {
   name: string;
   startDate: string;
   endDate: string;
+  /** The organisation's practice project: made-up participants, not a real project */
+  isPracticeProject?: boolean;
   participants: SuperAdminParticipantSummary[];
 }
 

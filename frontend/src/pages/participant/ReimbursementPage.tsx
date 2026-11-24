@@ -440,6 +440,19 @@ export default function ReimbursementPage() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto px-4 mt-4">
+        {/* The practice project: an organiser is trying this page with a made-up participant */}
+        {data.practice && (
+          <div className="mb-4 flex items-start gap-2 px-4 py-3 rounded-xl bg-primary-50 border border-primary-100 text-sm text-primary-900" data-practice-banner>
+            <Info className="w-4 h-4 text-primary-600 flex-shrink-0 mt-0.5" />
+            <p>
+              <span className="font-medium">Practice project.</span>{' '}
+              {data.practice.playedByOrganiser
+                ? `This is what your participants see. You are ${data.participant.firstName}, a made-up participant: nothing here is real and no email is sent.`
+                : `This is the page ${data.participant.firstName} would see. ${data.participant.firstName} is made up: nothing here is real and no email is sent.`}
+            </p>
+          </div>
+        )}
+
         {/* Reopen banner - shown when organisation reopened the reimbursement */}
         {data.participant.reopenMessage && data.participant.status === 'DRAFT' && (
           <div className="mb-4 mt-2 bg-amber-50 border border-amber-300 rounded-xl p-4">
@@ -700,6 +713,23 @@ function CompletedView({ data, token }: { data: ParticipantAuthResponse; token: 
             Status: {data.participant.status.replace('_', ' ')}
           </p>
         </div>
+
+        {/* The practice project: the organiser played this participant; the rest happens on their side */}
+        {data.practice?.playedByOrganiser && (
+          <div className="mt-8 p-5 rounded-2xl bg-primary-50 border border-primary-100 max-w-md mx-auto text-left" data-practice-done>
+            <p className="font-semibold text-primary-900">That is all a participant does</p>
+            <p className="text-sm text-primary-900/80 mt-1">
+              Now look at it from your side: {data.participant.firstName}'s reimbursement is waiting in your practice project, with the AI check
+              next to it.
+            </p>
+            <a
+              href={`/org/projects/${data.project.id}`}
+              className="mt-3 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-soft text-white text-sm font-medium hover:opacity-90 transition-opacity"
+            >
+              Back to the practice project
+            </a>
+          </div>
+        )}
       </CardContent>
     </Card>
     </>
@@ -724,6 +754,16 @@ function Step1Upload({
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, filename: '' });
   const [consolidating, setConsolidating] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  // Practice project: the organiser plays this participant and gets tickets to upload
+  const sampleTicketsMutation = useMutation({
+    mutationFn: () => participantApi.addSampleTickets(token),
+    onSuccess: async (result) => {
+      await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
+      if (result.added > 0) toast.success(`${result.added} sample tickets added`);
+    },
+    onError: (err) => toast.error(err instanceof Error && err.message ? err.message : 'Could not add the sample tickets'),
+  });
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => participantApi.uploadDocument(token, file),
@@ -971,6 +1011,30 @@ function Step1Upload({
                 )}
               </p>
             )}
+          </div>
+        )}
+
+        {/* Practice project: no tickets at hand, so here are some */}
+        {data.practice?.playedByOrganiser && data.documents.length === 0 && (
+          <div className="rounded-2xl p-[2px] bg-gradient-soft" data-practice-samples>
+            <div className="bg-white rounded-[14px] p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <p className="font-semibold text-gray-900">No tickets at hand? Use the sample tickets</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  Four files, as a participant would upload them: the tickets and boarding passes of {data.participant.firstName}'s flights to{' '}
+                  {data.project.country} and back.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => sampleTicketsMutation.mutate()}
+                disabled={sampleTicketsMutation.isPending}
+                className="flex-shrink-0 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-soft text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-70"
+              >
+                {sampleTicketsMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                {sampleTicketsMutation.isPending ? 'Adding…' : 'Use the sample tickets'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -4164,6 +4228,17 @@ function Step3Confirm({
     },
   });
 
+  // Practice project: made-up bank details for the participant the organiser plays
+  const sampleBank = data.practice?.sampleBankDetails ?? null;
+  const fillSampleBankMutation = useMutation({
+    mutationFn: () => participantApi.updateBankDetails(token, sampleBank!),
+    onSuccess: () => {
+      setBankDetails({ ...sampleBank! });
+      queryClient.invalidateQueries({ queryKey: ['participant-auth'] });
+    },
+    onError: () => toast.error('Could not fill in the sample bank details'),
+  });
+
   const createDeclarationMutation = useMutation({
     mutationFn: (decData: { missingDocumentType: DocumentType; description: string; reason: string; place: string }) =>
       participantApi.createDeclaration(token, decData),
@@ -4360,7 +4435,20 @@ function Step3Confirm({
 
           {/* Bank Details */}
           <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5 space-y-4">
-            <h3 className="font-bold text-gray-900">Bank details</h3>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="font-bold text-gray-900">Bank details</h3>
+              {sampleBank && !bankDetails.bankAccountIban && (
+                <button
+                  type="button"
+                  onClick={() => fillSampleBankMutation.mutate()}
+                  disabled={fillSampleBankMutation.isPending}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-50 text-primary-700 text-sm font-medium hover:bg-primary-100 transition-colors disabled:opacity-60"
+                  data-practice-bank
+                >
+                  {fillSampleBankMutation.isPending ? 'Filling in…' : 'Fill in sample details'}
+                </button>
+              )}
+            </div>
             <div className="space-y-4">
               <Input
                 label={<span className="text-[10px] font-semibold tracking-widest text-gray-400 uppercase">IBAN</span>}

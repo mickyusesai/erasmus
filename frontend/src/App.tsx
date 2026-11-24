@@ -23,6 +23,7 @@ import OrgSupportSession from './pages/organisation/SupportSession';
 import OrgTestAccountSession from './pages/organisation/TestAccountSession';
 import { SupportSessionBanner } from './components/support/SupportSessionBanner';
 import { TestAccountBar } from './components/support/TestAccountBar';
+import { EmailPreviewHost } from './components/organisation/EmailPreview';
 import OrgForgotPassword from './pages/organisation/ForgotPassword';
 import OrgResetPassword from './pages/organisation/ResetPassword';
 
@@ -51,6 +52,7 @@ function App() {
     <>
     <SupportSessionBanner />
     <TestAccountBar />
+    <EmailPreviewHost />
     <Routes>
       {/* Admin routes */}
       <Route path="/admin/login" element={<AdminLogin />} />

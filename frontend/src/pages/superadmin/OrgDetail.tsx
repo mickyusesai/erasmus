@@ -195,6 +195,11 @@ function ProjectSection({
           {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
           <div>
             <span className="text-white font-medium">{project.name}</span>
+            {project.isPracticeProject && (
+              <span className="ml-2 px-2 py-0.5 rounded-full bg-purple-900/60 text-purple-200 text-xs font-medium" title="Made-up participants to try things with: not a real project">
+                Practice project
+              </span>
+            )}
             <span className="ml-3 text-gray-400 text-sm">
               {new Date(project.startDate).toLocaleDateString()} – {new Date(project.endDate).toLocaleDateString()}
             </span>

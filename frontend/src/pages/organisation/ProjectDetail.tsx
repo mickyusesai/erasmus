@@ -25,9 +25,13 @@ import {
   Info,
   Gift,
   Sparkles,
+  ExternalLink,
 } from 'lucide-react';
 import { CountryLimitRow } from '../../components/organisation/CountryLimitRow';
 import { SetAmountsModal, type CountryWithoutAmount } from '../../components/organisation/SetAmountsModal';
+import { PracticeBanner } from '../../components/organisation/PracticeBanner';
+import { PracticeGuidePanel, useMarkPracticeStep, usePractice } from '../../components/organisation/PracticeGuidePanel';
+import { showEmailInstead } from '../../components/organisation/EmailPreview';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -56,6 +60,7 @@ export default function OrgProjectDetail() {
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TabType>(searchParams.get('tab') === 'settings' ? 'settings' : 'overview');
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+  const markPracticeStep = useMarkPracticeStep();
 
   // Check if logged in
   useEffect(() => {
@@ -150,6 +155,8 @@ export default function OrgProjectDetail() {
 
   const project = projectData.project;
   const participants = participantsData?.participants || [];
+  // The practice project: made-up participants to try things with (no own participants, no credits)
+  const isPractice = !!project.isPracticeProject;
 
   const settingsNeedsAttention = (countryLimits || []).some((limit: any) => limit.maxReimbursementAmount === 0);
 
@@ -160,22 +167,28 @@ export default function OrgProjectDetail() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      {/* In the practice project the guide sits in the bottom corner: room to scroll clear of it */}
+      <div className={clsx('max-w-7xl mx-auto px-4 py-8', isPractice && 'pb-80')}>
         <div className="space-y-6 animate-fadeIn">
-          {/* Header */}
-          <div className="flex items-center gap-4">
+          {/* Header (on a narrow screen the buttons go below the name instead of off the screen) */}
+          <div className="flex flex-wrap items-center gap-4">
             <Link
               to="/org/dashboard"
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <ArrowLeft className="w-5 h-5 text-gray-600" />
             </Link>
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-[12rem]">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
                 {project.isTestProject && (
                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
                     Free project
+                  </span>
+                )}
+                {isPractice && (
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
+                    Practice project
                   </span>
                 )}
               </div>
@@ -183,12 +196,12 @@ export default function OrgProjectDetail() {
                 {project.country} &middot;{' '}
                 {formatDate(project.startDate)} -{' '}
                 {formatDate(project.endDate)}
-                {project.maxParticipants && (
+                {project.maxParticipants && !isPractice && (
                   <> &middot; Max {project.maxParticipants} participants</>
                 )}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="secondary"
                 loading={isDownloadingZip}
@@ -196,6 +209,7 @@ export default function OrgProjectDetail() {
                   setIsDownloadingZip(true);
                   try {
                     await organisationApi.exportAuditZip(id!, project.name);
+                    if (isPractice) markPracticeStep('AUDIT');
                   } catch (err) {
                     toast.error(err instanceof Error ? err.message : 'No approved participants to export');
                   } finally {
@@ -221,6 +235,9 @@ export default function OrgProjectDetail() {
               </Button>
             </div>
           </div>
+
+          {/* The practice project: what it is, and how to start it again */}
+          {isPractice && <PracticeBanner />}
 
           {/* Free project: what it includes and how to get room for more */}
           {project.isTestProject && (
@@ -253,7 +270,7 @@ export default function OrgProjectDetail() {
           )}
 
           {/* Capacity Banner for full projects near or at limit */}
-          {!project.isTestProject && project.maxParticipants && participants.length >= project.maxParticipants - 5 && (
+          {!project.isTestProject && !isPractice && project.maxParticipants && participants.length >= project.maxParticipants - 5 && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
@@ -336,6 +353,7 @@ export default function OrgProjectDetail() {
           )}
         </div>
       </div>
+      {isPractice && <PracticeGuidePanel page={{ kind: 'project', projectId: id! }} />}
     </div>
   );
 }
@@ -383,6 +401,11 @@ function OverviewTab({
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isDownloadingAuditZip, setIsDownloadingAuditZip] = useState(false);
+  // The practice project has its own made-up participants; one of them the organiser plays
+  const isPractice = !!project.isPracticeProject;
+  const { practice } = usePractice(isPractice);
+  const played = isPractice ? practice?.guide.you ?? null : null;
+  const markPracticeStep = useMarkPracticeStep();
   const [searchParams, setSearchParams] = useSearchParams();
   /** Maximum amounts that are still missing, asked for before the action that needs them */
   const [amountsNeeded, setAmountsNeeded] = useState<{ countries: CountryWithoutAmount[]; saveLabel: string; then: (() => void) | null } | null>(null);
@@ -518,8 +541,9 @@ function OverviewTab({
 
   const sendMagicLinksMutation = useMutation({
     mutationFn: (ids: string[]) => organisationApi.sendMagicLinksBulk(ids),
-    onSuccess: () => {
-      toast.success('Magic links sent');
+    onSuccess: (result) => {
+      // In the practice project nothing is sent: the email is shown instead
+      if (!showEmailInstead(result)) toast.success('Magic links sent');
       queryClient.invalidateQueries({ queryKey: ['org-participants'] });
       setSelectedIds([]);
     },
@@ -530,8 +554,8 @@ function OverviewTab({
 
   const sendRemindersMutation = useMutation({
     mutationFn: (ids: string[]) => organisationApi.sendRemindersBulk(ids),
-    onSuccess: () => {
-      toast.success('Reminders sent');
+    onSuccess: (result) => {
+      if (!showEmailInstead(result)) toast.success('Reminders sent');
       queryClient.invalidateQueries({ queryKey: ['org-participants'] });
       setSelectedIds([]);
     },
@@ -758,6 +782,7 @@ function OverviewTab({
                     setIsDownloadingAuditZip(true);
                     try {
                       await organisationApi.exportAuditZip(projectId, project.name);
+                      if (isPractice) markPracticeStep('AUDIT');
                     } catch (err) {
                       toast.error(err instanceof Error ? err.message : 'Failed to export audit ZIPs');
                     } finally {
@@ -821,15 +846,27 @@ function OverviewTab({
 
       {/* Actions & Search */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={() => setShowAddModal(true)}>
-          <UserPlus className="w-4 h-4 mr-2" />
-          Add Participant
-        </Button>
-        <Button variant="secondary" onClick={() => setShowImportModal(true)}>
-          <Upload className="w-4 h-4 mr-2" />
-          Import CSV
-        </Button>
-        <div className="relative group">
+        {isPractice && (
+          <p className="text-sm text-gray-500">
+            Your own participants go in a project of your own.{' '}
+            <Link to="/org/dashboard" className="text-primary-600 hover:text-primary-700 font-medium">
+              Go to your dashboard
+            </Link>
+          </p>
+        )}
+        {!isPractice && (
+          <Button onClick={() => setShowAddModal(true)}>
+            <UserPlus className="w-4 h-4 mr-2" />
+            Add Participant
+          </Button>
+        )}
+        {!isPractice && (
+          <Button variant="secondary" onClick={() => setShowImportModal(true)}>
+            <Upload className="w-4 h-4 mr-2" />
+            Import CSV
+          </Button>
+        )}
+        <div className={clsx('relative group', isPractice && 'hidden')}>
           <a href="/Reimbursement_List_TEMPLATE.csv" download>
             <button
               type="button"
@@ -962,7 +999,7 @@ function OverviewTab({
 
       {/* Participants Table */}
       {participants.length > 0 ? (
-        <Card>
+        <Card data-tour="participants">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -1005,6 +1042,17 @@ function OverviewTab({
                         >
                           {participant.firstName} {participant.lastName}
                         </Link>
+                        {played?.participantId === participant.id && (
+                          <a
+                            href={`/reimbursement?token=${played.token}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700 hover:bg-primary-200 transition-colors"
+                            title={`You play ${participant.firstName}: open the page a participant sees (new tab)`}
+                          >
+                            You play this one <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
                         <p className="text-sm text-gray-500">{participant.email}</p>
                       </td>
                       <td className="px-4 py-3 text-gray-600">{participant.country}</td>
@@ -1048,8 +1096,8 @@ function OverviewTab({
                             onClick={(e) => {
                               e.stopPropagation();
                               withAmounts([participant.id], () => {
-                                organisationApi.sendReminder(participant.id).then(() => {
-                                  toast.success(`Reminder sent to ${participant.firstName}`);
+                                organisationApi.sendReminder(participant.id).then((result) => {
+                                  if (!showEmailInstead(result)) toast.success(`Reminder sent to ${participant.firstName}`);
                                 }).catch(() => {
                                   toast.error('Failed to send reminder');
                                 });
@@ -1066,8 +1114,8 @@ function OverviewTab({
                             onClick={(e) => {
                               e.stopPropagation();
                               withAmounts([participant.id], () => {
-                                organisationApi.sendMagicLink(participant.id).then(() => {
-                                  toast.success(`Magic link sent to ${participant.firstName}`);
+                                organisationApi.sendMagicLink(participant.id).then((result) => {
+                                  if (!showEmailInstead(result)) toast.success(`Magic link sent to ${participant.firstName}`);
                                   queryClient.invalidateQueries({ queryKey: ['org-participants'] });
                                   queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
                                 }).catch(() => {
@@ -1089,8 +1137,8 @@ function OverviewTab({
                               onClick={(e) => {
                                 e.stopPropagation();
                                 withAmounts([participant.id], () => {
-                                  organisationApi.sendMagicLink(participant.id).then(() => {
-                                    toast.success(`Magic link resent to ${participant.firstName}`);
+                                  organisationApi.sendMagicLink(participant.id).then((result) => {
+                                    if (!showEmailInstead(result)) toast.success(`Magic link resent to ${participant.firstName}`);
                                     queryClient.invalidateQueries({ queryKey: ['org-participants'] });
                                   }).catch(() => {
                                     toast.error('Failed to resend magic link');

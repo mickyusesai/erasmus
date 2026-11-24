@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { WelcomeScreen } from '../../components/organisation/WelcomeScreen';
 import { NextStepCard } from '../../components/organisation/NextStepCard';
 import { FilmModal } from '../../components/organisation/FilmModal';
+import { PracticeCard, useOpenPractice } from '../../components/organisation/PracticeCard';
 import { organisationApi, OrgDashboardData } from '../../services/api';
 import { nextStep, shouldWelcome } from '../../utils/gettingStarted';
 import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, ArrowRight } from 'lucide-react';
@@ -32,6 +33,7 @@ export default function OrgDashboard() {
 
   const [welcomeClosed, setWelcomeClosed] = useState(false);
   const [showFilm, setShowFilm] = useState(false);
+  const practice = useOpenPractice();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['org-dashboard'],
@@ -200,6 +202,10 @@ export default function OrgDashboard() {
           <NextStepCard step={step} progress={dashboard.gettingStarted} onWatchFilm={() => setShowFilm(true)} />
         )}
 
+        {/* The practice project: a made-up exchange to try everything with. For a new organisation
+            it is right here; one that is under way finds it as a line below its projects. */}
+        {gettingStarted && dashboard.practice !== undefined && <PracticeCard dashboard={dashboard} />}
+
         {/* Stats Grid (says little before there is anything to count) */}
         {!gettingStarted && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -313,12 +319,19 @@ export default function OrgDashboard() {
             )}
           </CardContent>
         </Card>
+
+        {!gettingStarted && dashboard.practice !== undefined && <PracticeCard dashboard={dashboard} quiet />}
       </main>
 
       {showWelcome && step && (
         <WelcomeScreen
           organisationName={dashboard.organisation.name}
           step={step}
+          onPractice={async () => {
+            // The welcome stays until the practice project is there (making it can take a moment)
+            if (await practice.open(dashboard.practice?.projectId)) rememberWelcomeSeen();
+          }}
+          practiceOpening={practice.opening}
           onStart={() => {
             rememberWelcomeSeen();
             navigate(step.to);
