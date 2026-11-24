@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { UnauthorizedError, ForbiddenError, asyncHandler } from './errorHandler.js';
+import { UnauthorizedError, ForbiddenError, NotFoundError, asyncHandler } from './errorHandler.js';
 import prisma from '../utils/prisma.js';
 import { Participant, Organisation, SuperAdmin } from '@prisma/client';
 
@@ -272,18 +272,25 @@ export const superAdminAuth = asyncHandler(async (
 });
 
 /**
- * Ensure organisation can only access their own projects
+ * Ensure organisation can only access their own projects: the project in the address
+ * (`/projects/:id/...`) has to belong to the organisation that is signed in. Any other project
+ * answers "not found", whether it exists or not.
  */
-export function ensureOwnProject(
+export const ensureOwnProject = asyncHandler(async (
   req: Request,
   _res: Response,
   next: NextFunction
-): void {
+): Promise<void> => {
   if (!req.organisation) {
     throw new UnauthorizedError('Not authenticated as organisation');
   }
 
-  // The project check will be done in the route handler
-  // This middleware just ensures organisation is present
+  const own = await prisma.project.findFirst({
+    where: { id: req.params.id, organisationId: req.organisation.id },
+    select: { id: true },
+  });
+  if (!own) {
+    throw new NotFoundError('Project not found');
+  }
   next();
-}
+});
