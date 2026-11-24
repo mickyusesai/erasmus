@@ -56,11 +56,13 @@ function textFooter(ctx?: ProjectEmailContext): string {
   return `${contact ? contact + '\n' : ''}This email was sent automatically by EasyReimburse${ctx ? ` on behalf of ${ctx.organisationName}` : ''}. ${reply}`;
 }
 
-function wrapInLayout(content: string, ctx?: ProjectEmailContext): string {
+function wrapInLayout(content: string, ctx?: ProjectEmailContext, footer?: string): string {
   const contact = contactLine(ctx);
   const reply = ctx?.replyTo
     ? `You can reply to this email to reach ${escapeHtml(ctx.organisationName)}.`
     : 'Please do not reply directly to this email.';
+  // An email from a person (the welcome, the reminder) ends in its own words
+  const closing = footer ?? `This email was sent automatically by EasyReimburse${ctx ? ` on behalf of ${escapeHtml(ctx.organisationName)}` : ''}. ${reply}`;
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -76,7 +78,7 @@ function wrapInLayout(content: string, ctx?: ProjectEmailContext): string {
     <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
     ${contact ? `<p style="color: #6b7280; font-size: 13px; text-align: center; margin: 0 0 8px 0;">${escapeHtml(contact)}</p>` : ''}
     <p style="color: #9ca3af; font-size: 12px; text-align: center;">
-      This email was sent automatically by EasyReimburse${ctx ? ` on behalf of ${escapeHtml(ctx.organisationName)}` : ''}. ${reply}
+      ${closing}
     </p>
   </div>
 </body>
@@ -170,46 +172,98 @@ export function magicLinkHtml(participantName: string, projectName: string, magi
 // WELCOME (Organisation Registration)
 // =============================================================================
 
-export function welcomeSubject(): string {
-  return 'Welcome to EasyReimburse!';
+/** Who a first-days email is written to */
+export interface WelcomeDetails {
+  organisationName: string;
+  /** The first name of whoever signed up, when they gave one */
+  firstName?: string | null;
+  /** Where the button leads: the organisation's dashboard */
+  loginUrl: string;
 }
 
-export function welcomeText(organisationName: string, loginUrl: string): string {
-  return `Welcome to EasyReimburse, ${organisationName}!
+const hello = (firstName?: string | null) => (firstName?.trim() ? `Hi ${firstName.trim()},` : 'Hi,');
+const REPLY_REACHES_MICKY = 'You can reply to this email: it reaches Micky at EasyReimburse.';
 
-Your organisation account is ready. Your first project is free for up to 10 participants.
-
-Here's how to get started:
-
-1. LOG IN to your dashboard: ${loginUrl}
-2. Create your first project: its name, place and dates are enough to start
-3. Add your participants (by hand or from a list) and set the maximum amount per sending country
-4. Send them their personal link, so they can upload their tickets
-5. Check and approve what they submit, with the AI review next to it
-
-More than 10 participants? One project credit covers a project with up to 60 participants. You find the credits on the Billing page.
-
-Best regards,
-The EasyReimburse Team
-
----
-This email was sent automatically by EasyReimburse. Please do not reply directly to this email.`;
+export function welcomeSubject(firstName?: string | null): string {
+  return firstName?.trim() ? `Welcome to EasyReimburse, ${firstName.trim()}` : 'Welcome to EasyReimburse';
 }
 
-export function welcomeHtml(organisationName: string, loginUrl: string): string {
-  return wrapInLayout(`
-    <p>Welcome to EasyReimburse, <strong>${organisationName}</strong>!</p>
-    <p>Your organisation account is ready. Your first project is <strong>free for up to 10 participants</strong>.</p>
-    ${button(loginUrl, 'Go to Your Dashboard')}
-    <h3 style="color: #6b21a8; margin-top: 25px;">How to get started:</h3>
-    <ol style="padding-left: 20px;">
-      <li><strong>Create your first project</strong>: its name, place and dates are enough to start</li>
-      <li>Add your participants (by hand or from a list) and set the <strong>maximum amount</strong> per sending country</li>
-      <li>Send them their <strong>personal link</strong>, so they can upload their tickets</li>
-      <li>Check and approve what they submit, with the AI review next to it</li>
-    </ol>
-    ${infoBox('More than 10 participants? One project credit covers a project with up to 60 participants. You find the credits on the <strong>Billing</strong> page.')}
-  `);
+export function welcomeText({ organisationName, firstName, loginUrl }: WelcomeDetails): string {
+  return `${hello(firstName)}
+
+Good to have ${organisationName} here.
+
+The quickest way to see what EasyReimburse does is the practice project: a made-up exchange with made-up participants and sample tickets. You approve one, ask one a question and can be a participant yourself. It takes about two minutes, and nothing in it is real.
+
+Open EasyReimburse: ${loginUrl}
+
+When you are ready for the real thing: your first project is free for up to 10 participants.
+
+Questions? Just reply to this email, it comes straight to me.
+
+Micky
+EasyReimburse`;
+}
+
+export function welcomeHtml({ organisationName, firstName, loginUrl }: WelcomeDetails): string {
+  return wrapInLayout(
+    `
+    <p>${escapeHtml(hello(firstName))}</p>
+    <p>Good to have <strong>${escapeHtml(organisationName)}</strong> here.</p>
+    <p>The quickest way to see what EasyReimburse does is the <strong>practice project</strong>: a made-up exchange with made-up participants and sample tickets. You approve one, ask one a question and can be a participant yourself. It takes about two minutes, and nothing in it is real.</p>
+    ${button(loginUrl, 'Open EasyReimburse')}
+    <p>When you are ready for the real thing: your first project is <strong>free for up to 10 participants</strong>.</p>
+    <p>Questions? Just reply to this email, it comes straight to me.</p>
+    <p>Micky<br><span style="color: #6b7280;">EasyReimburse</span></p>
+  `,
+    undefined,
+    REPLY_REACHES_MICKY
+  );
+}
+
+// =============================================================================
+// ONE REMINDER (an organisation that has not got going three days after signing up)
+// =============================================================================
+
+export interface OnboardingReminderDetails extends WelcomeDetails {
+  /** Where the organisation is, in a sentence or two */
+  where: string;
+  /** What the button says */
+  button: string;
+}
+
+export function onboardingReminderSubject(firstName?: string | null): string {
+  return firstName?.trim() ? `${firstName.trim()}, shall I help you get started?` : 'Shall I help you get started with EasyReimburse?';
+}
+
+export function onboardingReminderText({ organisationName, firstName, loginUrl, where, button: label }: OnboardingReminderDetails): string {
+  return `${hello(firstName)}
+
+A few days ago you opened an EasyReimburse account for ${organisationName}. ${where}
+
+${label}: ${loginUrl}
+
+Stuck somewhere, or is something unclear? Reply to this email and I will help you along.
+
+This is the only reminder you will get.
+
+Micky
+EasyReimburse`;
+}
+
+export function onboardingReminderHtml({ organisationName, firstName, loginUrl, where, button: label }: OnboardingReminderDetails): string {
+  return wrapInLayout(
+    `
+    <p>${escapeHtml(hello(firstName))}</p>
+    <p>A few days ago you opened an EasyReimburse account for <strong>${escapeHtml(organisationName)}</strong>. ${escapeHtml(where)}</p>
+    ${button(loginUrl, escapeHtml(label))}
+    <p>Stuck somewhere, or is something unclear? Reply to this email and I will help you along.</p>
+    <p style="color: #6b7280; font-size: 14px;">This is the only reminder you will get.</p>
+    <p>Micky<br><span style="color: #6b7280;">EasyReimburse</span></p>
+  `,
+    undefined,
+    REPLY_REACHES_MICKY
+  );
 }
 
 // =============================================================================

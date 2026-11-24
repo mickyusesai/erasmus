@@ -29,6 +29,8 @@ const registerSchema = z.object({
     .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
     .regex(/[0-9]/, 'Password must contain at least one number'),
   oid: z.string().optional(), // Organisation ID - optional identifier
+  // The first name of whoever signs up: the welcome email and the dashboard greet them by it
+  firstName: z.string().trim().max(60, 'That first name is too long').optional(),
 });
 
 /**
@@ -43,7 +45,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     throw new ValidationError(result.error.errors[0].message);
   }
 
-  const { name, email, password, oid } = result.data;
+  const { name, email, password, oid, firstName } = result.data;
 
   // Check if email already exists
   const existingOrg = await prisma.organisation.findUnique({
@@ -59,7 +61,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
 
   // Everything a new organisation starts with, in one transaction
   const organisation = await prisma.$transaction((tx) =>
-    createNewOrganisation(tx, { name, email, passwordHash, oid })
+    createNewOrganisation(tx, { name, email, passwordHash, oid, contactFirstName: firstName })
   );
 
   // Generate token
@@ -74,7 +76,8 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   emailService.sendWelcome(
     organisation.email,
     organisation.name,
-    `${frontendUrl}/org/login`
+    `${frontendUrl}/org/dashboard`,
+    organisation.contactFirstName
   ).catch((err) => console.error('[Email] Failed to send welcome email:', err));
 
   res.status(201).json({

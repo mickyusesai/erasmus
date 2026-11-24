@@ -25,6 +25,7 @@ import OrgTestAccountSession from './pages/organisation/TestAccountSession';
 import { SupportSessionBanner } from './components/support/SupportSessionBanner';
 import { TestAccountBar } from './components/support/TestAccountBar';
 import { EmailPreviewHost } from './components/organisation/EmailPreview';
+import { HelpButton } from './components/organisation/Help';
 import OrgForgotPassword from './pages/organisation/ForgotPassword';
 import OrgResetPassword from './pages/organisation/ResetPassword';
 
@@ -54,6 +55,7 @@ function App() {
     <SupportSessionBanner />
     <TestAccountBar />
     <EmailPreviewHost />
+    <HelpButton />
     <Routes>
       {/* Admin routes */}
       <Route path="/admin/login" element={<AdminLogin />} />

@@ -1,8 +1,8 @@
 # EasyReimburse Onboarding Plan
 
-Status: **being built** (24 November 2026). The seven decisions are made. Part 1 (no more dead ends),
-part 2 (the practice project) and part 3 (the real project in four steps) are built; part 4 follows. The
-onboarding test account (see the end) is built.
+Status: **built** (24 November 2026). The seven decisions are made and all four parts are built: no more
+dead ends, the practice project, the real project in four steps, and staying in touch. The onboarding
+test account (see the end) is built too.
 
 Goal: a new organisation sees a finished reimbursement within two minutes, tries both sides with
 sample tickets, and sets up its own project in four short steps.
@@ -189,10 +189,28 @@ Each part is usable on its own and is checked in the onboarding test account bef
 - **Project settings**: the basics (details, maximum amounts) are open; the rest is folded away under
   "Rules and options", each line saying what is chosen now (`FoldedSetting` in `ProjectDetail.tsx`).
 
-### Part 4, staying in touch
+### Part 4, staying in touch (built)
 
-Help button (replay the tour, the film, "How do I…", Write to Micky); welcome email and one reminder
-after 3 days; a first name at sign-up; progress per organisation in super-admin.
+- **Help on every page of the organiser's app** (`components/organisation/Help.tsx`): a button in the
+  corner, and "Help" in the dashboard's header. It opens the practice project (with its guide taken
+  out again), the 35-second film, eight short answers (`HELP_ANSWERS`, each saying where in the app
+  it is done) and "Write to Micky".
+- **Write to Micky** (`POST /api/organisation/help-message`): the question goes as an email to the
+  support inbox (`SUPPORT_EMAIL`, default micky@easyreimburse.ai) with the organisation's address as
+  reply-to, so the answer is a plain reply. It carries the name, the organisation and the page they
+  were on. At most five an hour per organisation. No call link.
+- **A first name at sign-up** (`Organisation.contactFirstName`): the dashboard, the welcome email and
+  the reminder greet by it. A name given with a help message is kept when there was none.
+- **The welcome email** is a short note from Micky with one button and the practice project as the
+  first thing to do; a reply reaches him (`SUPPORT_SENDER_NAME`, reply-to `SUPPORT_EMAIL`).
+- **One reminder** (`services/organisation/onboardingReminder.ts`, run every hour): three days after
+  signing up, to an organisation that has invited nobody and planned no invitations. It says where
+  they are (no project yet, participants missing, amounts missing, invitations left) and offers help.
+  Sent once (`Organisation.onboardingReminderSentAt`, marked before sending), not after two weeks, never
+  to the test account, a closed account or an organisation from before 24 November 2026.
+- **Super-admin: how far each organisation is** (`services/organisation/progress.ts`, "How far" column):
+  practice project steps, own project and participants, invited, first hand-in, bought; and whether the
+  reminder went out. The answers of the super-admin API no longer carry password hashes.
 
 What stays as it is: the participant pages, the prices, the rules of real projects. Existing
 organisations keep their Test Project (as their free project) and get the Help button.

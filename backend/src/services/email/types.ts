@@ -43,12 +43,21 @@ export interface EmailService {
   ): Promise<EmailResult>;
 
   /**
-   * Send a welcome email to a newly registered organisation
+   * Send a welcome email to a newly registered organisation (from Micky; replies reach him)
    */
   sendWelcome(
     to: string,
     organisationName: string,
-    loginUrl: string
+    loginUrl: string,
+    firstName?: string | null
+  ): Promise<EmailResult>;
+
+  /**
+   * The one reminder to an organisation that has not got going a few days after signing up
+   */
+  sendOnboardingReminder(
+    to: string,
+    details: { organisationName: string; firstName?: string | null; loginUrl: string; where: string; button: string }
   ): Promise<EmailResult>;
 
   /**

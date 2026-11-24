@@ -44,6 +44,11 @@ model Organisation {
   freeProjectUsedAt       DateTime?
   // First-run guidance: what the organisation has seen so far (services/organisation/onboarding.ts)
   onboarding              Json?
+  // The first name of whoever signed up, to write to them as a person ("Hi Marija")
+  contactFirstName        String?
+  // When the one reminder went out to an organisation that had not got going three days after
+  // signing up (services/organisation/onboardingReminder.ts). Never sent twice.
+  onboardingReminderSentAt DateTime?
 
   // Accountant / invoicing details (optional; shown on audit PDFs and on Stripe invoices)
   legalName               String?   // Official registered name, if different from display name

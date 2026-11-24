@@ -13,6 +13,8 @@ export interface NewOrganisation {
   email: string;
   passwordHash: string;
   oid?: string | null;
+  /** The first name of whoever signs up, to write to them as a person */
+  contactFirstName?: string | null;
   isTestAccount?: boolean;
   projectCredits?: number;
 }
@@ -25,6 +27,7 @@ export async function createNewOrganisation(tx: Prisma.TransactionClient, data: 
       email: data.email.toLowerCase(),
       passwordHash: data.passwordHash,
       oid: data.oid || null,
+      contactFirstName: data.contactFirstName?.trim() || null,
       ...(data.isTestAccount && { isTestAccount: true }),
       ...(data.projectCredits && { projectCredits: data.projectCredits }),
     },

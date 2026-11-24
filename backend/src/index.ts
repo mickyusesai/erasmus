@@ -184,6 +184,19 @@ async function sendPlannedInvitations() {
 sendPlannedInvitations();
 setInterval(sendPlannedInvitations, 10 * 60 * 1000);
 
+// One reminder for an organisation that has not got going three days after signing up
+async function sendOnboardingReminders() {
+  try {
+    const { sendOnboardingReminders: send } = await import('./services/organisation/onboardingReminder.js');
+    await send();
+  } catch (err) {
+    console.error('[Onboarding] Error sending reminders:', err);
+  }
+}
+// Run on startup and then every hour
+sendOnboardingReminders();
+setInterval(sendOnboardingReminders, 60 * 60 * 1000);
+
 // Stripe cleanup: mark abandoned PENDING purchases as EXPIRED after 24h
 async function expireAbandonedPurchases() {
   try {

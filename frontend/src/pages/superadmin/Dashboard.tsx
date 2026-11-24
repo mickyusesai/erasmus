@@ -7,6 +7,7 @@ import { AiUsagePanel } from '../../components/superadmin/AiUsagePanel';
 import { SupportKeysPanel } from '../../components/superadmin/SupportKeysPanel';
 import { TestAccountPanel } from '../../components/superadmin/TestAccountPanel';
 import { AffiliateCustomersModal } from '../../components/superadmin/AffiliateCustomersModal';
+import { ProgressCell, type OrganisationProgress } from '../../components/superadmin/ProgressCell';
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
@@ -39,6 +40,8 @@ interface Organisation {
   _count: {
     projects: number;
   };
+  /** How far the organisation has come since signing up */
+  progress?: OrganisationProgress;
 }
 
 interface AffiliateOrg {
@@ -390,6 +393,7 @@ export default function SuperAdminDashboard() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Organisation</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Email</th>
                     <th className="px-6 py-3 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">Projects</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">How far</th>
                     <th className="px-6 py-3 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">Credits</th>
                     <th className="px-6 py-3 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">License</th>
                     <th className="px-6 py-3 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
@@ -399,7 +403,7 @@ export default function SuperAdminDashboard() {
                 <tbody className="divide-y divide-gray-700">
                   {organisations.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-8 text-center text-gray-400">
+                      <td colSpan={8} className="px-6 py-8 text-center text-gray-400">
                         No organisations yet
                       </td>
                     </tr>
@@ -419,6 +423,9 @@ export default function SuperAdminDashboard() {
                         </td>
                         <td className="px-6 py-4 text-gray-300">{org.email}</td>
                         <td className="px-6 py-4 text-center text-gray-300">{org._count.projects}</td>
+                        <td className="px-6 py-4">
+                          <ProgressCell progress={org.progress} />
+                        </td>
                         <td className="px-6 py-4 text-center">
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-yellow-600/20 text-yellow-400">
                             {org.projectCredits}

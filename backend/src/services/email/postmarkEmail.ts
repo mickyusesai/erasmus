@@ -3,6 +3,7 @@ import { EmailService, EmailOptions, EmailResult, ProjectEmailContext } from './
 
 import * as templates from './templates.js';
 import { canNeverReceiveMail } from './reservedAddresses.js';
+import { SUPPORT_EMAIL, SUPPORT_SENDER_NAME } from './support.js';
 /** Sender display name + Reply-To derived from the project's organisation */
 function senderFor(ctx?: ProjectEmailContext): Pick<EmailOptions, 'fromName' | 'replyTo'> {
   if (!ctx) return {};
@@ -68,12 +69,30 @@ export class PostmarkEmailService implements EmailService {
     });
   }
 
-  async sendWelcome(to: string, organisationName: string, loginUrl: string): Promise<EmailResult> {
+  async sendWelcome(to: string, organisationName: string, loginUrl: string, firstName?: string | null): Promise<EmailResult> {
+    const details = { organisationName, firstName, loginUrl };
     return this.send({
       to,
-      subject: templates.welcomeSubject(),
-      text: templates.welcomeText(organisationName, loginUrl),
-      html: templates.welcomeHtml(organisationName, loginUrl),
+      subject: templates.welcomeSubject(firstName),
+      text: templates.welcomeText(details),
+      html: templates.welcomeHtml(details),
+      // From a person: a reply reaches Micky
+      fromName: SUPPORT_SENDER_NAME,
+      replyTo: SUPPORT_EMAIL,
+    });
+  }
+
+  async sendOnboardingReminder(
+    to: string,
+    details: { organisationName: string; firstName?: string | null; loginUrl: string; where: string; button: string }
+  ): Promise<EmailResult> {
+    return this.send({
+      to,
+      subject: templates.onboardingReminderSubject(details.firstName),
+      text: templates.onboardingReminderText(details),
+      html: templates.onboardingReminderHtml(details),
+      fromName: SUPPORT_SENDER_NAME,
+      replyTo: SUPPORT_EMAIL,
     });
   }
 

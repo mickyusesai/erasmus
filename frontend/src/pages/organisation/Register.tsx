@@ -12,6 +12,7 @@ export default function OrgRegister() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [name, setName] = useState('');
+  const [firstName, setFirstName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -20,7 +21,7 @@ export default function OrgRegister() {
   const afterRegisterPath = plan ? `/org/billing?plan=${plan}` : '/org/dashboard';
 
   const registerMutation = useMutation({
-    mutationFn: () => organisationApi.register({ name, email, password }),
+    mutationFn: () => organisationApi.register({ name, email, password, firstName: firstName.trim() || undefined }),
     onSuccess: (data) => {
       localStorage.setItem('org-token', data.token);
       localStorage.setItem('org-id', data.organisation.id);
@@ -66,6 +67,20 @@ export default function OrgRegister() {
                 required
                 autoFocus
               />
+
+              <div>
+                <Input
+                  label="Your first name"
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="e.g. Marija"
+                  autoComplete="given-name"
+                  maxLength={60}
+                  required
+                />
+                <p className="text-xs text-gray-500 mt-1">So we can write to you as a person.</p>
+              </div>
 
               <Input
                 label="Email"

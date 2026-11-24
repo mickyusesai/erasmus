@@ -11,8 +11,15 @@ import { getEmailService } from '../../services/email/index.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { AI_JOB_LABELS, estimateCostUsd, type AiJob } from '../../services/ai/usageLog.js';
 import { linkCustomersByHand, listAffiliateCustomers, MAX_CUSTOMERS_PER_REQUEST, unlinkCustomerAddedByHand } from '../../services/affiliate/customers.js';
+import { progressOfOrganisations, progressStage } from '../../services/organisation/progress.js';
 
 const router = Router();
+
+/** An organisation as it may leave the server: without what only the server needs to know */
+function withoutSecrets<T extends { passwordHash: string; passwordResetToken: string | null }>(organisation: T): Omit<T, 'passwordHash' | 'passwordResetToken'> {
+  const { passwordHash: _hash, passwordResetToken: _token, ...visible } = organisation;
+  return visible;
+}
 
 // All routes require super admin authentication
 router.use(superAdminAuth);
@@ -129,8 +136,14 @@ router.get('/organisations', asyncHandler(async (req: Request, res: Response) =>
   const totalProjects = real.reduce((sum: number, org: any) => sum + org._count.projects, 0);
   const totalCreditsOutstanding = real.reduce((sum: number, org: any) => sum + org.projectCredits, 0);
 
+  // How far each organisation has come since signing up
+  const progress = await progressOfOrganisations(organisations);
+
   res.json({
-    organisations,
+    organisations: organisations.map((org) => {
+      const reached = progress.get(org.id)!;
+      return { ...withoutSecrets(org), progress: { ...reached, stage: progressStage(reached) } };
+    }),
     stats: {
       totalOrganisations,
       totalProjects,
@@ -200,7 +213,7 @@ router.post('/test-account/start', asyncHandler(async (req: Request, res: Respon
   if (sendWelcomeEmail) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     getEmailService()
-      .sendWelcome(organisation.email, organisation.name, `${frontendUrl}/org/login`)
+      .sendWelcome(organisation.email, organisation.name, `${frontendUrl}/org/dashboard`, organisation.contactFirstName)
       .catch((err) => console.error('[Email] Failed to send the test account welcome email:', err));
   }
 
@@ -303,7 +316,7 @@ router.get('/organisations/:id', asyncHandler(async (req: Request, res: Response
     throw new NotFoundError('Organisation not found');
   }
 
-  res.json({ organisation });
+  res.json({ organisation: withoutSecrets(organisation) });
 }));
 
 /**
@@ -356,7 +369,7 @@ router.post('/organisations/:id/grant-credits', asyncHandler(async (req: Request
 
   res.json({
     message: `Granted ${credits} credit(s) to ${organisation.name}`,
-    organisation: updated,
+    organisation: withoutSecrets(updated),
     purchase,
   });
 }));
@@ -385,7 +398,7 @@ router.post('/organisations/:id/toggle-active', asyncHandler(async (req: Request
 
   res.json({
     message: `Organisation ${updated.isActive ? 'activated' : 'deactivated'}`,
-    organisation: updated,
+    organisation: withoutSecrets(updated),
   });
 }));
 
@@ -432,7 +445,7 @@ router.post('/organisations/:id/grant-annual', asyncHandler(async (req: Request,
 
   res.json({
     message: `Granted annual license to ${organisation.name}`,
-    organisation: updated,
+    organisation: withoutSecrets(updated),
     purchase,
   });
 }));
@@ -480,7 +493,7 @@ router.patch('/organisations/:id', asyncHandler(async (req: Request, res: Respon
 
   res.json({
     message: `Organisation email updated to ${email}`,
-    organisation: updated,
+    organisation: withoutSecrets(updated),
   });
 }));
 
@@ -978,7 +991,7 @@ router.post('/affiliates', asyncHandler(async (req: Request, res: Response) => {
   });
 
   console.log(`[SuperAdmin] Made org ${organisationId} (${org.name}) an affiliate with code ${normalizedCode}`);
-  res.json({ message: `${org.name} is now an affiliate`, organisation: updated });
+  res.json({ message: `${org.name} is now an affiliate`, organisation: withoutSecrets(updated) });
 }));
 
 /**

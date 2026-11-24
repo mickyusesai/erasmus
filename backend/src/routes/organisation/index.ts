@@ -39,6 +39,7 @@ import { deletePracticeProject, ensurePracticeProject, findPracticeProject, rest
 import { practiceGuide, REMEMBERED_PRACTICE_STEPS } from '../../services/organisation/practice/guide.js';
 import { practiceRoleOf } from '../../services/organisation/practice/content.js';
 import { InvitationNotSent, invitationMoment, participantsWithoutLink, sendInvitation, whyNotPlannable } from '../../services/organisation/invitations.js';
+import { SUPPORT_EMAIL } from '../../services/email/support.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -147,6 +148,8 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       affiliateActive: org.affiliateActive,
       isTestAccount: org.isTestAccount,
       createdAt: org.createdAt,
+      // The first name of whoever signed up, when they gave one
+      contactFirstName: org.contactFirstName,
     },
     credits: {
       available: creditStatus.availableCredits,
@@ -277,6 +280,65 @@ router.delete('/practice-project', asyncHandler(async (req: Request, res: Respon
   const projects = await prisma.project.findMany({ where: { organisationId: org.id, isPracticeProject: true }, select: { id: true } });
   for (const { id } of projects) await deletePracticeProject(id);
   res.json({ success: true });
+}));
+
+const helpMessageSchema = z.object({
+  message: z.string().trim().min(5, 'Please write your question first').max(4000, 'Please keep your message under 4000 characters'),
+  /** The name of whoever writes, to answer them as a person */
+  name: z.string().trim().max(60).optional(),
+  /** The page they were on, which often explains the question */
+  page: z.string().max(300).optional(),
+});
+
+/** When each organisation last wrote: at most five messages an hour */
+const recentHelpMessages = new Map<string, number[]>();
+const HELP_MESSAGES_PER_HOUR = 5;
+
+/**
+ * POST /api/organisation/help-message
+ * "Write to Micky": the organisation's question goes to the support inbox as an email. An
+ * answer is a plain reply to it, so it arrives in the organisation's own inbox.
+ */
+router.post('/help-message', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const result = helpMessageSchema.safeParse(req.body);
+  if (!result.success) throw new ValidationError(result.error.errors[0].message);
+  const { message, page } = result.data;
+  const name = result.data.name || org.contactFirstName || '';
+
+  const hourAgo = Date.now() - 60 * 60 * 1000;
+  const recent = (recentHelpMessages.get(org.id) ?? []).filter((time) => time > hourAgo);
+  if (recent.length >= HELP_MESSAGES_PER_HOUR) {
+    throw new ValidationError(`You have sent several messages in the last hour. For anything more, please write to ${SUPPORT_EMAIL} directly.`);
+  }
+
+  const sent = await getEmailService().send({
+    to: SUPPORT_EMAIL,
+    replyTo: org.email,
+    fromName: `${name || org.name} via EasyReimburse`,
+    subject: `Question from ${org.name}${org.isTestAccount ? ' (test account)' : ''}`,
+    text: [
+      message,
+      '',
+      '---',
+      `From: ${name ? `${name}, ` : ''}${org.name} <${org.email}>`,
+      page ? `Page: ${page}` : null,
+      isSupportSession(req) ? 'Sent from a support session.' : null,
+      'Reply to this email to answer: it goes to their inbox.',
+    ]
+      .filter((line) => line !== null)
+      .join('\n'),
+  });
+  if (!sent.success) {
+    throw new ValidationError(`Your message could not be sent. Please write to ${SUPPORT_EMAIL} directly.`);
+  }
+
+  recentHelpMessages.set(org.id, [...recent, Date.now()]);
+  // Remember the name, so the next email can greet them by it
+  if (result.data.name && !org.contactFirstName && !isSupportSession(req)) {
+    await prisma.organisation.update({ where: { id: org.id }, data: { contactFirstName: result.data.name } });
+  }
+  res.json({ sent: true, replyTo: org.email });
 }));
 
 /**

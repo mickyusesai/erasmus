@@ -17,6 +17,7 @@ import { storedFilesOf } from './storedFiles.js';
 import { ensurePracticeProject } from './practice/practiceProject.js';
 
 export const TEST_ACCOUNT_NAME = 'Onboarding Test Organisation';
+export const TEST_ACCOUNT_FIRST_NAME = 'Micky';
 export const TEST_ACCOUNT_MAX_CREDITS = 5;
 
 /** micky@example.org → micky+onboarding-test@example.org: lands in the same inbox at most mail providers */
@@ -90,6 +91,8 @@ export async function startTestAccount({ email, credits = 0 }: StartTestAccount)
       name: TEST_ACCOUNT_NAME,
       email: address,
       passwordHash,
+      // A first name, as a real sign-up gives one: the greeting and the emails use it
+      contactFirstName: TEST_ACCOUNT_FIRST_NAME,
       isTestAccount: true,
       projectCredits: credits,
     })

@@ -5,6 +5,7 @@ import { WelcomeScreen } from '../../components/organisation/WelcomeScreen';
 import { NextStepCard } from '../../components/organisation/NextStepCard';
 import { FilmModal } from '../../components/organisation/FilmModal';
 import { PracticeCard, useOpenPractice } from '../../components/organisation/PracticeCard';
+import { openHelp } from '../../components/organisation/Help';
 import { organisationApi, OrgDashboardData } from '../../services/api';
 import { nextStep, shouldWelcome } from '../../utils/gettingStarted';
 import { Plus, Users, FolderKanban, CreditCard, Settings, LogOut, ArrowRight } from 'lucide-react';
@@ -149,6 +150,12 @@ export default function OrgDashboard() {
                 Affiliate Program
               </Link>
             )}
+            <button
+              onClick={openHelp}
+              className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Help
+            </button>
             <Link
               to="/org/billing"
               className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
@@ -176,7 +183,9 @@ export default function OrgDashboard() {
         <div className="flex items-center justify-between gap-4">
           {gettingStarted ? (
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Good to have you here</h1>
+              <h1 className="text-2xl font-bold text-gray-900">
+                Good to have you here{dashboard.organisation.contactFirstName ? `, ${dashboard.organisation.contactFirstName}` : ''}
+              </h1>
               <p className="text-gray-500 mt-1">
                 {stepsLeft === 1 ? 'One step' : `${stepsLeft} steps`} to go until your participants can send in their tickets.
               </p>

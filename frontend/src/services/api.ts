@@ -669,7 +669,7 @@ function getOrgAuthHeaders(): HeadersInit {
 
 export const organisationApi = {
   // Auth
-  register: async (data: { name: string; email: string; password: string; oid?: string }) => {
+  register: async (data: { name: string; email: string; password: string; oid?: string; firstName?: string }) => {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -755,6 +755,16 @@ export const organisationApi = {
       body: JSON.stringify({ welcomeSeen: true }),
     });
     return handleResponse<{ onboarding: OnboardingState }>(res);
+  },
+
+  /** "Write to Micky": a question to the support inbox; the answer comes to the organisation's own inbox */
+  sendHelpMessage: async (data: { message: string; name?: string; page?: string }) => {
+    const res = await fetch(`${API_BASE}/organisation/help-message`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ sent: boolean; replyTo: string }>(res);
   },
 
   /** A step of the practice guide that leaves no trace in the practice project itself */
@@ -1571,7 +1581,17 @@ export interface GettingStarted {
 }
 
 export interface OrgDashboardData {
-  organisation: { id: string; name: string; email: string; isAffiliate?: boolean; affiliateActive?: boolean; isTestAccount?: boolean; createdAt?: string };
+  organisation: {
+    id: string;
+    name: string;
+    email: string;
+    isAffiliate?: boolean;
+    affiliateActive?: boolean;
+    isTestAccount?: boolean;
+    createdAt?: string;
+    /** The first name of whoever signed up, when they gave one */
+    contactFirstName?: string | null;
+  };
   credits: OrgCreditStatus;
   /** The first project is free for up to maxParticipants participants */
   freeProject?: { available: boolean; maxParticipants: number };
