@@ -10,6 +10,7 @@ import { bankAccountProblem, maskAccountNumber, normaliseAccountNumber } from '.
 import path from 'path';
 import { ADDABLE_TYPES, type StoredAttachment } from '../../services/email/inbound.js';
 import { getEmailService } from '../../services/email/index.js';
+import { mailerFor } from '../../services/email/previewEmail.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { generateAuditPdf } from '../../services/pdf/index.js';
@@ -23,7 +24,20 @@ import { findSameFile, fileHash } from '../../services/checks/sameFile.js';
 import { findOtherProjectOverlaps } from '../../services/checks/otherProjects.js';
 import { reviewOutdated } from '../../services/checks/reviewOutdated.js';
 import { startTestAccount } from '../../services/organisation/testAccount.js';
-import { FREE_PROJECT_MAX_PARTICIPANTS, FULL_PROJECT_MAX_PARTICIPANTS, freeProjectAvailable, gettingStarted, readOnboarding } from '../../services/organisation/onboarding.js';
+import {
+  FREE_PROJECT_MAX_PARTICIPANTS,
+  FULL_PROJECT_MAX_PARTICIPANTS,
+  freeProjectAvailable,
+  gettingStarted,
+  readOnboarding,
+  withPracticeGuideClosed,
+  withPracticeRestarted,
+  withPracticeStepSeen,
+  type OnboardingState,
+} from '../../services/organisation/onboarding.js';
+import { deletePracticeProject, ensurePracticeProject, findPracticeProject, restartPracticeProject } from '../../services/organisation/practice/practiceProject.js';
+import { practiceGuide, REMEMBERED_PRACTICE_STEPS } from '../../services/organisation/practice/guide.js';
+import { practiceRoleOf } from '../../services/organisation/practice/content.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -75,9 +89,11 @@ async function consumeCredit(org: Organisation): Promise<PurchaseType> {
 router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
   const org = req.organisation!;
 
-  // Get projects with participant counts (and what the next-step card needs to know)
+  // Get projects with participant counts (and what the next-step card needs to know).
+  // The practice project is not one of the organisation's own projects: it is shown apart
+  // and counted nowhere.
   const projects = await prisma.project.findMany({
-    where: { organisationId: org.id },
+    where: { organisationId: org.id, isPracticeProject: false },
     include: {
       _count: {
         select: { participants: true },
@@ -91,9 +107,12 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
   // Get total participants across all projects
   const totalParticipants = await prisma.participant.count({
     where: {
-      project: { organisationId: org.id },
+      project: { organisationId: org.id, isPracticeProject: false },
     },
   });
+
+  const onboarding = readOnboarding(org.onboarding);
+  const practice = await practiceOverview(org.id, onboarding);
 
   const progress = gettingStarted(
     projects.map((p) => ({
@@ -138,8 +157,10 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       maxParticipants: FREE_PROJECT_MAX_PARTICIPANTS,
     },
     // First-run guidance: what has been seen, and the one next step until the first invitations are out
-    onboarding: readOnboarding(org.onboarding),
+    onboarding,
     gettingStarted: progress,
+    // The practice project with its guide (null when there is none: it can be made on request)
+    practice,
     // EasyReimburse support looking along: no welcome, and nothing is remembered as "seen"
     supportSession: isSupportSession(req),
     stats: {
@@ -176,15 +197,84 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
  */
 router.patch('/onboarding', asyncHandler(async (req: Request, res: Response) => {
   const org = req.organisation!;
-  const result = z.object({ welcomeSeen: z.literal(true) }).safeParse(req.body);
+  const result = z
+    .object({
+      welcomeSeen: z.literal(true).optional(),
+      // A step of the practice guide that leaves no trace in the practice project itself
+      practiceStep: z.enum(REMEMBERED_PRACTICE_STEPS).optional(),
+      // The practice guide put away (true) or taken out again (false)
+      practiceGuideClosed: z.boolean().optional(),
+    })
+    .refine((body) => Object.values(body).some((value) => value !== undefined))
+    .safeParse(req.body);
   if (!result.success) throw new ValidationError('Nothing to remember');
 
-  const state = readOnboarding(org.onboarding);
-  if (!state.welcomeSeenAt && !isSupportSession(req)) {
-    state.welcomeSeenAt = new Date().toISOString();
-    await prisma.organisation.update({ where: { id: org.id }, data: { onboarding: { ...state } } });
+  const before = readOnboarding(org.onboarding);
+  let state = before;
+  if (result.data.welcomeSeen && !state.welcomeSeenAt) state = { ...state, welcomeSeenAt: new Date().toISOString() };
+  if (result.data.practiceStep) state = withPracticeStepSeen(state, result.data.practiceStep);
+  if (result.data.practiceGuideClosed !== undefined) state = withPracticeGuideClosed(state, result.data.practiceGuideClosed);
+
+  // Support looking along never counts as the organisation having seen or done something
+  if (isSupportSession(req)) {
+    res.json({ onboarding: before });
+    return;
   }
+  if (JSON.stringify(state) !== JSON.stringify(before)) await saveOnboarding(org.id, state);
   res.json({ onboarding: state });
+}));
+
+async function saveOnboarding(organisationId: string, state: OnboardingState): Promise<void> {
+  await prisma.organisation.update({ where: { id: organisationId }, data: { onboarding: JSON.parse(JSON.stringify(state)) } });
+}
+
+/** The practice project as the dashboard shows it: where it is, and how far the guide is */
+async function practiceOverview(organisationId: string, onboarding: OnboardingState) {
+  const project = await findPracticeProject(organisationId);
+  if (!project) return null;
+  const participants = await prisma.participant.findMany({
+    where: { projectId: project.id },
+    select: { id: true, email: true, firstName: true, status: true, reopenedAt: true, magicLinkToken: true },
+  });
+  return { projectId: project.id, name: project.name, guide: practiceGuide(project.id, participants, onboarding.practice) };
+}
+
+/**
+ * POST /api/organisation/practice-project
+ * The organisation's practice project: a made-up exchange with made-up participants to try
+ * everything with. Made when there is none yet (new organisations get it at sign-up).
+ */
+router.post('/practice-project', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const project = await ensurePracticeProject(org.id);
+  res.json({ projectId: project.id, practice: await practiceOverview(org.id, readOnboarding(org.onboarding)) });
+}));
+
+/**
+ * POST /api/organisation/practice-project/restart
+ * Start the practice again: the practice project is thrown away and made anew, and the guide
+ * starts at its first step.
+ */
+router.post('/practice-project/restart', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const project = await restartPracticeProject(org.id);
+  let onboarding = readOnboarding(org.onboarding);
+  if (!isSupportSession(req) && onboarding.practice) {
+    onboarding = withPracticeRestarted(onboarding);
+    await saveOnboarding(org.id, onboarding);
+  }
+  res.json({ projectId: project.id, practice: await practiceOverview(org.id, onboarding) });
+}));
+
+/**
+ * DELETE /api/organisation/practice-project
+ * Remove the practice project. It can be brought back at any time.
+ */
+router.delete('/practice-project', asyncHandler(async (req: Request, res: Response) => {
+  const org = req.organisation!;
+  const projects = await prisma.project.findMany({ where: { organisationId: org.id, isPracticeProject: true }, select: { id: true } });
+  for (const { id } of projects) await deletePracticeProject(id);
+  res.json({ success: true });
 }));
 
 /**
@@ -211,6 +301,9 @@ router.post('/test-account/restart', asyncHandler(async (req: Request, res: Resp
 // =============================================================================
 // PROJECT ROUTES
 // =============================================================================
+
+const PRACTICE_NO_OWN_PARTICIPANTS =
+  'The practice project has its own made-up participants. Add your participants to a project of your own.';
 
 /**
  * GET /api/organisation/projects
@@ -246,6 +339,7 @@ router.get('/projects', asyncHandler(async (req: Request, res: Response) => {
       participantCount: p._count.participants,
       creditSource: p.creditSource,
       isTestProject: p.isTestProject,
+      isPracticeProject: p.isPracticeProject,
       maxParticipants: p.maxParticipants,
       countryLimits: p.countryLimits,
       createdAt: p.createdAt,
@@ -432,6 +526,7 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       greenTravelAccommodationPerNightEur: project.greenTravelAccommodationPerNightEur,
       creditSource: project.creditSource,
       isTestProject: project.isTestProject,
+      isPracticeProject: project.isPracticeProject,
       maxParticipants: project.maxParticipants,
       countryLimits: project.countryLimits,
       participants: project.participants,
@@ -580,7 +675,7 @@ router.post('/projects/:id/notify-ended', ensureOwnProject, asyncHandler(async (
     throw new ValidationError('The project has not ended yet. Enable "Open AI analysis early" first, or wait until the end date.');
   }
 
-  const emailService = getEmailService();
+  const emailService = mailerFor(project).service;
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   for (const p of project.participants) {
     const magicLink = `${frontendUrl}/reimbursement?token=${p.magicLinkToken}`;
@@ -730,6 +825,13 @@ router.delete('/projects/:id', ensureOwnProject, asyncHandler(async (req: Reques
 
   if (!existing) {
     throw new NotFoundError('Project not found');
+  }
+
+  // The practice project is removed with its made-up participants; it can be brought back
+  if (existing.isPracticeProject) {
+    await deletePracticeProject(existing.id);
+    res.json({ message: 'Practice project removed' });
+    return;
   }
 
   // Prevent deletion if project has participants
@@ -1045,6 +1147,7 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
   if (!project) {
     throw new NotFoundError('Project not found');
   }
+  if (project.isPracticeProject) throw new ForbiddenError(PRACTICE_NO_OWN_PARTICIPANTS);
 
   // Check participant limit (test projects and paid projects with capacity set)
   if (project.maxParticipants !== null && project._count.participants >= project.maxParticipants) {
@@ -1152,6 +1255,7 @@ router.post('/projects/:id/participants/preview-import', ensureOwnProject, uploa
     include: { _count: { select: { participants: true } } },
   });
   if (!project) throw new NotFoundError('Project not found');
+  if (project.isPracticeProject) throw new ForbiddenError(PRACTICE_NO_OWN_PARTICIPANTS);
 
   const { parsed, newRows, alreadyInProject } = await prepareParticipantImport(projectId, req.file.buffer);
 
@@ -1189,6 +1293,7 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
   if (!project) {
     throw new NotFoundError('Project not found');
   }
+  if (project.isPracticeProject) throw new ForbiddenError(PRACTICE_NO_OWN_PARTICIPANTS);
 
   const { parsed, newRows: validRecords, alreadyInProject } = await prepareParticipantImport(projectId, req.file.buffer);
   if (parsed.missingColumns.length > 0) {
@@ -1519,8 +1624,8 @@ router.patch('/participants/:id/green-travel-extra', asyncHandler(async (req: Re
   if (emailed) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
-    getEmailService()
-      .sendGreenTravelExtra(
+    mailerFor(participant.project)
+      .service.sendGreenTravelExtra(
         participant.email,
         participant.firstName,
         participant.project.name,
@@ -1590,8 +1695,8 @@ router.patch('/participants/:id/bank-details', asyncHandler(async (req: Request,
   await getAiService().recalculateParticipantSummary(participantId);
 
   // Always tell the participant, so a wrong change can't go unnoticed
-  getEmailService()
-    .sendBankDetailsChanged(
+  mailerFor(participant.project)
+    .service.sendBankDetailsChanged(
       participant.email,
       participant.firstName,
       participant.project.name,
@@ -1998,6 +2103,7 @@ router.post('/participants/:id/review-findings/refresh', asyncHandler(async (req
     bankDetailsComplete: !!(participant.bankAccountIban && participant.bankAccountHolderName && participant.bankAccountBic),
     noReimbursement: participant.noReimbursement,
     otherProjects: await findOtherProjectOverlaps(participant.id),
+    practiceProject: participant.project.isPracticeProject,
   }, { participantId: participant.id, projectId: participant.projectId });
 
   // Store new findings in DB (including travelItemId link)
@@ -2067,6 +2173,11 @@ router.patch('/participants/:id', asyncHandler(async (req: Request, res: Respons
   const result = updateParticipantSchema.safeParse(req.body);
   if (!result.success) {
     throw new ValidationError(result.error.errors[0].message);
+  }
+
+  // The made-up participants keep their example address, so that no email can ever leave for them
+  if (participant.project.isPracticeProject && 'email' in result.data && result.data.email !== participant.email) {
+    throw new ForbiddenError("The participants of the practice project are made up: their email address can't be changed.");
   }
 
   const updated = await prisma.participant.update({
@@ -2203,8 +2314,9 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
 
-  const emailService = getEmailService();
-  await emailService.sendMagicLink(
+  // In the practice project the email is written and shown, never sent
+  const mail = mailerFor(participant.project);
+  await mail.service.sendMagicLink(
     participant.email,
     participant.firstName,
     participant.project.name,
@@ -2219,7 +2331,7 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
     data: { lastMagicLinkSentAt: new Date(), tokenExpiresAt: newExpiry },
   });
 
-  res.json({ success: true });
+  res.json({ success: true, emailPreview: mail.preview() });
 }));
 
 /**
@@ -2338,8 +2450,8 @@ router.post('/participants/:id/reset', asyncHandler(async (req: Request, res: Re
   // Re-send the magic link so participant can start fresh
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
-  const emailService = getEmailService();
-  await emailService.sendMagicLink(
+  const mail = mailerFor(participant.project);
+  await mail.service.sendMagicLink(
     participant.email,
     participant.firstName,
     participant.project.name,
@@ -2351,7 +2463,7 @@ router.post('/participants/:id/reset', asyncHandler(async (req: Request, res: Re
     data: { lastMagicLinkSentAt: new Date() },
   });
 
-  res.json({ success: true });
+  res.json({ success: true, emailPreview: mail.preview() });
 }));
 
 /**
@@ -2369,7 +2481,8 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
   const results: { id: string; success: boolean }[] = [];
 
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const emailService = getEmailService();
+  // In the practice project the emails are written and shown, never sent
+  const previews = mailerFor({ isPracticeProject: true });
 
   for (const id of participantIds) {
     try {
@@ -2384,7 +2497,8 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
       }
 
       const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
-      await emailService.sendMagicLink(
+      const mail = participant.project.isPracticeProject ? previews : mailerFor(participant.project);
+      await mail.service.sendMagicLink(
         participant.email,
         participant.firstName,
         participant.project.name,
@@ -2404,7 +2518,7 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
     }
   }
 
-  res.json({ results });
+  res.json({ results, emailPreview: previews.preview(), emailPreviewCount: previews.previewCount() });
 }));
 
 /**
@@ -2436,8 +2550,8 @@ router.post('/participants/:id/send-reminder', asyncHandler(async (req: Request,
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
 
-  const emailService = getEmailService();
-  await emailService.sendReminder(
+  const mail = mailerFor(participant.project);
+  await mail.service.sendReminder(
     participant.email,
     participant.firstName,
     participant.project.name,
@@ -2446,7 +2560,7 @@ router.post('/participants/:id/send-reminder', asyncHandler(async (req: Request,
     await projectEmailContext(participant.project, participant.id)
   );
 
-  res.json({ success: true });
+  res.json({ success: true, emailPreview: mail.preview() });
 }));
 
 /**
@@ -2463,7 +2577,7 @@ router.post('/participants/send-reminders-bulk', asyncHandler(async (req: Reques
 
   const results: { id: string; success: boolean }[] = [];
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const emailService = getEmailService();
+  const previews = mailerFor({ isPracticeProject: true });
 
   for (const id of participantIds) {
     try {
@@ -2478,7 +2592,8 @@ router.post('/participants/send-reminders-bulk', asyncHandler(async (req: Reques
       }
 
       const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
-      await emailService.sendReminder(
+      const mail = participant.project.isPracticeProject ? previews : mailerFor(participant.project);
+      await mail.service.sendReminder(
         participant.email,
         participant.firstName,
         participant.project.name,
@@ -2493,7 +2608,7 @@ router.post('/participants/send-reminders-bulk', asyncHandler(async (req: Reques
     }
   }
 
-  res.json({ results });
+  res.json({ results, emailPreview: previews.preview(), emailPreviewCount: previews.previewCount() });
 }));
 
 /**
@@ -2545,16 +2660,18 @@ router.post('/participants/:id/approve', asyncHandler(async (req: Request, res: 
 
   // Send approval notification email (fire and forget)
   const approvedAmount = amountToReimburse ?? participant.reimbursementSummary?.amountToReimburse ?? 0;
-  const emailService = getEmailService();
-  emailService.sendApprovalNotification(
+  const mail = mailerFor(participant.project);
+  const notified = mail.service.sendApprovalNotification(
     participant.email,
     participant.firstName,
     participant.project.name,
     approvedAmount,
     await projectEmailContext(participant.project, participant.id)
   ).catch((err) => console.error('[Email] Failed to send approval notification:', err));
+  // In the practice project the email is shown instead of sent, so it has to be written first
+  if (mail.previewOnly) await notified;
 
-  res.json({ success: true });
+  res.json({ success: true, emailPreview: mail.preview() });
 }));
 
 /**
@@ -2600,16 +2717,17 @@ router.post('/participants/:id/mark-paid', asyncHandler(async (req: Request, res
 
   // Send payment notification email (fire and forget)
   const paidAmount = participant.reimbursementSummary?.amountToReimburse ?? 0;
-  const emailService = getEmailService();
-  emailService.sendPaymentNotification(
+  const mail = mailerFor(participant.project);
+  const notified = mail.service.sendPaymentNotification(
     participant.email,
     participant.firstName,
     participant.project.name,
     paidAmount,
     await projectEmailContext(participant.project, participant.id)
   ).catch((err) => console.error('[Email] Failed to send payment notification:', err));
+  if (mail.previewOnly) await notified;
 
-  res.json({ success: true });
+  res.json({ success: true, emailPreview: mail.preview() });
 }));
 
 /**
@@ -3171,10 +3289,10 @@ router.post('/participants/:id/reopen', asyncHandler(async (req: Request, res: R
     }),
   ]);
 
-  // Send reopen email
+  // Send reopen email (in the practice project it is written and shown, never sent)
+  const mail = mailerFor(participant.project);
   try {
-    const emailService = getEmailService();
-    await emailService.sendReopenNotification(
+    await mail.service.sendReopenNotification(
       participant.email,
       participant.firstName,
       participant.project.name,
@@ -3185,7 +3303,7 @@ router.post('/participants/:id/reopen', asyncHandler(async (req: Request, res: R
     console.error('[Email] Failed to send reopen notification:', err);
   }
 
-  res.json({ success: true });
+  res.json({ success: true, emailPreview: mail.preview() });
 }));
 
 // =============================================================================
@@ -3401,6 +3519,7 @@ router.post('/projects/:id/expand-capacity', ensureOwnProject, asyncHandler(asyn
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new NotFoundError('Project not found');
+  if (project.isPracticeProject) throw new ValidationError(PRACTICE_NO_OWN_PARTICIPANTS);
   if (project.isTestProject) throw new ValidationError('Upgrade your free project to a full project before expanding capacity.');
 
   const freshOrg = await prisma.organisation.findUnique({ where: { id: org.id } });
@@ -3434,6 +3553,7 @@ router.post('/projects/:id/upgrade-from-test', ensureOwnProject, asyncHandler(as
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new NotFoundError('Project not found');
+  if (project.isPracticeProject) throw new ValidationError(PRACTICE_NO_OWN_PARTICIPANTS);
   if (!project.isTestProject) throw new ValidationError('This project is a full project already');
 
   // Refresh org for latest credit count

@@ -12,6 +12,7 @@ import {
 } from '../../middleware/auth.js';
 import { getEmailService } from '../../services/email/index.js';
 import { createNewOrganisation } from '../../services/organisation/signup.js';
+import { preparePracticeProject } from '../../services/organisation/practice/practiceProject.js';
 
 const router = Router();
 
@@ -63,6 +64,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
 
   // Generate token
   const token = generateOrganisationToken(organisation);
+
+  // Its practice project (a made-up exchange to try everything with) is made in the background
+  preparePracticeProject(organisation.id);
 
   // Send welcome email (fire and forget)
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';

@@ -2,6 +2,7 @@ import { ServerClient } from 'postmark';
 import { EmailService, EmailOptions, EmailResult, ProjectEmailContext } from './types.js';
 
 import * as templates from './templates.js';
+import { canNeverReceiveMail } from './reservedAddresses.js';
 /** Sender display name + Reply-To derived from the project's organisation */
 function senderFor(ctx?: ProjectEmailContext): Pick<EmailOptions, 'fromName' | 'replyTo'> {
   if (!ctx) return {};
@@ -22,6 +23,13 @@ export class PostmarkEmailService implements EmailService {
   }
 
   async send(options: EmailOptions): Promise<EmailResult> {
+    // An example address (the made-up participants of the practice project) can never receive
+    // mail: sending would only bounce
+    if (canNeverReceiveMail(options.to)) {
+      console.log(`[Postmark] Not sent: ${options.to} is an example address ("${options.subject}")`);
+      return { success: true, messageId: 'not-sent-example-address' };
+    }
+
     try {
       // The address must stay the verified sender; only the display name varies
       const from = options.fromName

@@ -4,6 +4,7 @@
  */
 import prisma from '../../utils/prisma.js';
 import { normalizeCountryName } from '../../utils/countryName.js';
+import { PRACTICE_AI_NOTE } from '../organisation/practice/content.js';
 
 const LOCAL_CURRENCY: Record<string, string> = {
   poland: 'PLN ("zł")',
@@ -35,7 +36,7 @@ const LOCAL_CURRENCY: Record<string, string> = {
 export async function extractionContextFor(participantId: string): Promise<string | undefined> {
   const p = await prisma.participant.findUnique({
     where: { id: participantId },
-    select: { country: true, project: { select: { country: true, startDate: true, endDate: true } } },
+    select: { country: true, project: { select: { country: true, startDate: true, endDate: true, isPracticeProject: true } } },
   });
   if (!p) return undefined;
   const home = normalizeCountryName(p.country);
@@ -45,5 +46,5 @@ export async function extractionContextFor(participantId: string): Promise<strin
     p.project.startDate
   )} to ${day(p.project.endDate)} (travel days can be a few days before and after). Dates on the file are almost certainly from that period: if the year is missing, unclear or printed with two digits, use the project's year. ${
     currencies.length ? `Besides EUR, amounts may be in ${currencies.join(' or ')}; use that currency code when you see its symbol.` : ''
-  }`.trim();
+  }${p.project.isPracticeProject ? `\n\n${PRACTICE_AI_NOTE}` : ''}`.trim();
 }

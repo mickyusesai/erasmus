@@ -15,13 +15,16 @@ router.get('/stats', async (_req: Request, res: Response) => {
     participantsByStatus,
     recentProjects,
   ] = await Promise.all([
-    prisma.project.count(),
-    prisma.participant.count(),
+    // Practice projects (made-up participants to try things with) are counted nowhere
+    prisma.project.count({ where: { isPracticeProject: false } }),
+    prisma.participant.count({ where: { project: { isPracticeProject: false } } }),
     prisma.participant.groupBy({
       by: ['status'],
+      where: { project: { isPracticeProject: false } },
       _count: { id: true },
     }),
     prisma.project.findMany({
+      where: { isPracticeProject: false },
       take: 5,
       orderBy: { createdAt: 'desc' },
       include: {

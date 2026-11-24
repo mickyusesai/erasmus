@@ -117,7 +117,8 @@ router.get('/organisations', asyncHandler(async (req: Request, res: Response) =>
     orderBy: { createdAt: 'desc' },
     include: {
       _count: {
-        select: { projects: true },
+        // An organisation's own projects: its practice project (made-up participants) is none
+        select: { projects: { where: { isPracticeProject: false } } },
       },
     },
   });
@@ -293,7 +294,7 @@ router.get('/organisations/:id', asyncHandler(async (req: Request, res: Response
         orderBy: { createdAt: 'desc' },
       },
       _count: {
-        select: { projects: true },
+        select: { projects: { where: { isPracticeProject: false } } },
       },
     },
   });

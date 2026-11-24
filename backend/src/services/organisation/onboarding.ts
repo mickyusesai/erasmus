@@ -7,6 +7,7 @@
  * Everything here is worked out from data, so it can be tested without a database.
  */
 import type { Prisma } from '@prisma/client';
+import { REMEMBERED_PRACTICE_STEPS, type PracticeMemory, type RememberedPracticeStep } from './practice/guide.js';
 
 export const FREE_PROJECT_MAX_PARTICIPANTS = 10;
 /** What one project credit covers */
@@ -46,16 +47,49 @@ export function freeProjectAvailable(org: { freeProjectUsedAt: Date | null; crea
 export interface OnboardingState {
   /** When the welcome screen was closed or one of its ways in was chosen (ISO date) */
   welcomeSeenAt?: string;
+  /** The guide through the practice project: what it can't read from the practice project itself */
+  practice?: PracticeMemory;
 }
 
 const isIsoDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value));
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
 /** The stored state, whatever is in the column (older or broken values count as "nothing yet") */
 export function readOnboarding(value: Prisma.JsonValue | null | undefined): OnboardingState {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  if (!isObject(value)) return {};
   const state: OnboardingState = {};
   if (isIsoDate(value.welcomeSeenAt)) state.welcomeSeenAt = value.welcomeSeenAt;
+  if (isObject(value.practice)) {
+    const practice: PracticeMemory = {};
+    if (Array.isArray(value.practice.seen)) {
+      const seen = REMEMBERED_PRACTICE_STEPS.filter((step) => (value.practice as { seen: unknown[] }).seen.includes(step));
+      if (seen.length) practice.seen = seen;
+    }
+    if (isIsoDate(value.practice.closedAt)) practice.closedAt = value.practice.closedAt;
+    if (practice.seen || practice.closedAt) state.practice = practice;
+  }
   return state;
+}
+
+/** The state after the organisation did one of the practice steps that leave no trace */
+export function withPracticeStepSeen(state: OnboardingState, step: RememberedPracticeStep): OnboardingState {
+  const seen = new Set(state.practice?.seen ?? []);
+  seen.add(step);
+  return { ...state, practice: { ...state.practice, seen: REMEMBERED_PRACTICE_STEPS.filter((s) => seen.has(s)) } };
+}
+
+/** The state after the organisation put the practice guide away, or took it out again */
+export function withPracticeGuideClosed(state: OnboardingState, closed: boolean, now: Date = new Date()): OnboardingState {
+  const practice: PracticeMemory = { ...state.practice };
+  if (closed) practice.closedAt = practice.closedAt ?? now.toISOString();
+  else delete practice.closedAt;
+  return { ...state, practice };
+}
+
+/** The state after the practice was started again: the guide starts again too */
+export function withPracticeRestarted(state: OnboardingState): OnboardingState {
+  const { practice: _practice, ...rest } = state;
+  return rest;
 }
 
 // ---------------------------------------------------------------------------------------------

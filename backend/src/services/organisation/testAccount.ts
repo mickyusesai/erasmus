@@ -13,6 +13,8 @@ import prisma from '../../utils/prisma.js';
 import { getStorageService } from '../storage/index.js';
 import { ConflictError, ValidationError } from '../../middleware/errorHandler.js';
 import { createNewOrganisation } from './signup.js';
+import { storedFilesOf } from './storedFiles.js';
+import { ensurePracticeProject } from './practice/practiceProject.js';
 
 export const TEST_ACCOUNT_NAME = 'Onboarding Test Organisation';
 export const TEST_ACCOUNT_MAX_CREDITS = 5;
@@ -29,37 +31,9 @@ export async function findTestAccount() {
   return prisma.organisation.findFirst({
     where: { isTestAccount: true },
     orderBy: { createdAt: 'desc' },
-    include: { projects: { select: { id: true, name: true, _count: { select: { participants: true } } } } },
+    // Its own projects: the practice project it starts with is not one of them
+    include: { projects: { where: { isPracticeProject: false }, select: { id: true, name: true, _count: { select: { participants: true } } } } },
   });
-}
-
-/** Every file a participant of this organisation has in storage */
-async function storedFilesOf(organisationId: string): Promise<string[]> {
-  const ofOrg = { project: { organisationId } };
-  const [documents, photos, posts, travelDeclarations, greenDeclarations, messages] = await Promise.all([
-    prisma.document.findMany({ where: { participant: ofOrg }, select: { storedFilePath: true } }),
-    prisma.disseminationPhoto.findMany({ where: { disseminationActivity: ofOrg }, select: { storedFilePath: true } }),
-    prisma.socialMediaPost.findMany({ where: { participant: ofOrg }, select: { storedFilePath: true } }),
-    prisma.declarationOfTravel.findMany({ where: { participant: ofOrg }, select: { generatedPdfPath: true } }),
-    prisma.greenTravelDeclaration.findMany({ where: { participant: ofOrg }, select: { generatedPdfPath: true } }),
-    prisma.participantMessage.findMany({ where: { participant: ofOrg, attachments: { not: null } }, select: { attachments: true } }),
-  ]);
-
-  const paths = new Set<string>();
-  const add = (p: string | null | undefined) => { if (p) paths.add(p); };
-  documents.forEach((d) => add(d.storedFilePath));
-  photos.forEach((p) => add(p.storedFilePath));
-  posts.forEach((p) => add(p.storedFilePath));
-  travelDeclarations.forEach((d) => add(d.generatedPdfPath));
-  greenDeclarations.forEach((d) => add(d.generatedPdfPath));
-  for (const m of messages) {
-    try {
-      for (const a of JSON.parse(m.attachments!) as { storedPath?: string }[]) add(a.storedPath);
-    } catch {
-      // not a list of attachments: nothing to delete
-    }
-  }
-  return [...paths];
 }
 
 /** Deletes a test account with all its projects, participants and files. Refuses any other organisation. */
@@ -71,7 +45,7 @@ async function deleteTestAccount(organisationId: string): Promise<void> {
   }
 
   const storage = getStorageService();
-  for (const path of await storedFilesOf(organisationId)) {
+  for (const path of await storedFilesOf({ organisationId })) {
     await storage.delete(path).catch((err) => console.error(`[Test account] Could not delete file ${path}:`, err));
   }
 
@@ -111,7 +85,7 @@ export async function startTestAccount({ email, credits = 0 }: StartTestAccount)
 
   // Opened from super-admin only: nobody can sign in to it with a password
   const passwordHash = await bcrypt.hash(uuidv4(), 12);
-  return prisma.$transaction((tx) =>
+  const organisation = await prisma.$transaction((tx) =>
     createNewOrganisation(tx, {
       name: TEST_ACCOUNT_NAME,
       email: address,
@@ -120,4 +94,8 @@ export async function startTestAccount({ email, credits = 0 }: StartTestAccount)
       projectCredits: credits,
     })
   );
+  // Like a real sign-up, it starts with its practice project (here it is waited for, so the
+  // dashboard opens with it)
+  await ensurePracticeProject(organisation.id).catch((err) => console.error('[Test account] Could not create the practice project:', err));
+  return organisation;
 }

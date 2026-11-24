@@ -2,6 +2,7 @@ import { EmailService, EmailOptions, EmailResult, ProjectEmailContext } from './
 
 import { v4 as uuidv4 } from 'uuid';
 import * as templates from './templates.js';
+import { canNeverReceiveMail } from './reservedAddresses.js';
 /** Sender display name + Reply-To derived from the project's organisation */
 function senderFor(ctx?: ProjectEmailContext): Pick<EmailOptions, 'fromName' | 'replyTo'> {
   if (!ctx) return {};
@@ -14,6 +15,12 @@ function senderFor(ctx?: ProjectEmailContext): Pick<EmailOptions, 'fromName' | '
  */
 export class ConsoleEmailService implements EmailService {
   async send(options: EmailOptions): Promise<EmailResult> {
+    // An example address (the made-up participants of the practice project): nothing to send
+    if (canNeverReceiveMail(options.to)) {
+      console.log(`[Email] Not sent: ${options.to} is an example address ("${options.subject}")`);
+      return { success: true, messageId: 'not-sent-example-address' };
+    }
+
     const messageId = uuidv4();
 
     console.log('\n' + '='.repeat(60));

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import prisma from '../../utils/prisma.js';
+import { PRACTICE_AI_NOTE } from '../organisation/practice/content.js';
 import { DocumentType, TransportMode } from './types.js';
 import { getStorageService } from '../storage/index.js';
 import { convertToEurForParticipant } from '../exchangeRate/projectRecalc.js';
@@ -569,7 +570,7 @@ PARTICIPANT INFO:
 - Country (traveling from): ${normalizeCountryName(participant.country)}${normalizeCountryName(participant.country) !== participant.country ? ` (registered as "${participant.country}" — the extra word only marks a green-travel allowance row, it is not part of the country name)` : ''}
 - Project location: ${participant.project.country}${participant.project.venueAddress ? `\n- Project venue address: ${participant.project.venueAddress} (Note: participants may not have tickets directly to this exact address — final leg transport like bus pickup is common in Erasmus+ projects, so the journey doesn\'t need to end exactly there, but this helps understand the general destination)` : ''}
 - Project start date: ${participant.project.startDate.toISOString().split('T')[0]}
-- Project end date: ${participant.project.endDate.toISOString().split('T')[0]}
+- Project end date: ${participant.project.endDate.toISOString().split('T')[0]}${participant.project.isPracticeProject ? `\n\n${PRACTICE_AI_NOTE}` : ''}
 
 DOCUMENT REFERENCE TABLE (use documentId UUIDs in your response!):
 ${JSON.stringify(extractionSummary, null, 2)}

@@ -43,7 +43,8 @@ router.get('/', async (req: Request, res: Response) => {
     : {};
 
   const projects = await prisma.project.findMany({
-    where,
+    // Practice projects (made-up participants to try things with) are no projects to administer
+    where: { ...where, isPracticeProject: false },
     orderBy: { [sortBy as string]: sortOrder },
     include: {
       _count: {

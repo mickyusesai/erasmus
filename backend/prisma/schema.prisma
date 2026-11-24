@@ -208,6 +208,11 @@ model Project {
   isTestProject            Boolean                 @default(false)
   maxParticipants          Int?                    // Null = unlimited, set to 10 for test projects
 
+  // Practice project: a made-up exchange with made-up participants and sample tickets, to try
+  // everything without consequences (services/organisation/practice). Costs no credit, is not
+  // counted anywhere, takes no participants of its own, and no email ever leaves it.
+  isPracticeProject        Boolean                 @default(false)
+
   // Credit tracking - which credit was used to create this project
   creditSource             PurchaseType?           // SINGLE, PACK_5, PACK_10, ANNUAL, FOUNDING, MANUAL, or null for test projects
 

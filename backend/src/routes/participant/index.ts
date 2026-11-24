@@ -14,7 +14,9 @@ import { getAiService } from '../../services/ai/index.js';
 import { JourneyConsolidationService } from '../../services/ai/journeyConsolidationService.js';
 import { ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '@prisma/client';
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
-import { getEmailService } from '../../services/email/index.js';
+import { mailerFor } from '../../services/email/previewEmail.js';
+import { practiceRoleOf } from '../../services/organisation/practice/content.js';
+import { sampleBankDetailsFor, sampleUploadsFor } from '../../services/organisation/practice/practiceProject.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { extractionContextFor } from '../../services/ai/extractionContext.js';
 import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
@@ -222,6 +224,7 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
           contactPhone: true,
           requireGreenTravelDeclaration: true,
           requireAirlineDeclaration: true,
+          isPracticeProject: true,
           organisation: {
             select: {
               id: true,
@@ -329,9 +332,74 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
     receiptUploadsOpen: data ? receiptUploadsOpen(data) : false,
     requireGreenTravelDeclaration: data?.project.requireGreenTravelDeclaration ?? false,
     requireAirlineDeclaration: data?.project.requireAirlineDeclaration ?? false,
+    // The practice project: an organiser is trying the participant's page with a made-up
+    // participant. Sample tickets and bank details are there for the one they play.
+    practice: data?.project.isPracticeProject
+      ? {
+          playedByOrganiser: practiceRoleOf(data.email) === 'YOU',
+          sampleBankDetails: practiceRoleOf(data.email) === 'YOU' ? sampleBankDetailsFor(data) : null,
+        }
+      : null,
     validation,
     disseminationStatus,
   });
+}));
+
+/**
+ * POST /api/participant/practice/sample-tickets
+ * Only in the practice project, for the participant the organiser plays: puts the sample
+ * tickets in their file, as if they had uploaded them. From there on everything is real:
+ * the AI reads them and builds the trips.
+ */
+router.post('/practice/sample-tickets', participantAuth, asyncHandler(async (req: Request, res: Response) => {
+  const participant = req.participant!;
+  const project = await prisma.project.findUnique({
+    where: { id: participant.projectId },
+    select: { isPracticeProject: true, startDate: true, endDate: true },
+  });
+  if (!project?.isPracticeProject || practiceRoleOf(participant.email) !== 'YOU') {
+    throw new ForbiddenError('Sample tickets are only there in the practice project');
+  }
+  if (participant.status !== 'DRAFT') {
+    throw new ForbiddenError('This reimbursement has been handed in already');
+  }
+
+  // Once is enough: a second click adds nothing
+  const existing = await prisma.document.findMany({ where: { participantId: participant.id }, orderBy: { uploadDate: 'desc' } });
+  if (existing.length > 0) {
+    res.json({ documents: existing, added: 0 });
+    return;
+  }
+
+  const storage = getStorageService();
+  const extractionContext = await extractionContextFor(participant.id);
+  const documents = [];
+  for (const upload of await sampleUploadsFor({ ...participant, project })) {
+    const storagePath = `participants/${participant.id}/documents/${uuidv4()}.pdf`;
+    await storage.store(
+      { buffer: upload.buffer, originalname: upload.filename, mimetype: 'application/pdf', size: upload.buffer.length },
+      storagePath
+    );
+    const document = await prisma.document.create({
+      data: {
+        participantId: participant.id,
+        storedFilePath: storagePath,
+        originalFilename: upload.filename,
+        renamedFilename: upload.filename,
+        mimeType: 'application/pdf',
+        fileSize: upload.buffer.length,
+        documentType: 'OTHER', // typed when the AI reads it, like any upload
+        contentHash: fileHash(upload.buffer),
+      },
+    });
+    documents.push(document);
+    consolidationService
+      .extractAndStoreDocumentData(document.id, upload.buffer, 'application/pdf', { context: extractionContext })
+      .catch((error) => console.error(`[Practice] Background extraction failed for document ${document.id}:`, error));
+  }
+  await prisma.participant.update({ where: { id: participant.id }, data: { journeyConsolidatedAt: null } });
+
+  res.status(201).json({ documents, added: documents.length });
 }));
 
 /**
@@ -581,7 +649,8 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
     include: { project: true },
   });
   if (fullParticipant) {
-    const emailService = getEmailService();
+    // In the practice project no email is sent (its participants are made up)
+    const emailService = mailerFor(fullParticipant.project).service;
     emailService
       .sendAnalysisComplete(
         fullParticipant.email,
@@ -1859,7 +1928,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
     include: { project: true },
   });
   if (participantWithProject) {
-    const emailService = getEmailService();
+    const emailService = mailerFor(participantWithProject.project).service;
     emailService.sendSubmissionConfirmation(
       participantWithProject.email,
       participantWithProject.firstName,
@@ -1989,6 +2058,7 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
         bankDetailsComplete: !!(fullParticipant.bankAccountIban && fullParticipant.bankAccountHolderName && fullParticipant.bankAccountBic),
         noReimbursement: fullParticipant.noReimbursement,
         otherProjects: await findOtherProjectOverlaps(fullParticipant.id),
+        practiceProject: fullParticipant.project.isPracticeProject,
       }, { participantId: fullParticipant.id, projectId: fullParticipant.projectId });
 
       // Store findings in DB (including travelItemId link)

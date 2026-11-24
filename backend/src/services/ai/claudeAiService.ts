@@ -18,6 +18,7 @@ import { recordAiUsage } from './usageLog.js';
 import { computePayable } from '../../utils/reimbursementMath.js';
 import { otherProjectsForPrompt, type OtherProjectOverlap } from '../checks/otherProjects.js';
 import { convertToEur as convertWithInforEuro } from '../exchangeRate/index.js';
+import { PRACTICE_AI_NOTE } from '../organisation/practice/content.js';
 
 /**
  * Reimbursement checks used when an Anthropic key is configured: submission validation,
@@ -443,6 +444,8 @@ export async function generateParticipantReview(data: {
   noReimbursement?: boolean;
   /** The same person's trips in another project of the organisation that clash with these */
   otherProjects?: OtherProjectOverlap[];
+  /** The practice project: the files are sample tickets and must be judged like real ones */
+  practiceProject?: boolean;
 }, usageContext: { participantId?: string; projectId?: string } = {}): Promise<(ReviewFinding & { travelItemId?: string | null; documentIds?: string[] })[]> {
   // One fixed numbering of the travel documents, used in the prompt and to map the answer back
   const travelDocs = data.documents.filter((d) => !isReceiptDocument(d));
@@ -468,7 +471,7 @@ PARTICIPANT'S HOME COUNTRY: ${normalizeCountryName(data.participantCountry)} (th
 ${data.detectedHomeCountry && !sameCountry(data.detectedHomeCountry, data.participantCountry) ? `AI-DETECTED HOME COUNTRY: ${data.detectedHomeCountry} (confidence: ${(data.homeCountryConfidence! * 100).toFixed(0)}%)` : ''}
 PARTICIPANT NAME: ${data.participantName}
 PROJECT DESTINATION COUNTRY: ${data.projectCountry} (this is where the Erasmus+ project takes place, where participants travel TO)
-PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}
+PROJECT DATES: ${data.projectStartDate} to ${data.projectEndDate}${data.practiceProject ? `\n${PRACTICE_AI_NOTE}` : ''}
 ${data.participantNote ? `PARTICIPANT'S OWN NOTE: "${data.participantNote}"` : ''}
 ${data.consolidationSummary ? `\n=== CONSOLIDATION AI NOTES ===\nThe AI that processed the uploaded documents left these notes for you:\n${data.consolidationSummary}\n` : ''}
 BANK DETAILS COMPLETE: ${data.bankDetailsComplete ? 'Yes' : 'No'}${data.noReimbursement ? `
