@@ -229,9 +229,12 @@ function WriteToMicky({ knownName, replyTo }: { knownName: string; replyTo: stri
   return (
     <section data-write-to-micky>
       <h3 className="text-sm font-semibold text-gray-900">Write to Micky</h3>
-      <p className="text-sm text-gray-600 mt-1">
-        Not in the answers above, or something not working? Micky built EasyReimburse and answers himself, by email{replyTo ? ` to ${replyTo}` : ''}.
-      </p>
+      <div className="flex items-start gap-3 mt-2">
+        <img src="/micky.webp" alt="Micky" width={48} height={48} className="w-12 h-12 rounded-full object-cover flex-shrink-0" />
+        <p className="text-sm text-gray-600">
+          Not in the answers above, or something not working? Micky built EasyReimburse and answers himself, by email{replyTo ? ` to ${replyTo}` : ''}.
+        </p>
+      </div>
       {sentTo ? (
         <div className="mt-3 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-900">
           <p className="font-medium">Your message is on its way.</p>
