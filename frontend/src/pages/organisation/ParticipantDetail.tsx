@@ -290,7 +290,7 @@ export default function OrgParticipantDetail() {
       if (!showEmailInstead(result)) toast.success('Magic link sent');
       queryClient.invalidateQueries({ queryKey: ['org-participant', id] });
     },
-    onError: () => toast.error('Failed to send magic link'),
+    onError: (err: Error) => toast.error(err.message || 'Failed to send magic link', { duration: 8000 }),
   });
 
   const approveMutation = useMutation({

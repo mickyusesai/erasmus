@@ -171,6 +171,19 @@ async function notifyEndedProjects() {
 notifyEndedProjects();
 setInterval(notifyEndedProjects, 60 * 60 * 1000);
 
+// Invitations an organiser planned for a day go out when their moment has come
+async function sendPlannedInvitations() {
+  try {
+    const { sendDueInvitations } = await import('./services/organisation/invitations.js');
+    await sendDueInvitations();
+  } catch (err) {
+    console.error('[Invitations] Error sending planned invitations:', err);
+  }
+}
+// Run on startup and then every 10 minutes
+sendPlannedInvitations();
+setInterval(sendPlannedInvitations, 10 * 60 * 1000);
+
 // Stripe cleanup: mark abandoned PENDING purchases as EXPIRED after 24h
 async function expireAbandonedPurchases() {
   try {

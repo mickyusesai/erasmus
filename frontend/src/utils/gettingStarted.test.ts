@@ -43,12 +43,12 @@ describe('the next step', () => {
     expect(nextStep(dashboard(noFree))).toMatchObject({ button: 'See the prices', to: '/org/billing' });
   });
 
-  it('then participants, amounts and invitations, each opening its place in the project', () => {
-    expect(nextStep(dashboard({ gettingStarted: progress('PARTICIPANTS') }))).toMatchObject({ number: 2, to: '/org/projects/p1?do=add' });
+  it('then participants, amounts and invitations, each opening its step of the set-up', () => {
+    expect(nextStep(dashboard({ gettingStarted: progress('PARTICIPANTS') }))).toMatchObject({ number: 2, to: '/org/projects/p1/setup?step=2' });
     const amounts = nextStep(dashboard({ gettingStarted: progress('AMOUNTS', { countriesWithoutAmount: ['Italy', 'Poland', 'Spain'] }) }));
-    expect(amounts).toMatchObject({ number: 3, to: '/org/projects/p1?do=amounts' });
+    expect(amounts).toMatchObject({ number: 3, to: '/org/projects/p1/setup?step=3' });
     expect(amounts!.text).toContain('Still open: Italy, Poland and Spain.');
-    expect(nextStep(dashboard({ gettingStarted: progress('INVITATIONS') }))).toMatchObject({ number: 4, to: '/org/projects/p1?do=invite' });
+    expect(nextStep(dashboard({ gettingStarted: progress('INVITATIONS') }))).toMatchObject({ number: 4, to: '/org/projects/p1/setup?step=4' });
   });
 
   it('there is none once the first invitations are out, or when the server does not say', () => {

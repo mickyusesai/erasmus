@@ -3,8 +3,9 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { organisationApi, ExchangeRateMode } from '../../services/api';
 import toast from 'react-hot-toast';
-import { ArrowLeft, CreditCard, Gift, HelpCircle } from 'lucide-react';
+import { ArrowLeft, ChevronDown, CreditCard, Gift, HelpCircle } from 'lucide-react';
 import { clsx } from 'clsx';
+import { SetupSteps } from '../../components/organisation/SetupSteps';
 
 /** What one project credit costs, as on the Billing page */
 const CREDIT_PRICES = [
@@ -26,6 +27,8 @@ export default function ProjectCreate() {
   const [venueAddress, setVenueAddress] = useState('');
   const [exchangeRateMode, setExchangeRateMode] = useState<ExchangeRateMode>('PURCHASE_DATE');
   const [exchangeRateManualDate, setExchangeRateManualDate] = useState('');
+  /** A description and the exchange rate rule have good defaults: folded away until asked for */
+  const [showMore, setShowMore] = useState(false);
 
   // Check if logged in
   useEffect(() => {
@@ -57,7 +60,8 @@ export default function ProjectCreate() {
     onSuccess: (data) => {
       toast.success(data.free ? `Project created. It's free for up to ${freeMax} participants.` : 'Project created! Used 1 credit.');
       queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
-      navigate(`/org/projects/${data.project.id}`);
+      // On to the participants, the amounts and the invitations
+      navigate(`/org/projects/${data.project.id}/setup`);
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to create project');
@@ -149,9 +153,12 @@ export default function ProjectCreate() {
         </Link>
 
         <div className="bg-white rounded-xl shadow-sm p-8">
+          <div className="mb-6 pb-6 border-b border-gray-100">
+            <SetupSteps current={1} done={[]} />
+          </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Create New Project</h1>
           <p className="text-gray-600 mb-6">
-            Set up a new project for your Erasmus+ mobility.
+            Its name, place and dates are enough to start. The participants, the amounts and the invitations come next.
           </p>
 
           {/* What this project costs: nothing (the first one), or a credit */}
@@ -210,21 +217,6 @@ export default function ProjectCreate() {
                 disabled={!canCreate}
                 className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 placeholder="e.g., Youth Exchange Prague 2024"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
-                Description
-              </label>
-              <textarea
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                disabled={!canCreate}
-                rows={3}
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-                placeholder="Brief description of the project"
               />
             </div>
 
@@ -299,7 +291,37 @@ export default function ProjectCreate() {
               </div>
             </div>
 
+            {/* A description and the exchange rate rule: good defaults, changeable here or later in Settings */}
+            <button
+              type="button"
+              onClick={() => setShowMore(!showMore)}
+              aria-expanded={showMore}
+              className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900"
+            >
+              <ChevronDown className={clsx('w-4 h-4 transition-transform', showMore && 'rotate-180')} />
+              More options
+              {!showMore && <span className="font-normal text-gray-400">· description, exchange rates (by purchase date)</span>}
+            </button>
+
+            {showMore && (
+            <div>
+              <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
+                Description
+              </label>
+              <textarea
+                id="description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                disabled={!canCreate}
+                rows={3}
+                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                placeholder="Brief description of the project"
+              />
+            </div>
+            )}
+
             {/* Exchange rate handling */}
+            {showMore && (
             <div className="pt-2 border-t border-gray-100">
               <div className="flex items-center gap-1 mb-1 mt-3">
                 <label className="block text-sm font-medium text-gray-700">
@@ -344,6 +366,7 @@ export default function ProjectCreate() {
                 </div>
               )}
             </div>
+            )}
 
             <div className="flex gap-4 pt-4">
               <Link

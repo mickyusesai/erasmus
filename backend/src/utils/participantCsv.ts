@@ -5,9 +5,13 @@
  *   saves the classic "CSV" format in Windows-1252, not UTF-8
  * - Excel "Unicode text" is UTF-16 and tab-separated
  * - organisers rename columns, often in their own language ("Nome", "Cognome", ...)
+ * - a list is pasted without a header row, straight from a sheet, a message or the
+ *   "To" line of an email ("Anna Nowak <anna@example.org>; ..."): the columns are then
+ *   recognised by what is in them
  * Every row that can't be imported gets a reason, so the organiser sees why.
  */
 import { parse } from 'csv-parse/sync';
+import { normalizeCountryName } from './countryName.js';
 
 export type CsvEncoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'windows-1252';
 export type ParticipantField = 'firstName' | 'lastName' | 'email' | 'country';
@@ -35,6 +39,13 @@ export interface ParticipantCsvResult {
   missingColumns: ParticipantField[];
   delimiter: string;
   encoding: CsvEncoding;
+  /** There was no header row: the columns were recognised by what is in them */
+  headerless: boolean;
+}
+
+export interface ParticipantCsvOptions {
+  /** The sending country for rows that don't say one (a list of one partner's participants) */
+  defaultCountry?: string;
 }
 
 /** The file can't be read as CSV at all (e.g. an unclosed quote) */
@@ -241,70 +252,213 @@ function splitFullName(full: string): { firstName: string; lastName: string } | 
   return { firstName: parts.slice(0, -1).join(' '), lastName: parts[parts.length - 1] };
 }
 
+// ── Lists without a header row ────────────────────────────────────────────────
+
+// Country names as organisers write them: English and the country's own language
+const KNOWN_COUNTRIES = new Set(
+  [
+    'albania', 'algeria', 'armenia', 'austria', 'osterreich', 'azerbaijan', 'belarus', 'belgium', 'belgie', 'belgique',
+    'bosnia and herzegovina', 'bosnia', 'bulgaria', 'croatia', 'hrvatska', 'cyprus', 'czech republic', 'czechia', 'cesko',
+    'denmark', 'danmark', 'egypt', 'estonia', 'eesti', 'finland', 'suomi', 'france', 'georgia', 'germany', 'deutschland',
+    'greece', 'ellada', 'hellas', 'hungary', 'magyarorszag', 'iceland', 'island', 'ireland', 'eire', 'israel', 'italy', 'italia',
+    'jordan', 'kazakhstan', 'kosovo', 'latvia', 'latvija', 'lebanon', 'libya', 'liechtenstein', 'lithuania', 'lietuva',
+    'luxembourg', 'malta', 'moldova', 'montenegro', 'crna gora', 'morocco', 'maroc', 'netherlands', 'the netherlands',
+    'nederland', 'holland', 'north macedonia', 'macedonia', 'norway', 'norge', 'palestine', 'poland', 'polska', 'portugal',
+    'romania', 'russia', 'serbia', 'srbija', 'slovakia', 'slovensko', 'slovenia', 'slovenija', 'spain', 'espana', 'sweden',
+    'sverige', 'switzerland', 'schweiz', 'suisse', 'svizzera', 'syria', 'tunisia', 'tunisie', 'turkey', 'turkiye', 'ukraine',
+    'ukraina', 'united kingdom', 'uk', 'great britain', 'england', 'scotland', 'wales', 'northern ireland',
+  ]
+);
+
+const foldText = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/** A country as organisers write it, also with a green-travel mark ("Poland GREEN") */
+export function isKnownCountry(value: string): boolean {
+  return KNOWN_COUNTRIES.has(foldText(normalizeCountryName(value)));
+}
+
+const EMAIL_INSIDE = /[^\s@,;<>"()]+@[^\s@,;<>"()]+\.[^\s@,;<>"()]+/;
+
+interface ListRow {
+  /** Line number as the organiser sees it */
+  line: number;
+  cells: string[];
+}
+
+/** The columns of a list copied from an email program: first name, last name, email */
+const ADDRESS_LIST_COLUMNS: ColumnMap = { firstName: 0, lastName: 1, email: 2 };
+
+/** "Anna Nowak <anna@example.org>; Zajac, Piotr <piotr@example.org>" as copied from an email program */
+function rowsFromAddressList(text: string): ListRow[] | null {
+  if (!/<\s*[^<>\s]+@[^<>\s]+\s*>/.test(text)) return null;
+  const rows: ListRow[] = [];
+  text.split(/\r\n|\n|\r/).forEach((lineText, index) => {
+    const entry = /([^<>]*?)<\s*([^<>\s]+@[^<>\s]+)\s*>/g;
+    let match: RegExpExecArray | null;
+    while ((match = entry.exec(lineText)) !== null) {
+      const name = clean(clean(match[1].replace(/^[\s,;]+/, '')));
+      // "Zajac, Piotr" is surname first
+      const comma = name.match(/^([^,]+),\s*(.+)$/);
+      const split = comma ? { firstName: clean(comma[2]), lastName: clean(comma[1]) } : splitFullName(name) ?? { firstName: name, lastName: '' };
+      rows.push({ line: index + 1, cells: [split.firstName, split.lastName, match[2]] });
+    }
+  });
+  return rows.length > 0 ? rows : null;
+}
+
+/** One person per line with only spaces in between: "Anna Nowak anna@example.org Poland" */
+function splitAroundEmail(cells: string[]): string[] {
+  const filled = cells.filter((c) => c !== '');
+  if (filled.length !== 1 || EMAIL_RE.test(filled[0])) return cells;
+  const match = filled[0].match(EMAIL_INSIDE);
+  if (!match || match.index === undefined) return cells;
+  let before = clean(filled[0].slice(0, match.index));
+  let after = clean(filled[0].slice(match.index + match[0].length));
+  // The country may stand before the email: "Anna Nowak Poland anna@example.org"
+  if (!after) {
+    const words = before.split(' ');
+    for (const take of [3, 2, 1]) {
+      if (words.length > take && isKnownCountry(words.slice(-take).join(' '))) {
+        after = words.slice(-take).join(' ');
+        before = words.slice(0, -take).join(' ');
+        break;
+      }
+    }
+  }
+  return [before, match[0], after];
+}
+
+/** Which column holds what, judged by the values: the email addresses, the countries, the names */
+export function mapColumnsByContent(rows: string[][]): ColumnMap | null {
+  const sample = rows.slice(0, 40);
+  const width = Math.max(0, ...sample.map((r) => r.length));
+  const count = (test: (value: string) => boolean) =>
+    Array.from({ length: width }, (_, i) => sample.filter((r) => r[i] && test(r[i])).length);
+  const filled = count(() => true);
+  const emails = count((v) => EMAIL_RE.test(v.replace(/^mailto:/i, '')));
+  const emailColumn = emails.indexOf(Math.max(0, ...emails));
+  if (emailColumn === -1 || emails[emailColumn] === 0) return null;
+
+  const others = Array.from({ length: width }, (_, i) => i).filter((i) => i !== emailColumn && filled[i] > 0);
+  const countries = count(isKnownCountry);
+  let countryColumn: number | undefined = others
+    .filter((i) => countries[i] > 0 && countries[i] >= filled[i] / 2)
+    .sort((a, b) => countries[b] - countries[a])[0];
+  let names = others.filter((i) => i !== countryColumn);
+  // A country we don't know the name of: with first name, last name and one more column, that one is it
+  if (countryColumn === undefined && names.length >= 3) {
+    countryColumn = names[names.length - 1];
+    names = names.slice(0, -1);
+  }
+
+  const map: ColumnMap = { email: emailColumn };
+  if (countryColumn !== undefined) map.country = countryColumn;
+  if (names.length >= 2) {
+    map.firstName = names[0];
+    map.lastName = names[1];
+  } else if (names.length === 1) {
+    map.fullName = names[0];
+  }
+  return map;
+}
+
 // ── Main entry ────────────────────────────────────────────────────────────────
 
-export function parseParticipantCsv(buffer: Buffer): ParticipantCsvResult {
+export function parseParticipantCsv(buffer: Buffer, options: ParticipantCsvOptions = {}): ParticipantCsvResult {
   const { text, encoding } = decodeCsvBuffer(buffer);
   const { delimiter, fromLine } = detectDelimiter(text);
+  const defaultCountry = options.defaultCountry ? normalizeCountryValue(options.defaultCountry) : '';
 
-  let records: { info: { lines: number }; record: string[] }[];
-  try {
-    records = parse(text, {
-      delimiter,
-      from_line: fromLine,
-      info: true,
-      bom: true,
-      skip_empty_lines: true,
-      relax_column_count: true,
-      relax_quotes: true,
-    }) as unknown as { info: { lines: number }; record: string[] }[];
-  } catch (err) {
-    const line = (err as { lines?: number }).lines;
-    throw new CsvReadError(
-      `The file couldn't be read${line ? ` near line ${line}` : ''}. Check that row for a stray quote character (").`,
-      line
-    );
-  }
-
-  const empty: ParticipantCsvResult = { participants: [], skipped: [], columns: [], missingColumns: ['firstName', 'lastName', 'email', 'country'], delimiter, encoding };
-  if (records.length === 0) return empty;
-
-  // The header is usually the first row, but hand-made sheets often have a title above it
-  const coverage = (m: ColumnMap) =>
-    (m.firstName !== undefined || m.fullName !== undefined ? 1 : 0) +
-    (m.lastName !== undefined || m.fullName !== undefined ? 1 : 0) +
-    (m.email !== undefined ? 1 : 0) +
-    (m.country !== undefined ? 1 : 0);
-  let headerIndex = 0;
-  let bestCoverage = -1;
-  for (let i = 0; i < Math.min(5, records.length); i++) {
-    const c = coverage(mapColumns(records[i].record.map(clean)));
-    if (c > bestCoverage) {
-      headerIndex = i;
-      bestCoverage = c;
+  let rows: ListRow[];
+  const addressList = rowsFromAddressList(text);
+  if (addressList) {
+    rows = addressList;
+  } else {
+    let records: { info: { lines: number }; record: string[] }[];
+    try {
+      records = parse(text, {
+        delimiter,
+        from_line: fromLine,
+        info: true,
+        bom: true,
+        skip_empty_lines: true,
+        relax_column_count: true,
+        relax_quotes: true,
+      }) as unknown as { info: { lines: number }; record: string[] }[];
+    } catch (err) {
+      const line = (err as { lines?: number }).lines;
+      throw new CsvReadError(
+        `The file couldn't be read${line ? ` near line ${line}` : ''}. Check that row for a stray quote character (").`,
+        line
+      );
     }
-    if (c === 4) break;
+    rows = records.map(({ info, record }) => ({ line: info.lines, cells: record.map(clean) }));
   }
 
-  const headers = records[headerIndex].record.map(clean);
-  const columns = headers.filter((h) => h !== '');
-  const map = mapColumns(headers);
+  const empty: ParticipantCsvResult = {
+    participants: [],
+    skipped: [],
+    columns: [],
+    missingColumns: ['firstName', 'lastName', 'email', 'country'],
+    delimiter,
+    encoding,
+    headerless: false,
+  };
+  if (rows.length === 0) return empty;
+
+  // A header row never holds an email address. When the first row does, the list has no header
+  // (pasted from a sheet or a message) and the columns are recognised by what is in them.
+  const holdsEmail = (cells: string[]) => cells.some((c) => EMAIL_RE.test(c.replace(/^mailto:/i, '')) || (EMAIL_INSIDE.test(c) && !c.includes(delimiter)));
+  const headerless = !!addressList || holdsEmail(rows[0].cells);
+
+  let map: ColumnMap;
+  let columns: string[] = [];
+  let dataRows: ListRow[];
+  if (addressList) {
+    dataRows = rows;
+    map = ADDRESS_LIST_COLUMNS;
+  } else if (headerless) {
+    dataRows = rows.map((r) => ({ line: r.line, cells: splitAroundEmail(r.cells) }));
+    map = mapColumnsByContent(dataRows.map((r) => r.cells)) ?? {};
+  } else {
+    // The header is usually the first row, but hand-made sheets often have a title above it
+    const coverage = (m: ColumnMap) =>
+      (m.firstName !== undefined || m.fullName !== undefined ? 1 : 0) +
+      (m.lastName !== undefined || m.fullName !== undefined ? 1 : 0) +
+      (m.email !== undefined ? 1 : 0) +
+      (m.country !== undefined ? 1 : 0);
+    let headerIndex = 0;
+    let bestCoverage = -1;
+    for (let i = 0; i < Math.min(5, rows.length); i++) {
+      const c = coverage(mapColumns(rows[i].cells));
+      if (c > bestCoverage) {
+        headerIndex = i;
+        bestCoverage = c;
+      }
+      if (c === 4) break;
+    }
+    const headers = rows[headerIndex].cells;
+    columns = headers.filter((h) => h !== '');
+    map = mapColumns(headers);
+    dataRows = rows.slice(headerIndex + 1);
+  }
+
   const missingColumns: ParticipantField[] = [];
   if (map.firstName === undefined && map.fullName === undefined) missingColumns.push('firstName');
   if (map.lastName === undefined && map.fullName === undefined) missingColumns.push('lastName');
   if (map.email === undefined) missingColumns.push('email');
-  if (map.country === undefined) missingColumns.push('country');
+  // Without a country column, one country for the whole list will do
+  if (map.country === undefined && !defaultCountry) missingColumns.push('country');
 
   const participants: CsvParticipant[] = [];
   const skipped: CsvSkippedRow[] = [];
   if (missingColumns.length > 0) {
-    return { participants, skipped, columns, missingColumns, delimiter, encoding };
+    return { participants, skipped, columns, missingColumns, delimiter, encoding, headerless };
   }
 
   const seen = new Map<string, number>();
-  for (const { info, record } of records.slice(headerIndex + 1)) {
-    const row = info.lines;
-    const get = (i: number | undefined) => (i === undefined ? '' : clean(record[i]));
+  for (const { line: row, cells } of dataRows) {
+    const get = (i: number | undefined) => (i === undefined ? '' : clean(cells[i]));
 
     let firstName = get(map.firstName);
     let lastName = get(map.lastName);
@@ -319,10 +473,11 @@ export function parseParticipantCsv(buffer: Buffer): ParticipantCsvResult {
       }
     }
     const email = get(map.email).replace(/^mailto:/i, '').toLowerCase();
-    const country = normalizeCountryValue(get(map.country));
 
     // Excel keeps formatted-but-empty rows as ";;;" — ignore rows without any participant data
-    if (!firstName && !lastName && !email && !country) continue;
+    if (!firstName && !lastName && !email && !get(map.country)) continue;
+
+    const country = normalizeCountryValue(get(map.country)) || defaultCountry;
 
     const missing = (
       [['firstName', firstName], ['lastName', lastName], ['email', email], ['country', country]] as [ParticipantField, string][]
@@ -346,7 +501,7 @@ export function parseParticipantCsv(buffer: Buffer): ParticipantCsvResult {
     participants.push({ row, firstName, lastName, email, country });
   }
 
-  return { participants, skipped, columns, missingColumns, delimiter, encoding };
+  return { participants, skipped, columns, missingColumns, delimiter, encoding, headerless };
 }
 
 // ── Country spelling ──────────────────────────────────────────────────────────

@@ -26,12 +26,15 @@ import {
   Gift,
   Sparkles,
   ExternalLink,
+  ClipboardList,
 } from 'lucide-react';
 import { CountryLimitRow } from '../../components/organisation/CountryLimitRow';
 import { SetAmountsModal, type CountryWithoutAmount } from '../../components/organisation/SetAmountsModal';
 import { PracticeBanner } from '../../components/organisation/PracticeBanner';
 import { PracticeGuidePanel, useMarkPracticeStep, usePractice } from '../../components/organisation/PracticeGuidePanel';
 import { showEmailInstead } from '../../components/organisation/EmailPreview';
+import { PlannedInvitations } from '../../components/organisation/PlannedInvitations';
+import { PasteParticipants } from '../../components/organisation/PasteParticipants';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -239,6 +242,11 @@ export default function OrgProjectDetail() {
           {/* The practice project: what it is, and how to start it again */}
           {isPractice && <PracticeBanner />}
 
+          {/* Invitations planned for a day: when they go out, and the ways to change that */}
+          {!isPractice && project.inviteAt && (
+            <PlannedInvitations projectId={id!} inviteAt={project.inviteAt} waiting={participants.filter((p) => !p.lastMagicLinkSentAt).length} />
+          )}
+
           {/* Free project: what it includes and how to get room for more */}
           {project.isTestProject && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
@@ -399,6 +407,7 @@ function OverviewTab({
 }) {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showPasteModal, setShowPasteModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isDownloadingAuditZip, setIsDownloadingAuditZip] = useState(false);
   // The practice project has its own made-up participants; one of them the organiser plays
@@ -542,9 +551,17 @@ function OverviewTab({
   const sendMagicLinksMutation = useMutation({
     mutationFn: (ids: string[]) => organisationApi.sendMagicLinksBulk(ids),
     onSuccess: (result) => {
+      const notSent = result.results.filter((r) => !r.success).length;
       // In the practice project nothing is sent: the email is shown instead
-      if (!showEmailInstead(result)) toast.success('Magic links sent');
+      if (showEmailInstead(result)) {
+        // shown
+      } else if (notSent > 0) {
+        toast.error(`${result.results.length - notSent} sent, ${notSent} could not be sent. They still say "Send Link" in the list.`, { duration: 8000 });
+      } else {
+        toast.success('Magic links sent');
+      }
       queryClient.invalidateQueries({ queryKey: ['org-participants'] });
+      queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
       setSelectedIds([]);
     },
     onError: () => {
@@ -861,6 +878,12 @@ function OverviewTab({
           </Button>
         )}
         {!isPractice && (
+          <Button variant="secondary" onClick={() => setShowPasteModal(true)}>
+            <ClipboardList className="w-4 h-4 mr-2" />
+            Paste a list
+          </Button>
+        )}
+        {!isPractice && (
           <Button variant="secondary" onClick={() => setShowImportModal(true)}>
             <Upload className="w-4 h-4 mr-2" />
             Import CSV
@@ -937,6 +960,11 @@ function OverviewTab({
           );
         })()}
       </div>
+
+      {/* Paste a list of participants */}
+      <Modal isOpen={showPasteModal} onClose={() => setShowPasteModal(false)} title="Paste a list of participants" size="lg">
+        <PasteParticipants projectId={projectId} onAdded={() => setShowPasteModal(false)} />
+      </Modal>
 
       {/* Add Participant Modal */}
       <Modal
@@ -1118,8 +1146,8 @@ function OverviewTab({
                                   if (!showEmailInstead(result)) toast.success(`Magic link sent to ${participant.firstName}`);
                                   queryClient.invalidateQueries({ queryKey: ['org-participants'] });
                                   queryClient.invalidateQueries({ queryKey: ['org-dashboard'] });
-                                }).catch(() => {
-                                  toast.error('Failed to send magic link');
+                                }).catch((err: unknown) => {
+                                  toast.error(err instanceof Error && err.message ? err.message : 'Failed to send magic link', { duration: 8000 });
                                 });
                               });
                             }}
@@ -1140,8 +1168,8 @@ function OverviewTab({
                                   organisationApi.sendMagicLink(participant.id).then((result) => {
                                     if (!showEmailInstead(result)) toast.success(`Magic link resent to ${participant.firstName}`);
                                     queryClient.invalidateQueries({ queryKey: ['org-participants'] });
-                                  }).catch(() => {
-                                    toast.error('Failed to resend magic link');
+                                  }).catch((err: unknown) => {
+                                    toast.error(err instanceof Error && err.message ? err.message : 'Failed to resend magic link', { duration: 8000 });
                                   });
                                 });
                               }}
@@ -1186,9 +1214,13 @@ function OverviewTab({
           <CardContent className="py-12 text-center">
             <Users className="w-12 h-12 text-gray-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">No participants yet</h3>
-            <p className="text-gray-500 mb-4">Add participants or import from a CSV file</p>
-            <div className="flex justify-center gap-3">
-              <Button onClick={() => setShowAddModal(true)}>
+            <p className="text-gray-500 mb-4">Paste your list, add them one by one, or import a CSV file</p>
+            <div className="flex justify-center gap-3 flex-wrap">
+              <Button onClick={() => setShowPasteModal(true)}>
+                <ClipboardList className="w-4 h-4 mr-2" />
+                Paste a list
+              </Button>
+              <Button variant="secondary" onClick={() => setShowAddModal(true)}>
                 <UserPlus className="w-4 h-4 mr-2" />
                 Add Participant
               </Button>
@@ -1574,7 +1606,8 @@ function SettingsTab({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="space-y-8">
+    <section className="grid grid-cols-1 lg:grid-cols-2 gap-6" aria-label="The basics">
       {/* Project Details Edit */}
       <Card className="lg:col-span-2">
         <CardHeader>
@@ -1643,7 +1676,7 @@ function SettingsTab({
 
       {/* Country Limits - only show if there are participants */}
       {hasParticipants && countryLimits.length > 0 && (
-        <Card>
+        <Card className="lg:col-span-2">
           <CardHeader>
             <div>
               <h3 className="font-semibold text-gray-900">Country Reimbursement Limits</h3>
@@ -1679,17 +1712,33 @@ function SettingsTab({
         </Card>
       )}
 
-      {/* Feature Settings */}
-      <FeatureSettingsCard project={project} projectId={projectId} />
+    </section>
+
+    {/* Rules and options: each has a sensible default and says what is chosen now; opened to change it */}
+    <section className="space-y-3" aria-label="Rules and options">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900">Rules and options</h2>
+        <p className="text-sm text-gray-500">They start with a sensible choice. Each line says what is chosen now; open it to change it.</p>
+      </div>
 
       {/* Communication with participants (emails + participant page) */}
-      <ParticipantCommunicationCard project={project} projectId={projectId} />
+      <FoldedSetting title="What participants are told" summary={communicationSummary(project)}>
+        <ParticipantCommunicationCard project={project} projectId={projectId} />
+      </FoldedSetting>
+
+      {/* Feature Settings */}
+      <FoldedSetting title="Rules for trips and declarations" summary={rulesSummary(project)}>
+        <FeatureSettingsCard project={project} projectId={projectId} />
+      </FoldedSetting>
 
       {/* Exchange Rate Settings */}
-      <ExchangeRateSettingsCard project={project} projectId={projectId} />
+      <FoldedSetting title="Exchange rates" summary={exchangeRateSummary(project)}>
+        <ExchangeRateSettingsCard project={project} projectId={projectId} />
+      </FoldedSetting>
 
       {/* Upgrade the free project */}
       {project.isTestProject && (
+        <FoldedSetting title="Room for more participants" summary={`Free project: up to ${project.maxParticipants || 10} participants`}>
         <Card className="lg:col-span-2 border-emerald-200">
           <CardHeader>
             <h3 className="font-semibold text-emerald-800">Upgrade to Full Project</h3>
@@ -1716,9 +1765,11 @@ function SettingsTab({
             </Button>
           </CardContent>
         </Card>
+        </FoldedSetting>
       )}
 
       {/* Danger Zone */}
+      <FoldedSetting title="Delete this project" summary="Removes the project with its participants and their files, for good" danger>
       <Card>
         <CardHeader>
           <h3 className="font-semibold text-red-600">Danger Zone</h3>
@@ -1734,8 +1785,71 @@ function SettingsTab({
           </Button>
         </CardContent>
       </Card>
+      </FoldedSetting>
+    </section>
     </div>
   );
+}
+
+/**
+ * A group of settings that is folded away: one line with what is chosen now. Opened, it shows
+ * the settings themselves.
+ */
+function FoldedSetting({ title, summary, danger = false, children }: { title: string; summary: string; danger?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div data-folded-setting={title}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className={clsx(
+          'w-full flex items-center justify-between gap-4 px-5 py-4 bg-white shadow-card text-left transition-colors hover:bg-gray-50',
+          open ? 'rounded-t-2xl border-b border-gray-100' : 'rounded-2xl'
+        )}
+      >
+        <span className="min-w-0">
+          <span className={clsx('block font-semibold', danger ? 'text-red-600' : 'text-gray-900')}>{title}</span>
+          {!open && <span className="block text-sm text-gray-500 mt-0.5">{summary}</span>}
+        </span>
+        <span className="flex items-center gap-1 text-sm font-medium text-primary-600 flex-shrink-0">
+          {open ? 'Close' : 'Change'}
+          <ChevronDown className={clsx('w-4 h-4 transition-transform', open && 'rotate-180')} />
+        </span>
+      </button>
+      {open && <div className="[&>*]:rounded-t-none">{children}</div>}
+    </div>
+  );
+}
+
+/** What participants are told beyond the standard emails, in one line */
+function communicationSummary(project: any): string {
+  const parts: string[] = [];
+  if (project.participantInstructions?.trim()) parts.push('Your own instructions');
+  if (project.documentDeadline) parts.push(`deadline ${formatDate(project.documentDeadline)}`);
+  if (project.contactEmail?.trim() || project.contactPhone?.trim()) parts.push(`questions to ${project.contactEmail?.trim() || project.contactPhone?.trim()}`);
+  return parts.length ? parts.join(' · ') : 'The standard emails, without instructions, deadline or contact of your own';
+}
+
+/** The rules for trips and declarations as they are set now, in one line */
+function rulesSummary(project: any): string {
+  const ended = !!project.endDate && new Date() >= new Date(project.endDate);
+  return [
+    ended || project.aiAnalysisUnlocked ? 'The AI builds trips now' : 'The AI builds trips after the project ends',
+    project.requireGreenTravelDeclaration ? 'green travellers sign a declaration' : 'no green travel declaration',
+    project.requireAirlineDeclaration ? 'a missing boarding pass needs the airline\'s declaration' : 'a declaration on honour is accepted for a missing boarding pass',
+    `car travel €${Number(project.carRatePerKm ?? 0.22).toFixed(2)} per km`,
+    project.disseminationEnabled ? 'dissemination on' : 'dissemination off',
+  ].join(' · ');
+}
+
+/** How other currencies become euro, in one line */
+function exchangeRateSummary(project: any): string {
+  if (project.exchangeRateMode === 'PROJECT_END_DATE') return 'The official rate of the project\'s end date, one per currency';
+  if (project.exchangeRateMode === 'MANUAL_DATE') {
+    return `The official rate of ${project.exchangeRateManualDate ? formatDate(project.exchangeRateManualDate) : 'a date you choose'}, one per currency`;
+  }
+  return 'The official rate of the month each ticket was bought';
 }
 
 /**

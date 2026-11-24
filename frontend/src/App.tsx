@@ -15,6 +15,7 @@ import OrgRegister from './pages/organisation/Register';
 import OrgDashboard from './pages/organisation/Dashboard';
 import OrgProjectCreate from './pages/organisation/ProjectCreate';
 import OrgProjectDetail from './pages/organisation/ProjectDetail';
+import OrgProjectSetup from './pages/organisation/ProjectSetup';
 import OrgBilling from './pages/organisation/Billing';
 import OrgSettings from './pages/organisation/Settings';
 import OrgAffiliate from './pages/organisation/AffiliatePage';
@@ -79,6 +80,7 @@ function App() {
       <Route path="/org/dashboard" element={<OrgDashboard />} />
       <Route path="/org/projects/new" element={<OrgProjectCreate />} />
       <Route path="/org/projects/:id" element={<OrgProjectDetail />} />
+      <Route path="/org/projects/:id/setup" element={<OrgProjectSetup />} />
       <Route path="/org/participants/:id" element={<OrgParticipantDetail />} />
       <Route path="/org/support-session" element={<OrgSupportSession />} />
       <Route path="/org/test-account" element={<OrgTestAccountSession />} />

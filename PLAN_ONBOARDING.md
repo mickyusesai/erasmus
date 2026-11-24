@@ -1,8 +1,8 @@
 # EasyReimburse Onboarding Plan
 
-Status: **being built** (24 November 2026). The seven decisions are made. Part 1 (no more dead ends) and
-part 2 (the practice project) are built; parts 3 and 4 follow. The onboarding test account (see the end)
-is built.
+Status: **being built** (24 November 2026). The seven decisions are made. Part 1 (no more dead ends),
+part 2 (the practice project) and part 3 (the real project in four steps) are built; part 4 follows. The
+onboarding test account (see the end) is built.
 
 Goal: a new organisation sees a finished reimbursement within two minutes, tries both sides with
 sample tickets, and sets up its own project in four short steps.
@@ -162,9 +162,32 @@ Each part is usable on its own and is checked in the onboarding test account bef
   "Set up your first project" and the film. **Dashboard**: a new organisation sees a card with the
   practice step it is at; afterwards, and for organisations that are under way, it is one quiet line.
 
-### Part 3, the real project in four steps
+### Part 3, the real project in four steps (built)
 
-The setup, pasting a participant list, settings split into basics and folded rules.
+- **Four steps, shown as one row** (`SetupSteps.tsx`): project, participants, amounts, invitations.
+  Creating the project (`ProjectCreate.tsx`) is step 1 and asks for name, place and dates only; the
+  description and the exchange rate rule sit under "More options". After creating, the set-up goes on at
+  `/org/projects/:id/setup` (`ProjectSetup.tsx`), which opens at the first step that is still to do.
+  Every step can be left for later; the dashboard's next step opens the set-up at that step
+  (`?step=2|3|4`).
+- **Participants: paste a list** (`PasteParticipants.tsx`). Rows copied from a sheet, lines from a
+  message, or the "To" line of an email, with or without a header row: the columns are recognised by
+  what is in them (`mapColumnsByContent` in `backend/src/utils/participantCsv.ts`), and what was
+  understood is shown before anything is added. A list without a country asks for one for all of them.
+  The import routes take the text (`{ text, defaultCountry }`) next to an uploaded file. "Paste a list"
+  is on the project page too, and a single participant can still be added by hand.
+- **Amounts**: one maximum per sending country of the participants, saved together.
+- **Invitations: now, on a day, or later** (`POST /api/organisation/projects/:id/invitations`). "On a
+  day" stores `Project.inviteAt` (07:00 UTC of that day); a job that runs every 10 minutes
+  (`sendDueInvitations` in `services/organisation/invitations.ts`) then sends the link to everybody who
+  has none, once: the plan is cleared before the first email leaves. The project page says when they go
+  out, with "Send them now", "Another day" and "Cancel the plan" (`PlannedInvitations.tsx`). A plan counts
+  as the last set-up step done. The invitation can be read before anything is sent
+  (`GET …/invitation-preview`).
+- **An invitation that could not be sent is said so** and the participant is not marked as invited
+  (`sendInvitation`; before, a refused email still counted as sent).
+- **Project settings**: the basics (details, maximum amounts) are open; the rest is folded away under
+  "Rules and options", each line saying what is chosen now (`FoldedSetting` in `ProjectDetail.tsx`).
 
 ### Part 4, staying in touch
 

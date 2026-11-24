@@ -148,3 +148,87 @@ describe('participant CSV: country spelling', () => {
     expect(known).toEqual(['Italy', 'Türkiye', 'Spain']);
   });
 });
+
+describe('participant list: pasted without a header row', () => {
+  const pasted = (text: string, options?: { defaultCountry?: string }) => parseParticipantCsv(Buffer.from(text, 'utf-8'), options);
+  const people = (r: ReturnType<typeof parseParticipantCsv>) => r.participants.map((p) => `${p.firstName}|${p.lastName}|${p.email}|${p.country}`);
+
+  it('reads rows copied from a sheet (tabs), recognising the columns by what is in them', () => {
+    const r = pasted('Anna\tNowak\tanna@example.org\tPoland\nMarco\tBianchi\tmarco@example.org\tItaly\n');
+    expect(r.headerless).toBe(true);
+    expect(r.missingColumns).toEqual([]);
+    expect(people(r)).toEqual(['Anna|Nowak|anna@example.org|Poland', 'Marco|Bianchi|marco@example.org|Italy']);
+  });
+
+  it('does not care in which order the columns come', () => {
+    const r = pasted('Italy;marco@example.org;Marco;Bianchi\nSpain;lucia@example.org;Lucía;Fernández\n');
+    expect(people(r)).toEqual(['Marco|Bianchi|marco@example.org|Italy', 'Lucía|Fernández|lucia@example.org|Spain']);
+  });
+
+  it('reads comma-separated lines with a full name', () => {
+    const r = pasted('Anna Nowak, anna@example.org, Poland\nJean-Luc de Vries, jl@example.org, The Netherlands\n');
+    expect(people(r)).toEqual(['Anna|Nowak|anna@example.org|Poland', 'Jean-Luc de|Vries|jl@example.org|The Netherlands']);
+  });
+
+  it('reads one person per line with only spaces in between', () => {
+    const r = pasted('Anna Nowak anna@example.org Poland\nTomáš Novák tomas@example.org Czech Republic\nSara Lind Sweden sara@example.org\n');
+    expect(people(r)).toEqual([
+      'Anna|Nowak|anna@example.org|Poland',
+      'Tomáš|Novák|tomas@example.org|Czech Republic',
+      'Sara|Lind|sara@example.org|Sweden',
+    ]);
+  });
+
+  it('reads the "To" line of an email, and takes the one country that was given for all', () => {
+    const r = pasted('Anna Nowak <anna@example.org>; Zając, Piotr <piotr@example.org>, "Marta Ruiz" <marta@example.org>', { defaultCountry: 'poland' });
+    expect(r.headerless).toBe(true);
+    expect(people(r)).toEqual(['Anna|Nowak|anna@example.org|Poland', 'Piotr|Zając|piotr@example.org|Poland', 'Marta|Ruiz|marta@example.org|Poland']);
+  });
+
+  it('asks for the country when the list has none', () => {
+    const r = pasted('Anna Nowak <anna@example.org>; Piotr Zając <piotr@example.org>');
+    expect(r.missingColumns).toEqual(['country']);
+    expect(r.participants).toEqual([]);
+  });
+
+  it('uses the given country only for rows that say none', () => {
+    const r = pasted('Anna\tNowak\tanna@example.org\tPoland\nMarco\tBianchi\tmarco@example.org\t\n', { defaultCountry: 'Italy' });
+    expect(people(r)).toEqual(['Anna|Nowak|anna@example.org|Poland', 'Marco|Bianchi|marco@example.org|Italy']);
+  });
+
+  it('takes the last of three other columns as the country when it is a name it does not know', () => {
+    const r = pasted('Anna\tNowak\tanna@example.org\tWakanda\nMarco\tBianchi\tmarco@example.org\tWakanda\n');
+    expect(people(r)).toEqual(['Anna|Nowak|anna@example.org|Wakanda', 'Marco|Bianchi|marco@example.org|Wakanda']);
+  });
+
+  it('does not take a surname for a country', () => {
+    const r = pasted('Anna\tNowak\tanna@example.org\nMarco\tBianchi\tmarco@example.org\n');
+    expect(r.missingColumns).toEqual(['country']);
+    const withCountry = pasted('Anna\tNowak\tanna@example.org\nMarco\tBianchi\tmarco@example.org\n', { defaultCountry: 'Italy' });
+    expect(people(withCountry)).toEqual(['Anna|Nowak|anna@example.org|Italy', 'Marco|Bianchi|marco@example.org|Italy']);
+  });
+
+  it('knows a green-travel row as a country too', () => {
+    const r = pasted('Poland GREEN\tAnna\tNowak\tanna@example.org\nPoland GREEN\tPiotr\tZając\tpiotr@example.org\n');
+    expect(people(r)).toEqual(['Anna|Nowak|anna@example.org|Poland GREEN', 'Piotr|Zając|piotr@example.org|Poland GREEN']);
+  });
+
+  it('still says why a row is left out', () => {
+    const r = pasted('Anna\tNowak\tanna@example.org\tPoland\nMarco\tBianchi\tnot-an-email\tItaly\nAnna\tNowak\tanna@example.org\tPoland\n');
+    expect(r.participants).toHaveLength(1);
+    expect(r.skipped.map((s) => `${s.row}: ${s.reason}`)).toEqual(['2: "not-an-email" is not a valid email address', '3: anna@example.org is already on row 1']);
+  });
+
+  it('a file with a header row is read as before', () => {
+    const r = pasted('First name,Last name,Email,Country\nAnna,Nowak,anna@example.org,Poland\n');
+    expect(r.headerless).toBe(false);
+    expect(r.columns).toEqual(['First name', 'Last name', 'Email', 'Country']);
+    expect(people(r)).toEqual(['Anna|Nowak|anna@example.org|Poland']);
+  });
+
+  it('a header that misses a column is still reported, not read as a person', () => {
+    const r = pasted('First name,Last name,Country\nAnna,Nowak,Poland\n');
+    expect(r.headerless).toBe(false);
+    expect(r.missingColumns).toEqual(['email']);
+  });
+});

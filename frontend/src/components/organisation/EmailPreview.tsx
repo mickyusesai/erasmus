@@ -1,14 +1,22 @@
 import { useEffect, useState } from 'react';
-import { MailX, X } from 'lucide-react';
+import { Mail, MailX, X } from 'lucide-react';
 import type { EmailPreview, EmailShown } from '../../services/api';
 import { Button } from '../ui/Button';
 
 interface Shown {
   email: EmailPreview;
   count: number;
+  /** Said above the email; without it: the practice project's "nothing was sent" */
+  title?: string;
+  note?: string;
 }
 
 let open: ((shown: Shown) => void) | null = null;
+
+/** Shows an email as it will go out, before anything is sent (e.g. the invitation of a project) */
+export function showEmailBeforeSending(email: EmailPreview, title: string, note: string): void {
+  open?.({ email, count: 1, title, note });
+}
 
 /**
  * In the practice project no email is sent: the action answers with the email as it would
@@ -48,7 +56,7 @@ export function EmailPreviewHost() {
   }, [shown]);
 
   if (!shown) return null;
-  const { email, count } = shown;
+  const { email, count, title, note } = shown;
   const close = () => setShown(null);
 
   return (
@@ -62,16 +70,16 @@ export function EmailPreviewHost() {
       >
         <div className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-gray-100">
           <div className="flex items-start gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
-              <MailX className="w-5 h-5 text-amber-700" />
+            <div className={title ? 'w-10 h-10 rounded-xl bg-primary-100 flex items-center justify-center flex-shrink-0' : 'w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0'}>
+              {title ? <Mail className="w-5 h-5 text-primary-700" /> : <MailX className="w-5 h-5 text-amber-700" />}
             </div>
             <div className="min-w-0">
               <h2 id="email-preview-title" className="text-lg font-semibold text-gray-900">
-                This is the email they would get
+                {title ?? 'This is the email they would get'}
               </h2>
               <p className="text-sm text-gray-600 mt-0.5">
-                Nothing was sent: the participants of the practice project are made up.
-                {count > 1 && ` The other ${count - 1} would get the same email, with their own name and link.`}
+                {note ?? 'Nothing was sent: the participants of the practice project are made up.'}
+                {!note && count > 1 && ` The other ${count - 1} would get the same email, with their own name and link.`}
               </p>
             </div>
           </div>

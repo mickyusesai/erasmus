@@ -936,6 +936,42 @@ export const organisationApi = {
     return handleResponse<{ participant: OrgParticipant }>(res);
   },
 
+  /** A list pasted into the page (with or without a header row): what would be added */
+  previewPastedParticipants: async (projectId: string, text: string, defaultCountry?: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/participants/preview-import`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ text, defaultCountry: defaultCountry || undefined }),
+    });
+    return handleResponse<ImportPreview>(res);
+  },
+
+  /** Adds the participants of a pasted list */
+  importPastedParticipants: async (projectId: string, text: string, defaultCountry?: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/participants/import`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify({ text, defaultCountry: defaultCountry || undefined }),
+    });
+    return handleResponse<ImportResult>(res);
+  },
+
+  /** The invitation as the participants of this project will get it (nothing is sent) */
+  getInvitationPreview: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/invitation-preview`, { headers: getOrgAuthHeaders() });
+    return handleResponse<{ emailPreview: EmailPreview; example: boolean }>(res);
+  },
+
+  /** The invitations of a project: send them now, plan them for a day, or leave them for later */
+  setInvitations: async (projectId: string, choice: { when: 'now' } | { when: 'date'; date: string } | { when: 'later' }) => {
+    const res = await fetch(`${API_BASE}/organisation/projects/${projectId}/invitations`, {
+      method: 'POST',
+      headers: getOrgAuthHeaders(),
+      body: JSON.stringify(choice),
+    });
+    return handleResponse<{ inviteAt: string | null; sent: number; failed: { id: string; name: string; reason: string }[] }>(res);
+  },
+
   previewImport: async (projectId: string, file: File) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -1439,6 +1475,8 @@ export interface OrgProject {
   /** The practice project: made-up participants, no emails, counted nowhere */
   isPracticeProject?: boolean;
   maxParticipants?: number;
+  /** Invitations planned for a day: they go out by themselves at this moment (null = nothing planned) */
+  inviteAt?: string | null;
   createdAt: string;
   updatedAt?: string;
 }
@@ -2189,6 +2227,8 @@ export interface ImportPreview {
   }[];
   /** Required columns that weren't found, e.g. ["email"] */
   missingColumns?: string[];
+  /** The list had no header row: the columns were recognised by what is in them */
+  headerless?: boolean;
   skipped?: { row: number; reason: string }[];
   skippedCount?: number;
   alreadyInProject?: number;

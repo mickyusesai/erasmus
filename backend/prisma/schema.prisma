@@ -179,6 +179,10 @@ model Project {
   // When the automatic "project ended — build your trips" email batch was sent (null = not yet)
   endEmailSentAt           DateTime?
 
+  // Invitations planned for a day: at this moment every participant who has no link yet gets
+  // theirs, and the plan is cleared (null = nothing planned). services/organisation/invitations.ts
+  inviteAt                 DateTime?
+
   // Communication with participants (shown in invitation/reminder/project-ended emails and on their page)
   participantInstructions  String?                 // Free-text instructions from the organisation
   documentDeadline         DateTime?               // By when participants should have uploaded their documents

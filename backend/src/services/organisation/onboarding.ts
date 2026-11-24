@@ -106,12 +106,14 @@ export interface ProjectProgress {
   isTestProject: boolean;
   createdAt: Date;
   participants: { country: string; invited: boolean }[];
+  /** The invitations are planned for a day: they go out by themselves */
+  invitationsPlanned?: boolean;
   /** Maximum amount per sending country (0 = not set yet) */
   limits: { country: string; max: number }[];
 }
 
 export interface GettingStarted {
-  /** True once any participant was invited: the organisation knows the way from here */
+  /** True once any participant was invited, or the invitations are planned: the organisation knows the way from here */
   complete: boolean;
   steps: { id: GettingStartedStep; done: boolean }[];
   next: GettingStartedStep | null;
@@ -126,7 +128,7 @@ export interface GettingStarted {
 export function gettingStarted(projects: ProjectProgress[]): GettingStarted {
   const done = (ids: GettingStartedStep[]) => GETTING_STARTED_STEPS.map((id) => ({ id, done: ids.includes(id) }));
 
-  if (projects.some((p) => p.participants.some((x) => x.invited))) {
+  if (projects.some((p) => p.participants.some((x) => x.invited) || (p.invitationsPlanned && p.participants.length > 0))) {
     return { complete: true, steps: done([...GETTING_STARTED_STEPS]), next: null, projectId: null, projectIsPlaceholder: false, countriesWithoutAmount: [] };
   }
 

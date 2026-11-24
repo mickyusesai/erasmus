@@ -75,9 +75,9 @@ export function nextStep(dashboard: Pick<OrgDashboardData, 'gettingStarted' | 'f
       return {
         step: 'PARTICIPANTS', ...position,
         title: 'Add your participants',
-        text: 'Type them in or upload a list. Nobody gets an email yet.',
+        text: 'Paste your list, or type them in. Nobody gets an email yet.',
         button: 'Add participants',
-        to: `${project}?do=add`,
+        to: `${project}/setup?step=2`,
       };
     case 'AMOUNTS':
       return {
@@ -85,15 +85,15 @@ export function nextStep(dashboard: Pick<OrgDashboardData, 'gettingStarted' | 'f
         title: 'Set the maximum amounts',
         text: `One maximum per sending country, from the travel budget in your grant agreement. Still open: ${list(progress.countriesWithoutAmount)}.`,
         button: 'Set the amounts',
-        to: `${project}?do=amounts`,
+        to: `${project}/setup?step=3`,
       };
     case 'INVITATIONS':
       return {
         step: 'INVITATIONS', ...position,
         title: 'Send the invitations',
-        text: 'Each participant gets an email with a personal link to upload their tickets.',
-        button: 'Go to my participants',
-        to: `${project}?do=invite`,
+        text: 'Each participant gets an email with a personal link to upload their tickets. Send them now, or plan them for a day.',
+        button: 'Choose when they go out',
+        to: `${project}/setup?step=4`,
       };
   }
 }

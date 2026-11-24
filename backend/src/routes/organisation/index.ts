@@ -10,7 +10,7 @@ import { bankAccountProblem, maskAccountNumber, normaliseAccountNumber } from '.
 import path from 'path';
 import { ADDABLE_TYPES, type StoredAttachment } from '../../services/email/inbound.js';
 import { getEmailService } from '../../services/email/index.js';
-import { mailerFor } from '../../services/email/previewEmail.js';
+import { mailerFor, PreviewEmailService } from '../../services/email/previewEmail.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { getStorageService } from '../../services/storage/index.js';
 import { generateAuditPdf } from '../../services/pdf/index.js';
@@ -38,6 +38,7 @@ import {
 import { deletePracticeProject, ensurePracticeProject, findPracticeProject, restartPracticeProject } from '../../services/organisation/practice/practiceProject.js';
 import { practiceGuide, REMEMBERED_PRACTICE_STEPS } from '../../services/organisation/practice/guide.js';
 import { practiceRoleOf } from '../../services/organisation/practice/content.js';
+import { InvitationNotSent, invitationMoment, participantsWithoutLink, sendInvitation, whyNotPlannable } from '../../services/organisation/invitations.js';
 import { convertToEurForParticipant } from '../../services/exchangeRate/index.js';
 import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import archiver from 'archiver';
@@ -122,6 +123,7 @@ router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
       isTestProject: p.isTestProject,
       createdAt: p.createdAt,
       participants: p.participants.map((x) => ({ country: x.country, invited: x.lastMagicLinkSentAt !== null })),
+      invitationsPlanned: p.inviteAt !== null,
       limits: p.countryLimits.map((l) => ({ country: l.country, max: l.maxReimbursementAmount })),
     }))
   );
@@ -528,6 +530,8 @@ router.get('/projects/:id', ensureOwnProject, asyncHandler(async (req: Request, 
       isTestProject: project.isTestProject,
       isPracticeProject: project.isPracticeProject,
       maxParticipants: project.maxParticipants,
+      // Invitations planned for a day (null = nothing planned)
+      inviteAt: project.inviteAt,
       countryLimits: project.countryLimits,
       participants: project.participants,
       participantCount: project._count.participants,
@@ -1219,14 +1223,14 @@ router.post('/projects/:id/participants', ensureOwnProject, asyncHandler(async (
  * Parses an uploaded participant CSV and lines it up with the project: countries take the
  * project's existing spelling, and people already in the project are set apart.
  */
-async function prepareParticipantImport(projectId: string, buffer: Buffer): Promise<{
+async function prepareParticipantImport(projectId: string, buffer: Buffer, defaultCountry?: string): Promise<{
   parsed: ParticipantCsvResult;
   newRows: CsvParticipant[];
   alreadyInProject: CsvParticipant[];
 }> {
   let parsed: ParticipantCsvResult;
   try {
-    parsed = parseParticipantCsv(buffer);
+    parsed = parseParticipantCsv(buffer, { defaultCountry });
   } catch (err) {
     if (err instanceof CsvReadError) throw new ValidationError(err.message);
     throw new ValidationError("The file couldn't be read as a CSV file.");
@@ -1245,10 +1249,18 @@ async function prepareParticipantImport(projectId: string, buffer: Buffer): Prom
   };
 }
 
+/** The list to import: an uploaded file, or text pasted into the page; with the one country for rows that say none */
+function participantListFrom(req: Request): { buffer: Buffer; defaultCountry?: string } {
+  const pasted = typeof req.body?.text === 'string' ? req.body.text : null;
+  const buffer = req.file?.buffer ?? (pasted !== null ? Buffer.from(pasted, 'utf-8') : null);
+  if (!buffer) throw new ValidationError('No file uploaded');
+  if (pasted !== null && pasted.trim() === '') throw new ValidationError('The list is empty. Paste one participant per line.');
+  const country = typeof req.body?.defaultCountry === 'string' ? req.body.defaultCountry.trim() : '';
+  return { buffer, defaultCountry: country || undefined };
+}
+
 router.post('/projects/:id/participants/preview-import', ensureOwnProject, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
-  if (!req.file) {
-    throw new ValidationError('No file uploaded');
-  }
+  const list = participantListFrom(req);
   const projectId = req.params.id;
   const project = await prisma.project.findUnique({
     where: { id: projectId },
@@ -1257,11 +1269,13 @@ router.post('/projects/:id/participants/preview-import', ensureOwnProject, uploa
   if (!project) throw new NotFoundError('Project not found');
   if (project.isPracticeProject) throw new ForbiddenError(PRACTICE_NO_OWN_PARTICIPANTS);
 
-  const { parsed, newRows, alreadyInProject } = await prepareParticipantImport(projectId, req.file.buffer);
+  const { parsed, newRows, alreadyInProject } = await prepareParticipantImport(projectId, list.buffer, list.defaultCountry);
 
   res.json({
     totalRows: newRows.length,
     columns: parsed.columns,
+    // No header row: the columns were recognised by what is in them
+    headerless: parsed.headerless,
     preview: newRows.slice(0, 10),
     missingColumns: parsed.missingColumns.map((f) => FIELD_LABELS[f]),
     skipped: parsed.skipped.slice(0, 20),
@@ -1279,10 +1293,7 @@ router.post('/projects/:id/participants/preview-import', ensureOwnProject, uploa
  */
 router.post('/projects/:id/participants/import', ensureOwnProject, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
   const projectId = req.params.id;
-
-  if (!req.file) {
-    throw new ValidationError('No file uploaded');
-  }
+  const list = participantListFrom(req);
 
   // Get project with participant count
   const project = await prisma.project.findUnique({
@@ -1295,7 +1306,7 @@ router.post('/projects/:id/participants/import', ensureOwnProject, upload.single
   }
   if (project.isPracticeProject) throw new ForbiddenError(PRACTICE_NO_OWN_PARTICIPANTS);
 
-  const { parsed, newRows: validRecords, alreadyInProject } = await prepareParticipantImport(projectId, req.file.buffer);
+  const { parsed, newRows: validRecords, alreadyInProject } = await prepareParticipantImport(projectId, list.buffer, list.defaultCountry);
   if (parsed.missingColumns.length > 0) {
     throw new ValidationError(`No column found for: ${parsed.missingColumns.map((f) => FIELD_LABELS[f]).join(', ')}.`);
   }
@@ -2290,6 +2301,86 @@ router.post('/participants/bulk-delete', asyncHandler(async (req: Request, res: 
 }));
 
 /**
+ * GET /api/organisation/projects/:id/invitation-preview
+ * The invitation as the participants of this project will get it (nothing is sent): written
+ * for the first participant who has no link yet, or for a made-up name when there is nobody.
+ */
+router.get('/projects/:id/invitation-preview', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+  if (!project) throw new NotFoundError('Project not found');
+  const participant = await prisma.participant.findFirst({
+    where: { projectId: project.id },
+    orderBy: [{ lastMagicLinkSentAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
+  });
+
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const writer = new PreviewEmailService();
+  await writer.sendMagicLink(
+    participant?.email ?? 'participant@example.org',
+    participant?.firstName ?? 'Anna',
+    project.name,
+    // The real link only for a real participant; the example has nowhere to lead
+    participant ? `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}` : `${frontendUrl}/reimbursement`,
+    await projectEmailContext(project, participant?.id)
+  );
+  res.json({ emailPreview: writer.written[0], example: !participant });
+}));
+
+/**
+ * POST /api/organisation/projects/:id/invitations
+ * The invitations of a project: send them now to everybody who has no link yet, plan them
+ * for a day, or take the plan away ("later": the organiser sends them by hand).
+ */
+router.post('/projects/:id/invitations', ensureOwnProject, asyncHandler(async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+  const body = z
+    .discriminatedUnion('when', [
+      z.object({ when: z.literal('now') }),
+      z.object({ when: z.literal('date'), date: z.string() }),
+      z.object({ when: z.literal('later') }),
+    ])
+    .safeParse(req.body);
+  if (!body.success) throw new ValidationError('Choose when the invitations go out: now, on a day, or later.');
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new NotFoundError('Project not found');
+  if (project.isPracticeProject) throw new ValidationError('The practice project has nobody to invite: its participants are made up.');
+
+  if (body.data.when === 'later') {
+    await prisma.project.update({ where: { id: projectId }, data: { inviteAt: null } });
+    res.json({ inviteAt: null, sent: 0, failed: [] });
+    return;
+  }
+
+  if (body.data.when === 'date') {
+    const problem = whyNotPlannable(body.data.date);
+    if (problem) throw new ValidationError(problem);
+    const inviteAt = invitationMoment(body.data.date)!;
+    await prisma.project.update({ where: { id: projectId }, data: { inviteAt } });
+    res.json({ inviteAt, sent: 0, failed: [] });
+    return;
+  }
+
+  // Now: the plan (if any) is off first, so the planned round can't follow this one
+  await prisma.project.update({ where: { id: projectId }, data: { inviteAt: null } });
+  const failed: { id: string; name: string; reason: string }[] = [];
+  let sent = 0;
+  for (const participant of await participantsWithoutLink(projectId)) {
+    try {
+      await sendInvitation(participant);
+      sent++;
+    } catch (err) {
+      failed.push({
+        id: participant.id,
+        name: `${participant.firstName} ${participant.lastName}`,
+        reason: err instanceof Error ? err.message : 'The invitation could not be sent.',
+      });
+    }
+  }
+  res.json({ inviteAt: null, sent, failed });
+}));
+
+/**
  * POST /api/organisation/participants/:id/send-magic-link
  * Send magic link to participant
  */
@@ -2310,26 +2401,14 @@ router.post('/participants/:id/send-magic-link', asyncHandler(async (req: Reques
     throw new ForbiddenError('Access denied');
   }
 
-  // Send the email
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
-
-  // In the practice project the email is written and shown, never sent
+  // Send the email and remember when (in the practice project it is written and shown, never sent)
   const mail = mailerFor(participant.project);
-  await mail.service.sendMagicLink(
-    participant.email,
-    participant.firstName,
-    participant.project.name,
-    magicLink,
-    await projectEmailContext(participant.project, participant.id)
-  );
-
-  // Update last sent timestamp and refresh token expiry (180 days from project end, or 180 days from now if past end)
-  const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
-  await prisma.participant.update({
-    where: { id: participantId },
-    data: { lastMagicLinkSentAt: new Date(), tokenExpiresAt: newExpiry },
-  });
+  try {
+    await sendInvitation(participant, mail);
+  } catch (err) {
+    if (err instanceof InvitationNotSent) throw new ValidationError(err.message);
+    throw err;
+  }
 
   res.json({ success: true, emailPreview: mail.preview() });
 }));
@@ -2480,7 +2559,6 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
 
   const results: { id: string; success: boolean }[] = [];
 
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   // In the practice project the emails are written and shown, never sent
   const previews = mailerFor({ isPracticeProject: true });
 
@@ -2496,21 +2574,7 @@ router.post('/participants/send-magic-links-bulk', asyncHandler(async (req: Requ
         continue;
       }
 
-      const magicLink = `${frontendUrl}/reimbursement?token=${participant.magicLinkToken}`;
-      const mail = participant.project.isPracticeProject ? previews : mailerFor(participant.project);
-      await mail.service.sendMagicLink(
-        participant.email,
-        participant.firstName,
-        participant.project.name,
-        magicLink,
-        await projectEmailContext(participant.project, participant.id)
-      );
-
-      const newExpiry = new Date(Math.max(participant.project.endDate.getTime(), Date.now()) + 180 * 24 * 60 * 60 * 1000);
-      await prisma.participant.update({
-        where: { id },
-        data: { lastMagicLinkSentAt: new Date(), tokenExpiresAt: newExpiry },
-      });
+      await sendInvitation(participant, participant.project.isPracticeProject ? previews : mailerFor(participant.project));
 
       results.push({ id, success: true });
     } catch {
