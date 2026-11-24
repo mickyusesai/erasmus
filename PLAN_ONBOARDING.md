@@ -145,11 +145,13 @@ Each part is usable on its own and is checked in the onboarding test account bef
   tries. Where an organiser's action would send an email (link, reminder, approval, paid, reopen), the
   email is written and returned instead (`mailerFor()` in `services/email/previewEmail.ts`) and shown:
   "This is the email they would get" (`EmailPreview.tsx`).
-- **Be a participant yourself.** On Sam's participant page "Use the sample tickets" puts four files in
-  the file (`POST /api/participant/practice/sample-tickets`), made out to Sam's name and the project's
-  dates. From there everything is real: the AI reads them, builds the trips and reviews the hand-in (it
-  is told that the files are sample tickets and to judge them like real ones: `PRACTICE_AI_NOTE`).
-  Sample bank details fill in with one click.
+- **Be a participant yourself.** Sam's page opens in the same tab. "Use the sample tickets" puts four
+  files in the file (`POST /api/participant/practice/sample-tickets`), made out to Sam's name and the
+  project's dates, already read: with their trips and the sample bank details (`addSampleTicketsAsRead`).
+  No waiting for the AI in a practice run; the page goes straight on to checking the trips. An untouched
+  hand-in gets its "all clear" at once too. After handing in, a button leads back to the practice
+  project. Only when the organiser adds files of their own or changes a trip does the real AI come in (it
+  is then told that sample tickets are to be judged like real ones: `PRACTICE_AI_NOTE`).
 - **The guide** has five steps: look around, approve Jonas, ask Elena a question, be a participant,
   download the audit file. Whether a step is done is read from the practice project itself where it
   leaves a trace; the two that leave none (looked around, audit file downloaded) are remembered with the

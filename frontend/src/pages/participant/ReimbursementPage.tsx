@@ -447,8 +447,12 @@ export default function ReimbursementPage() {
             <p>
               <span className="font-medium">Practice project.</span>{' '}
               {data.practice.playedByOrganiser
-                ? `This is what your participants see. You are ${data.participant.firstName}, a made-up participant: nothing here is real and no email is sent.`
+? `This is what your participants see. You are ${data.participant.firstName}, a made-up participant: nothing here is real and no email is sent. Go through the three steps and hand in; then you go back to your own side.`
                 : `This is the page ${data.participant.firstName} would see. ${data.participant.firstName} is made up: nothing here is real and no email is sent.`}
+              {' '}
+              <a href={`/org/projects/${data.project.id}`} className="underline font-medium whitespace-nowrap">
+                Back to the practice project
+              </a>
             </p>
           </div>
         )}
@@ -760,7 +764,9 @@ function Step1Upload({
     mutationFn: () => participantApi.addSampleTickets(token),
     onSuccess: async (result) => {
       await queryClient.refetchQueries({ queryKey: ['participant-auth'] });
-      if (result.added > 0) toast.success(`${result.added} sample tickets added`);
+      if (result.added > 0) toast.success(`${result.added} sample tickets added, and read already`);
+      // The sample tickets come with their trips: straight on to checking them
+      onNext();
     },
     onError: (err) => toast.error(err instanceof Error && err.message ? err.message : 'Could not add the sample tickets'),
   });
@@ -1022,7 +1028,8 @@ function Step1Upload({
                 <p className="font-semibold text-gray-900">No tickets at hand? Use the sample tickets</p>
                 <p className="text-sm text-gray-600 mt-1">
                   Four files, as a participant would upload them: the tickets and boarding passes of {data.participant.firstName}'s flights to{' '}
-                  {data.project.country} and back.
+                  {data.project.country} and back. They are read already, so you go straight on to checking the trips. (With real tickets the AI
+                  takes a minute or two here.)
                 </p>
               </div>
               <button

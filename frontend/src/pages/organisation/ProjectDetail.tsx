@@ -1073,10 +1073,8 @@ function OverviewTab({
                         {played?.participantId === participant.id && (
                           <a
                             href={`/reimbursement?token=${played.token}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
                             className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700 hover:bg-primary-200 transition-colors"
-                            title={`You play ${participant.firstName}: open the page a participant sees (new tab)`}
+                            title={`You play ${participant.firstName}: open the page a participant sees`}
                           >
                             You play this one <ExternalLink className="w-3 h-3" />
                           </a>

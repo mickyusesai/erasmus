@@ -58,7 +58,7 @@ export function Spotlight({ selector, label }: { selector: string; label?: strin
     <div
       aria-hidden="true"
       data-spotlight={selector}
-      className="fixed pointer-events-none z-[45]"
+      className="fixed pointer-events-none z-30"
       style={{ top: box.top - pad, left: box.left - pad, width: box.width + pad * 2, height: box.height + pad * 2 }}
     >
       <div className="absolute inset-0 rounded-2xl ring-4 ring-primary-400/80 shadow-[0_0_0_6px_rgba(168,85,247,0.18)] motion-safe:animate-pulse" />

@@ -378,22 +378,118 @@ export async function restartPracticeProject(organisationId: string): Promise<Pr
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The sample tickets for the participant the organiser plays, made out to the name and the
- * dates as they are now. They are uploaded like any participant's files and read by the AI.
+ * Puts the sample tickets in the file of the participant the organiser plays, already read:
+ * the files, what is on them, the trips they make, and the sample bank details. Nothing is
+ * sent to the AI, so there is no waiting: it is practice, and we know what is on the tickets
+ * because we made them. Made out to the name and the dates as they are now.
  */
-export async function sampleUploadsFor(participant: {
+export async function addSampleTicketsAsRead(participant: {
+  id: string;
   firstName: string;
   lastName: string;
+  country: string;
   project: { startDate: Date; endDate: Date };
-}): Promise<{ filename: string; buffer: Buffer }[]> {
+}): Promise<number> {
   const you = practicePerson('YOU');
-  const uploads: { filename: string; buffer: Buffer }[] = [];
+  const dates = participant.project;
+  const now = new Date();
+  const files: SampleFile[] = [];
+  const documents: Prisma.DocumentCreateManyInput[] = [];
+  const extractions: Prisma.DocumentExtractionCreateManyInput[] = [];
+  const travelItems: Prisma.TravelItemCreateManyInput[] = [];
+
   for (const trip of you.trips) {
-    for (const { ticket } of sampleTicketsFor(participant, trip, participant.project)) {
-      uploads.push({ filename: sampleTicketFilename(ticket), buffer: await sampleTicketPdf(ticket) });
+    let ticketId = '';
+    const extraIds: string[] = [];
+    for (const { file, ticket } of sampleTicketsFor(participant, trip, dates)) {
+      const documentId = uuidv4();
+      const buffer = await sampleTicketPdf(ticket);
+      const storagePath = `participants/${participant.id}/documents/${uuidv4()}.pdf`;
+      files.push({ storagePath, filename: sampleTicketFilename(ticket), buffer });
+      documents.push({
+        id: documentId,
+        participantId: participant.id,
+        storedFilePath: storagePath,
+        originalFilename: sampleTicketFilename(ticket),
+        renamedFilename: renamedFilename(ticket),
+        mimeType: 'application/pdf',
+        fileSize: buffer.length,
+        uploadDate: now,
+        documentType: DOCUMENT_TYPE[ticket.kind],
+        contentHash: fileHash(buffer),
+      });
+      extractions.push({
+        documentId,
+        detectedDocumentType: DOCUMENT_TYPE[ticket.kind],
+        confidence: 0.97,
+        passengerName: ticket.passenger,
+        fromLocation: ticket.from,
+        toLocation: ticket.to,
+        departureDate: ticket.date,
+        purchaseDate: ticket.purchaseDate ?? null,
+        documentDate: ticket.purchaseDate ?? ticket.date,
+        flightNumber: trip.mode === 'PLANE' ? trip.serviceNumber : null,
+        airline: trip.mode === 'PLANE' ? trip.carrier : null,
+        bookingReference: ticket.bookingReference,
+        seatNumber: file === 'BOARDING_PASS' ? ticket.seat ?? null : null,
+        amount: ticket.amountEur ?? null,
+        currency: ticket.amountEur === undefined ? null : 'EUR',
+        numberOfPassengers: 1,
+        extractionReasoning: 'Sample ticket of the practice project.',
+        consolidated: true,
+        consolidatedAt: now,
+      });
+      if (file === 'TICKET') ticketId = documentId;
+      else extraIds.push(documentId);
     }
+    travelItems.push({
+      participantId: participant.id,
+      documentId: ticketId,
+      additionalDocumentIds: extraIds.length ? JSON.stringify(extraIds) : null,
+      modeOfTransport: trip.mode,
+      fromLocation: trip.from,
+      toLocation: trip.to,
+      departureDate: tripDate(trip, dates),
+      departureTime: trip.departureTime,
+      bookingReference: trip.bookingReference,
+      flightNumber: trip.mode === 'PLANE' ? trip.serviceNumber : null,
+      amountOriginal: trip.ticketEur,
+      currencyOriginal: 'EUR',
+      purchaseDate: tripPurchaseDate(trip, dates),
+      amountEur: trip.ticketEur,
+      // The participant still confirms each trip, as with real tickets
+      checked: false,
+      originalAmountFromAi: trip.ticketEur,
+      originalCurrencyFromAi: 'EUR',
+      companyName: trip.carrier,
+      priceSourceDocId: ticketId,
+      routeMatchesCountry: true,
+    });
   }
-  return uploads;
+
+  await storeFiles(files);
+  try {
+    await prisma.$transaction([
+      prisma.document.createMany({ data: documents }),
+      prisma.documentExtraction.createMany({ data: extractions }),
+      prisma.travelItem.createMany({ data: travelItems }),
+      prisma.participant.update({
+        where: { id: participant.id },
+        data: {
+          journeyConsolidatedAt: now,
+          detectedHomeCountry: participant.country,
+          homeCountryConfidence: 0.95,
+          homeCountryReasoning: `The journey starts and ends in ${you.trips[0].from}.`,
+          // Something to hand in with: the made-up bank details are there already
+          ...sampleBankDetailsFor(participant),
+        },
+      }),
+    ]);
+  } catch (err) {
+    await removeFiles(files.map((f) => f.storagePath));
+    throw err;
+  }
+  return documents.length;
 }
 
 /** The made-up bank details the organiser can fill in with one click when playing the participant */

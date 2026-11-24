@@ -16,7 +16,7 @@ import { ParticipantStatus, AiReviewStatus, TransportMode, DocumentType } from '
 import { getExchangeRate, convertToEur, SUPPORTED_CURRENCIES } from '../../services/exchangeRate/index.js';
 import { mailerFor } from '../../services/email/previewEmail.js';
 import { practiceRoleOf } from '../../services/organisation/practice/content.js';
-import { sampleBankDetailsFor, sampleUploadsFor } from '../../services/organisation/practice/practiceProject.js';
+import { addSampleTicketsAsRead, sampleBankDetailsFor } from '../../services/organisation/practice/practiceProject.js';
 import { projectEmailContext } from '../../services/email/context.js';
 import { extractionContextFor } from '../../services/ai/extractionContext.js';
 import { findSharedDocuments } from '../../services/checks/sharedDocuments.js';
@@ -348,8 +348,8 @@ router.get('/auth', participantAuth, asyncHandler(async (req: Request, res: Resp
 /**
  * POST /api/participant/practice/sample-tickets
  * Only in the practice project, for the participant the organiser plays: puts the sample
- * tickets in their file, as if they had uploaded them. From there on everything is real:
- * the AI reads them and builds the trips.
+ * tickets in their file, already read and turned into trips (we made the tickets, so we know
+ * what is on them): no waiting for the AI in a practice run.
  */
 router.post('/practice/sample-tickets', participantAuth, asyncHandler(async (req: Request, res: Response) => {
   const participant = req.participant!;
@@ -371,35 +371,12 @@ router.post('/practice/sample-tickets', participantAuth, asyncHandler(async (req
     return;
   }
 
-  const storage = getStorageService();
-  const extractionContext = await extractionContextFor(participant.id);
-  const documents = [];
-  for (const upload of await sampleUploadsFor({ ...participant, project })) {
-    const storagePath = `participants/${participant.id}/documents/${uuidv4()}.pdf`;
-    await storage.store(
-      { buffer: upload.buffer, originalname: upload.filename, mimetype: 'application/pdf', size: upload.buffer.length },
-      storagePath
-    );
-    const document = await prisma.document.create({
-      data: {
-        participantId: participant.id,
-        storedFilePath: storagePath,
-        originalFilename: upload.filename,
-        renamedFilename: upload.filename,
-        mimeType: 'application/pdf',
-        fileSize: upload.buffer.length,
-        documentType: 'OTHER', // typed when the AI reads it, like any upload
-        contentHash: fileHash(upload.buffer),
-      },
-    });
-    documents.push(document);
-    consolidationService
-      .extractAndStoreDocumentData(document.id, upload.buffer, 'application/pdf', { context: extractionContext })
-      .catch((error) => console.error(`[Practice] Background extraction failed for document ${document.id}:`, error));
-  }
-  await prisma.participant.update({ where: { id: participant.id }, data: { journeyConsolidatedAt: null } });
+  // Already read: the files, their trips and the sample bank details, without waiting for the AI
+  const added = await addSampleTicketsAsRead({ ...participant, project });
+  await getAiService().recalculateParticipantSummary(participant.id);
+  const documents = await prisma.document.findMany({ where: { participantId: participant.id }, orderBy: { uploadDate: 'desc' } });
 
-  res.status(201).json({ documents, added: documents.length });
+  res.status(201).json({ documents, added });
 }));
 
 /**
@@ -619,6 +596,17 @@ router.post('/consolidate', participantAuth, asyncHandler(async (req: Request, r
       warnings: ['Please upload at least one travel document'],
     });
     return;
+  }
+
+  // Practice project: the sample tickets came with their trips. As long as nothing was added
+  // since, there is nothing to build and nothing to wait for.
+  if (practiceRoleOf(participant.email) === 'YOU' && participant.journeyConsolidatedAt) {
+    const practice = await prisma.project.findUnique({ where: { id: participant.projectId }, select: { isPracticeProject: true } });
+    const trips = practice?.isPracticeProject ? await prisma.travelItem.findMany({ where: { participantId: participant.id } }) : [];
+    if (trips.length > 0) {
+      res.json({ success: true, message: `${trips.length} trips from the sample tickets`, travelItems: sortTravelItemsByJourney(trips), warnings: [] });
+      return;
+    }
   }
 
   // Run the consolidation ("fresh" wipes existing trips so they are rebuilt from the documents)
@@ -1959,6 +1947,20 @@ router.post('/mark-complete', participantAuth, asyncHandler(async (req: Request,
       });
 
       if (!fullParticipant || fullParticipant.travelItems.length === 0) return;
+
+      // Practice project, the participant the organiser plays, sample trips left as they were:
+      // the outcome is known, so it is there at once instead of after a wait for the AI
+      if (
+        fullParticipant.project.isPracticeProject &&
+        practiceRoleOf(fullParticipant.email) === 'YOU' &&
+        fullParticipant.travelItems.every((t) => !t.manuallyEdited && t.priceSourceDocId)
+      ) {
+        await prisma.aiReviewFinding.create({
+          data: { participantId: participant.id, severity: 'info', category: 'All Clear', message: 'Everything matches perfectly. We checked twice — still perfect!' },
+        });
+        await prisma.participant.update({ where: { id: participant.id }, data: { aiReviewStatus: AiReviewStatus.COMPLETE, aiReviewedAt: reviewStartedAt } });
+        return;
+      }
 
       fullParticipant.travelItems = sortTravelItemsByJourney(fullParticipant.travelItems);
 

@@ -59,7 +59,7 @@ export const PRACTICE_STEP_TEXT: Record<PracticeStep, PracticeStepText> = {
 /** The page of the app the organiser is on, as far as the guide cares */
 export type PracticePage = { kind: 'dashboard' } | { kind: 'project'; projectId: string } | { kind: 'participant'; participantId: string };
 
-/** Where a step is done: a page of the organiser's app, or the participant's own page (a new tab) */
+/** Where a step is done: a page of the organiser's app, or the participant's own page */
 export type PracticePlace = { kind: 'app'; path: string } | { kind: 'participant-page'; path: string };
 
 const stepOf = (guide: PracticeGuide, id: PracticeStep) => guide.steps.find((s) => s.id === id);

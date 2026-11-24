@@ -1130,8 +1130,6 @@ export default function OrgParticipantDetail() {
                     {playedByOrganiser && (
                       <a
                         href={`/reimbursement?token=${participant.magicLinkToken}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-soft text-white text-sm font-medium hover:opacity-90 transition-opacity"
                       >
                         <ExternalLink className="w-4 h-4" />
