@@ -158,8 +158,9 @@ Each part is usable on its own and is checked in the onboarding test account bef
   It is a small panel in the corner of the practice project's pages (`PracticeGuidePanel.tsx`) that takes
   you to the page of the step and there points at the real button (`Spotlight.tsx`, `data-tour`
   attributes). It can be made small, put away and taken out again.
-- **Welcome screen**: "See how it works" (the practice project) is the first of three ways in, next to
-  "Set up your first project" and the film. **Dashboard**: a new organisation sees a card with the
+- **Welcome screen**: "See how it works" (the practice project) is the first of two ways in, next to
+  "Set up your first project". The film is not on the welcome screen (it promotes more than it explains);
+  it stays in Help and on the next-step card. **Dashboard**: a new organisation sees a card with the
   practice step it is at; afterwards, and for organisations that are under way, it is one quiet line.
 
 ### Part 3, the real project in four steps (built)

@@ -345,7 +345,6 @@ export default function OrgDashboard() {
             rememberWelcomeSeen();
             navigate(step.to);
           }}
-          onWatchFilm={() => setShowFilm(true)}
           onLookAround={rememberWelcomeSeen}
         />
       )}
