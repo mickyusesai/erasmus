@@ -9,6 +9,7 @@ import { sanitizePdfBuffer } from '../../utils/pdfSanitize.js';
 import { normalizeCountryName } from '../../utils/countryName.js';
 import { samePlace, sameTravelDay } from '../../utils/placeMatch.js';
 import { isReceiptDocument } from '../../utils/documentKinds.js';
+import { isFlightProofType, readAsNotFlightProof } from '../../utils/flightProof.js';
 import { recordAiUsage } from './usageLog.js';
 
 // Maximum file size for OpenAI API (32MB per request, but we'll keep images smaller)
@@ -274,7 +275,7 @@ REMEMBER: European dates are DD/MM/YYYY - day first, then month!${typeHint ? `
 PARTICIPANT'S OWN CLASSIFICATION: ${
       typeHint === 'HOTEL_INVOICE' || typeHint === 'MEAL_RECEIPT'
         ? `the participant uploaded this as a ${typeHint === 'HOTEL_INVOICE' ? 'hotel/accommodation invoice' : 'meal/food receipt'} for their green-travel extra. Set documentType to ${typeHint} and focus on the total amount, currency, documentDate${typeHint === 'HOTEL_INVOICE' ? ' (the check-in date, not the booking or payment date)' : ''} and merchantName.`
-        : `the participant uploaded this for a flight as ${typeHint === 'AIRLINE_DECLARATION' ? 'a declaration from the airline confirming they took the flight' : 'their boarding pass'}. Set documentType to ${typeHint} and extract the passenger name, flight number, route and departure date.`
+        : `the participant uploaded this for a flight as ${typeHint === 'AIRLINE_DECLARATION' ? 'a declaration from the airline confirming they took the flight' : 'their boarding pass'}. Check whether it really is one. Participants who are asked for a boarding pass often upload the booking confirmation, e-ticket or invoice instead: that is NOT proof that they flew. Set documentType to ${typeHint} only when the file really is ${typeHint === 'AIRLINE_DECLARATION' ? "the airline's written confirmation that the passenger took the flight" : 'a boarding pass (with gate, seat, boarding time or barcode)'}; a booking confirmation, e-ticket or invoice is FLIGHT_INVOICE. Extract the passenger name, flight number, route and departure date either way.`
     }` : ''}${options.context ? `\n\n${options.context}` : ''}`;
 
     contentParts.push({ type: 'text', text: prompt });
@@ -311,12 +312,24 @@ PARTICIPANT'S OWN CLASSIFICATION: ${
 
       const parsed = JSON.parse(jsonMatch[0]);
 
+      // What the file is. A participant's own classification wins (a receipt they put under food
+      // and accommodation is one), except when they say a file is their boarding pass or the
+      // airline's declaration and the AI is sure it is something else, typically the invoice
+      // uploaded because the boarding pass was asked for: that is no proof of the flight.
+      const aiType = this.mapDocumentType(parsed.documentType);
+      const notProof = isFlightProofType(typeHint)
+        ? readAsNotFlightProof({ detectedDocumentType: aiType, confidence: parsed.confidence || 0.5 })
+        : null;
+      const documentType: DocumentType = notProof ? aiType : typeHint ?? aiType;
+      // The AI's own reading is kept for flight proof, so it can be weighed again later
+      const detectedType: DocumentType = isFlightProofType(typeHint) ? aiType : documentType;
+
       // Store the extraction
       await prisma.documentExtraction.upsert({
         where: { documentId },
         create: {
           documentId,
-          detectedDocumentType: typeHint ?? this.mapDocumentType(parsed.documentType),
+          detectedDocumentType: detectedType,
           confidence: parsed.confidence || 0.5,
           passengerName: parsed.passengerName || null,
           fromLocation: parsed.fromLocation ? this.toTitleCase(parsed.fromLocation) : null,
@@ -343,7 +356,7 @@ PARTICIPANT'S OWN CLASSIFICATION: ${
           rawAiResponse: responseText,
         },
         update: {
-          detectedDocumentType: typeHint ?? this.mapDocumentType(parsed.documentType),
+          detectedDocumentType: detectedType,
           confidence: parsed.confidence || 0.5,
           passengerName: parsed.passengerName || null,
           fromLocation: parsed.fromLocation ? this.toTitleCase(parsed.fromLocation) : null,
@@ -373,11 +386,23 @@ PARTICIPANT'S OWN CLASSIFICATION: ${
       });
 
       // Update the document type based on AI detection (the participant's own
-      // classification of a receipt wins over the AI's guess)
-      await prisma.document.update({
+      // classification wins over the AI's guess, except for proof of a flight: see above)
+      const doc = await prisma.document.update({
         where: { id: documentId },
-        data: { documentType: typeHint ?? this.mapDocumentType(parsed.documentType) },
+        data: { documentType },
       });
+      if (notProof) {
+        console.log(`[Consolidation] Document ${documentId} was uploaded as ${typeHint} but is a ${aiType}: not counted as proof of the flight`);
+        await prisma.changeLogEntry.create({
+          data: {
+            participantId: doc.participantId,
+            userType: 'SUPPORT',
+            fieldName: 'document.type',
+            previousValue: `${doc.renamedFilename}: ${typeHint} (as uploaded)`,
+            newValue: `${doc.renamedFilename}: ${aiType} (read by the AI: not proof of the flight)`,
+          },
+        });
+      }
 
       console.log(`[Consolidation] Stored extraction for document ${documentId}: ${parsed.documentType}`);
     } catch (error) {

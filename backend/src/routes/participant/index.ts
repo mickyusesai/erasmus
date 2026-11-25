@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '../../utils/prisma.js';
 import { participantAuth, ensureOwnParticipant } from '../../middleware/auth.js';
 import { isReceiptDocument, isReceiptDocumentType } from '../../utils/documentKinds.js';
-import { isFlightProofType, flightDeclarationsAccepted } from '../../utils/flightProof.js';
+import { isFlightProofType, flightDeclarationsAccepted, readAsNotFlightProof, notFlightProofMessage } from '../../utils/flightProof.js';
 import { NotFoundError, ValidationError, ForbiddenError } from '../../middleware/errorHandler.js';
 import { unsupportedFileMessage } from '../../utils/uploadFiles.js';
 import { getStorageService } from '../../services/storage/index.js';
@@ -429,6 +429,13 @@ router.post(
     const contentHash = fileHash(req.file.buffer);
     const sameFile = await findSameFile(participant.id, req.file.buffer, contentHash);
     if (sameFile) {
+      // The invoice uploaded again as the boarding pass: it stays what it is, and the flight
+      // still needs its proof
+      if (isFlightProofType(typeHint)) {
+        const reading = await prisma.documentExtraction.findUnique({ where: { documentId: sameFile.id } });
+        const readAs = readAsNotFlightProof(reading);
+        if (readAs) throw new ValidationError(notFlightProofMessage(sameFile.renamedFilename, readAs));
+      }
       let document = sameFile;
       const retype =
         typeHint &&
@@ -699,9 +706,14 @@ router.patch('/documents/:id', participantAuth, asyncHandler(async (req: Request
 
   const document = await prisma.document.findFirst({
     where: { id: req.params.id, participantId: participant.id },
+    include: { extraction: true },
   });
   if (!document) {
     throw new NotFoundError('Document not found');
+  }
+  if (isFlightProofType(result.data.documentType)) {
+    const readAs = readAsNotFlightProof(document.extraction);
+    if (readAs) throw new ValidationError(notFlightProofMessage(document.renamedFilename, readAs));
   }
 
   const updated = await prisma.document.update({
@@ -1159,6 +1171,10 @@ router.post('/travel-items/:id/link-document', participantAuth, asyncHandler(asy
   if (markAs) {
     // "I have the boarding pass but it wasn't recognized": the participant tells us what the
     // document is. Fix its type and add it to the flight, keeping the ticket that is already linked.
+    // Not for a file the AI is sure is something else (the booking confirmation, an invoice).
+    const reading = await prisma.documentExtraction.findUnique({ where: { documentId: document.id } });
+    const readAs = readAsNotFlightProof(reading);
+    if (readAs) throw new ValidationError(notFlightProofMessage(document.renamedFilename, readAs));
     if (document.documentType !== markAs) {
       await prisma.document.update({ where: { id: document.id }, data: { documentType: markAs } });
       await prisma.changeLogEntry.create({

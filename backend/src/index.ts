@@ -17,6 +17,7 @@ import inboundRoutes from './routes/inbound/index.js';
 import supportRoutes from './routes/support/index.js';
 import { getStorageService } from './services/storage/index.js';
 import { PLACEHOLDER_PROJECT } from './services/organisation/onboarding.js';
+import type { DocumentType } from '@prisma/client';
 
 // Load environment variables
 dotenv.config();
@@ -229,6 +230,49 @@ async function openAiInPlaceholderTestProjects() {
   }
 }
 openAiInPlaceholderTestProjects();
+
+// A participant asked for a boarding pass sometimes uploads the flight's invoice and calls it the
+// boarding pass or the airline's declaration. Such a file was counted as proof that they flew.
+// Where the AI is sure a file is something else, it gets its real type back, once.
+async function correctFlightProofThatIsNot() {
+  try {
+    const { readAsNotFlightProof } = await import('./utils/flightProof.js');
+    const documents = await prisma.document.findMany({
+      where: { documentType: { in: ['FLIGHT_BOARDING_PASS', 'AIRLINE_DECLARATION'] }, extraction: { isNot: null } },
+      select: {
+        id: true,
+        participantId: true,
+        renamedFilename: true,
+        documentType: true,
+        extraction: { select: { id: true, detectedDocumentType: true, confidence: true, rawAiResponse: true } },
+      },
+    });
+    let corrected = 0;
+    for (const doc of documents) {
+      const readAs = readAsNotFlightProof(doc.extraction);
+      if (!readAs) continue;
+      await prisma.$transaction([
+        prisma.document.update({ where: { id: doc.id }, data: { documentType: readAs as DocumentType } }),
+        prisma.documentExtraction.update({ where: { id: doc.extraction!.id }, data: { detectedDocumentType: readAs as DocumentType } }),
+        prisma.changeLogEntry.create({
+          data: {
+            participantId: doc.participantId,
+            userType: 'SUPPORT',
+            fieldName: 'document.type',
+            previousValue: `${doc.renamedFilename}: ${doc.documentType}`,
+            newValue: `${doc.renamedFilename}: ${readAs} (read by the AI: not proof of the flight)`,
+          },
+        }),
+      ]);
+      corrected++;
+      console.log(`[Startup] ${doc.renamedFilename} (${doc.id}) was counted as ${doc.documentType} but is a ${readAs}`);
+    }
+    if (corrected > 0) console.log(`[Startup] ${corrected} file(s) no longer counted as proof of a flight`);
+  } catch (err) {
+    console.error('[Startup] Could not check the files counted as proof of a flight:', err);
+  }
+}
+correctFlightProofThatIsNot();
 
 // Participants who don't need reimbursement are paid nothing; amounts stored before that rule
 // are set to 0 once (not for reimbursements that are already approved or paid)

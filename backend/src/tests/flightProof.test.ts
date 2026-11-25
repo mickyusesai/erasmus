@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { flightHasProof, linkedDocumentIds, isFlightProofType, flightDeclarationsAccepted } from '../utils/flightProof.js';
+import { flightHasProof, linkedDocumentIds, isFlightProofType, flightDeclarationsAccepted, aiReadingOf, readAsNotFlightProof, notFlightProofMessage } from '../utils/flightProof.js';
 
 const docs = [
   { id: 'invoice', documentType: 'FLIGHT_INVOICE' },
@@ -39,5 +39,42 @@ describe('flight proof', () => {
     expect(flightDeclarationsAccepted({ requireAirlineDeclaration: true })).toBe(false);
     expect(flightDeclarationsAccepted({ requireAirlineDeclaration: false })).toBe(true);
     expect(flightDeclarationsAccepted(null)).toBe(true);
+  });
+});
+
+describe('a file called a boarding pass that is not one', () => {
+  // As stored for a participant who uploaded the flight's invoice as "the airline's declaration":
+  // the participant's word in the column, the AI's own answer in its raw response
+  const invoiceAsDeclaration = {
+    detectedDocumentType: 'AIRLINE_DECLARATION',
+    confidence: 0.97,
+    rawAiResponse: '```json\n{"documentType": "FLIGHT_INVOICE", "confidence": 0.97, "fromLocation": "OTP", "toLocation": "ATH"}\n```',
+  };
+
+  it('is read as what the AI itself said, not as what was stored over it', () => {
+    expect(aiReadingOf(invoiceAsDeclaration)).toEqual({ type: 'FLIGHT_INVOICE', confidence: 0.97 });
+    expect(readAsNotFlightProof(invoiceAsDeclaration)).toBe('FLIGHT_INVOICE');
+  });
+
+  it('a real boarding pass or airline declaration stays proof', () => {
+    expect(readAsNotFlightProof({ detectedDocumentType: 'FLIGHT_BOARDING_PASS', confidence: 0.98, rawAiResponse: '{"documentType":"FLIGHT_BOARDING_PASS","confidence":0.98}' })).toBeNull();
+    expect(readAsNotFlightProof({ detectedDocumentType: 'AIRLINE_DECLARATION', confidence: 0.9, rawAiResponse: '{"documentType":"AIRLINE_DECLARATION"}' })).toBeNull();
+  });
+
+  it("the participant's word stands when the AI was not sure, found nothing, or could not read the file", () => {
+    expect(readAsNotFlightProof({ detectedDocumentType: 'FLIGHT_BOARDING_PASS', confidence: 0.6, rawAiResponse: '{"documentType":"FLIGHT_INVOICE","confidence":0.6}' })).toBeNull();
+    expect(readAsNotFlightProof({ detectedDocumentType: 'FLIGHT_BOARDING_PASS', confidence: 0.9, rawAiResponse: '{"documentType":"OTHER","confidence":0.9}' })).toBeNull();
+    expect(readAsNotFlightProof({ detectedDocumentType: 'OTHER', confidence: 0.1, rawAiResponse: 'Anthropic API error: overloaded' })).toBeNull();
+    expect(readAsNotFlightProof(null)).toBeNull();
+  });
+
+  it('an older reading without the raw answer is judged by what was stored', () => {
+    expect(readAsNotFlightProof({ detectedDocumentType: 'FLIGHT_INVOICE', confidence: 0.99, rawAiResponse: null })).toBe('FLIGHT_INVOICE');
+  });
+
+  it('the participant is told what the file is and what is needed instead', () => {
+    const message = notFlightProofMessage('RIGA-BUCHAREST.pdf', 'FLIGHT_INVOICE');
+    expect(message).toContain('"RIGA-BUCHAREST.pdf" is the booking confirmation or invoice of a flight, not proof that you took the flight.');
+    expect(message).toContain('boarding pass itself');
   });
 });

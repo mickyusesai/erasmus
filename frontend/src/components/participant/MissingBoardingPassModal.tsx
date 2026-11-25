@@ -128,6 +128,11 @@ export function MissingBoardingPassModal({
     try {
       await participantApi.uploadDocument(token, file, proofType, travelItem.id);
       await finish(isAirline ? 'Airline declaration added to this flight' : 'Boarding pass added to this flight');
+      // The AI reads the file in the background: if it turns out to be the booking confirmation or an
+      // invoice, it doesn't count, and the flight shows again what it still needs
+      for (const wait of [15000, 40000]) {
+        window.setTimeout(() => queryClient.invalidateQueries({ queryKey: ['participant-auth'] }), wait);
+      }
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Upload failed');
     }
@@ -185,12 +190,14 @@ export function MissingBoardingPassModal({
               <>
                 Upload the letter or email in which the airline confirms you took the flight from{' '}
                 <strong>{travelItem.fromLocation}</strong> to <strong>{travelItem.toLocation}</strong>. It should show
-                your name, the flight number and the date.
+                your name, the flight number and the date. The booking confirmation or invoice doesn't count: it shows
+                that you paid, not that you flew.
               </>
             ) : (
               <>
                 Upload the boarding pass for <strong>{travelItem.fromLocation} → {travelItem.toLocation}</strong>, or
-                pick it below if you already uploaded it. We'll mark the file as the boarding pass of this flight.
+                pick it below if you already uploaded it. We'll mark the file as the boarding pass of this flight. The
+                booking confirmation or invoice doesn't count: it shows that you paid, not that you flew.
               </>
             )}
           </p>
